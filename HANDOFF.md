@@ -15,6 +15,52 @@ and a no-op apply through expiry. Nothing is pending on the displays.
 **Pedro has declared the features done for now.** The next act is the
 marketplace listing.
 
+### Session 5 (3 September 2026, night) — the visual pass
+
+Pedro asked for a look-and-motion pass before shipping: "Omarchy users
+really appreciate looks and animations". The house dialect was measured
+first (`/usr/share/omarchy/shell`: 13 `Easing.OutCubic` against one
+`InOutCubic`, 140 ms on cards, 110-120 ms on knobs, 60 ms on cursor
+chrome, 160 ms on bar text, no blur or shadow anywhere) and everything
+below follows it. Five commits, tests and lint green, `plugin validate`
+and `doctor` green, all seen live on the two MateViews:
+
+- **The studio arrives and leaves.** It was `visible: root.opened`, a
+  hard cut. The scrim ramps, the card rises 1.5%, and the window stays
+  up while it fades, as PopupCard does.
+- **The countdown is a rule on the strip's own bottom edge** that drains
+  across whatever holds it, and goes urgent in colour — rule and caption
+  — under five seconds. Photographed live at 9 s and at 1 s.
+- **Identify never actually animated**: the windows were built with the
+  flag already true (opacity starts at 1) and destroyed the moment it
+  went false. Two flags now, badges animate themselves 60 ms apart, and
+  an accent frame marks each screen's edge. Seen live.
+- **The canvas blocks carry the desktop wallpaper**, dimmed to 0.28 and
+  inset so a themed radius cannot clip it (`wallpaperOpacity` is one
+  property if it wants tuning). The symlink path never changes, so the
+  source is cleared before reassignment and the image uncached, or a
+  theme change would never reach it. Plus a datum mark at 0,0 drawn over
+  the blocks, guides that fade in, and an eased fill.
+- **The canvas frame hugs the layout** (`preferredHeight`) instead of
+  filling the column and stranding the displays mid-grid.
+- **The gamut plot is an instrument**: CIE 1931 spectral locus, and the
+  gamut *in use* filled with real chromaticity — sRGB while clamped, the
+  panel's own once wide or HDR opens the container, tweened between them
+  and read from the draft. Verified live by applying wide to DP-1 and
+  letting it revert. The panel's corners stay outlined while sRGB is in
+  use, so the headroom is visible before you take it.
+- **The bar icon** takes the urgent colour while a change waits and the
+  accent while any display is in HDR; the key strip wraps to two lines
+  instead of ending in an ellipsis.
+- **`preview.png` retaken** from the running studio at the same crop.
+
+Two judgement calls left deliberately for Pedro: the canvas frame is
+centred rather than sharing a top edge with the inspector (one line in
+`Studio.qml`; the shared baseline is the stronger grid but pools all the
+slack into one corner), and the popup's eased `contentHeight` resizes a
+Wayland surface every frame it runs — if that ever looks steppy, deleting
+that one Behavior is the fix.
+
 ### Marketplace submission — drafted, not sent
 
 - Route (verified against the manual, plugins.omarchy.org and the marketplace
@@ -55,11 +101,12 @@ were told the Candela names; both agreed to stay off the tree until Pedro asks.
 Check `git status` and `git log origin/main` before editing. Pedro's rule: do
 not name other tools in the repo.
 
-### Still owed (unchanged, see "Not yet verified")
+### Still owed (see "Not yet verified")
 
 The live revert-fidelity test across every field is the one that underwrites
 the README's promise and has never been run in full; Pedro's hands-on pass of
-the session 2 and 3 UI changes; the laptop-only paths.
+the session 2, 3 and 5 UI changes — the session 5 motion is best judged in
+one sitting with the older changes; the laptop-only paths.
 
 ## Where things stand
 
@@ -188,6 +235,11 @@ is instant; a real mode switch on NVIDIA may need longer.
   whether Hyprland actually resets each one on reload (e.g. `sdrsaturation`) has
   only been seen live for HDR and scale. This is the test that underwrites the
   README's promise.
+- Session 5 by hand, all of it motion that a screenshot cannot judge: the
+  studio's fade in and out, the popup easing its own height when HDR adds the
+  SDR white section, the countdown rule between ticks, Identify's stagger
+  across two screens, the guide fade during a drag, and the gamut triangle
+  tweening when Wide is chosen in the draft rather than applied.
 - Session 2 UI changes by hand: pending-mode Enter on Keep/Revert, the ICC row
   disabled while in HDR, an override forcing a draft out of HDR, the popup
   brightness wheel on a fresh shell, and the queued-apply merge under a burst
