@@ -39,7 +39,14 @@ case "\$1 \$2" in
   "monitors all") cat "$dir/monitors.json" ;;
   "getoption render:cm_auto_hdr") echo '{"option":"render:cm_auto_hdr","int":1}' ;;
   "getoption render:cm_sdr_eotf") echo '{"option":"render:cm_sdr_eotf","str":"default"}' ;;
-  "eval "*) printf '%s\n' "\$2" > "$dir/eval-last.txt"; echo ok ;;
+  "eval "*)
+    printf '%s\n' "\$2" > "$dir/eval-last.txt"
+    if [[ "\${FAKE_HYPRCTL_EVAL_FAIL:-}" == "1" ]]; then
+      echo "fake hyprctl: eval rejected" >&2
+      exit 1
+    fi
+    echo ok
+    ;;
   "reload "*|"reload") echo ok ;;
   "configerrors "*|"configerrors") echo ok ;;
   *) echo "unhandled: \$*" >&2; exit 1 ;;

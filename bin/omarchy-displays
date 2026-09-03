@@ -49,7 +49,7 @@ Usage: omarchy-displays <command> [args]
   state                          JSON: displays, capabilities, live and kept config, pending apply
   apply [--now] <json|@file|->   Apply a change live; reverts in 15 s unless kept (--now keeps immediately)
   keep                           Keep the pending change and persist it
-  revert [--expired]             Drop the pending change and restore the kept configuration
+  revert [--expired] [--token T] Drop the pending change and restore the kept configuration
   persist                        Regenerate the layout file from the kept configuration
   hdr <on|off|wide> [--display NAME] [--sdr-white NITS] [--now]
   brightness <NAME> [+N%|N%-|N%] Show or set brightness for one display
@@ -67,6 +67,15 @@ USAGE
 die() { echo "omarchy-displays: $*" >&2; exit 1; }
 
 now_epoch() { date +%s; }
+
+# Serialize the commands that write state (apply/keep/revert/persist/hdr, the
+# last of which just calls cmd_apply in-process) so a concurrent invocation —
+# an expired revert racing an interactive keep, say — cannot interleave.
+acquire_lock() {
+  mkdir -p "$STATE_DIR"
+  exec 9>"$STATE_DIR/.lock"
+  flock 9
+}
 
 read_json_arg() {
   local arg="${1:-}"
@@ -137,10 +146,34 @@ merge_intent() {
           elif $k == "cm_auto_hdr" then (if $v == 0 or $v == 1 or $v == 2 then . else fail("cm_auto_hdr") end)
           else fail("unknown global " + $k) end
       ) | from_entries;
-    ($change.displays // []) | map(check_display(.)) as $checked
+    # A colour state Hyprland cannot actually show: an ICC transform only
+    # applies outside HDR, and a display whose HDR capability is forced off
+    # cannot be asked to render HDR. supports_hdr follows the Hyprland
+    # convention: -1 forces it off, 0 is auto/EDID (the default), 1 forces it
+    # on. Checked on the MERGED display (existing intent + this change,
+    # nulls already stripped), not just the incoming fields, so setting one
+    # half now and the other half earlier still trips.
+    def check_colour(d):
+      ((d.cm // "") as $cm | $cm == "hdr" or $cm == "hdredid") as $hdr_cm
+      | if ($hdr_cm and ((d.icc // "") | length > 0)) then fail("hdr is unavailable while an ICC profile is set")
+        elif ($hdr_cm and d.supports_hdr == -1) then fail("hdr is unavailable while the HDR capability is forced off")
+        else d end;
+    # Unknown top-level keys (a typo, a stray field) currently apply as a
+    # silent no-op that still arms a revert timer; reject them, and reject a
+    # change carrying neither of the two keys this tool understands.
+    def check_top:
+      ($change | keys) as $top
+      | (($top - ["displays","global"]) | first) as $unknown
+      | if $unknown != null then fail("unknown top-level key " + $unknown)
+        elif ($top | length) == 0 then fail("nothing to apply")
+        else true end;
+    check_top as $ok
+    | ($change.displays // []) | map(check_display(.)) as $checked
     | check_global($change.global) as $g
     | reduce $checked[] as $c ($intent;
-        .displays[$c.name] = ((.displays[$c.name] // {}) + $c.fields | with_entries(select(.value != null))))
+        . as $acc
+        | ((($acc.displays[$c.name] // {}) + $c.fields | with_entries(select(.value != null))) | check_colour(.)) as $merged
+        | $acc | .displays[$c.name] = $merged)
     | .global = ((.global // {}) + $g | with_entries(select(.value != null)))
     | .version = 1
   ' 2>&1 || return 1
@@ -182,14 +215,16 @@ generate_lua() {
 }
 
 # Live apply sends only statements: hyprctl parses a leading "--" as one of
-# its own flags, so the file header must never reach `hyprctl eval`.
+# its own flags, so the file header must never reach `hyprctl eval`. Reports
+# failure through stdout + exit status instead of calling die() directly, so
+# the caller can unwind the pending change before the process exits.
 apply_live() {
   local chunk statements output
   chunk="$1"
   statements="$(printf '%s\n' "$chunk" | grep -vE '^[[:space:]]*(--|$)')"
   [[ -n $statements ]] || return 0
-  output="$(hyprctl eval "$statements" 2>&1)" || die "hyprctl rejected the change: $output"
-  [[ $output == ok* ]] || die "hyprctl rejected the change: $output"
+  output="$(hyprctl eval "$statements" 2>&1)" || { printf '%s' "$output"; return 1; }
+  if [[ $output != ok* ]]; then printf '%s' "$output"; return 1; fi
 }
 
 stop_timer() {
@@ -197,12 +232,16 @@ stop_timer() {
 }
 
 start_timer() {
+  local token="$1"
   stop_timer
   systemd-run --user --quiet --collect --unit="$REVERT_UNIT" \
     --on-active="${REVERT_SECONDS}s" --timer-property=AccuracySec=200ms \
-    -- "$SELF" revert --expired >/dev/null 2>&1 || {
-    # No systemd user manager (tests, odd sessions): fall back to a detached shell.
-    (setsid bash -c "sleep $REVERT_SECONDS; '$SELF' revert --expired" >/dev/null 2>&1 &)
+    -- "$SELF" revert --expired --token "$token" >/dev/null 2>&1 || {
+    # No systemd user manager (tests, odd sessions): fall back to a detached
+    # shell. It must drop fd 9 (acquire_lock's flock) first: it outlives this
+    # process for the whole revert window and would otherwise hold the state
+    # lock the entire time, blocking an interactive keep/apply/revert.
+    (setsid bash -c "exec 9>&-; sleep $REVERT_SECONDS; '$SELF' revert --expired --token '$token'" >/dev/null 2>&1 &)
   }
 }
 
@@ -210,11 +249,36 @@ notify_shell() {
   omarchy-shell -q "$PLUGIN_ID" refresh 2>/dev/null || true
 }
 
+# Undo a pending apply that never fully landed: stop the timer, drop the
+# pending file, and reload so hyprctl falls back to the last kept Lua.
+unwind_pending() {
+  stop_timer
+  rm -f "$PENDING_FILE"
+  hyprctl reload >/dev/null 2>&1 || true
+}
+
+# Reload so Hyprland re-reads the just-written layout, then check for config
+# errors — the one path both `keep` and `apply --now` use, so a bad write is
+# never silently reported as kept.
+reload_and_check() {
+  hyprctl reload >/dev/null 2>&1 || true
+  local errors
+  errors="$(hyprctl configerrors 2>/dev/null | grep -v '^ok$' || true)"
+  notify_shell
+  [[ -z $errors ]] || die "kept, but Hyprland reports config errors: $errors"
+}
+
+# A temp file beside $1, not a fixed name, so two concurrent writers cannot
+# clobber each other's temp file. Caller does `cmd > "$tmp" && mv "$tmp" "$1"`.
+tmp_for() { mktemp "$(dirname "$1")/.$(basename "$1").XXXXXX"; }
+
 commit_intent() {
-  local intent="$1"
+  local intent="$1" tmp
   mkdir -p "$STATE_DIR" "$(dirname "$LUA_FILE")"
-  printf '%s\n' "$intent" | jq . > "$INTENT_FILE.tmp" && mv "$INTENT_FILE.tmp" "$INTENT_FILE"
-  generate_lua "$intent" "$(live_json)" > "$LUA_FILE.tmp" && mv "$LUA_FILE.tmp" "$LUA_FILE"
+  tmp="$(tmp_for "$INTENT_FILE")"
+  printf '%s\n' "$intent" | jq . > "$tmp" && mv "$tmp" "$INTENT_FILE"
+  tmp="$(tmp_for "$LUA_FILE")"
+  generate_lua "$intent" "$(live_json)" > "$tmp" && mv "$tmp" "$LUA_FILE"
 }
 
 cmd_state() {
@@ -278,25 +342,35 @@ cmd_apply() {
   # Chain onto a pending change, so successive slider moves accumulate.
   if [[ -s $PENDING_FILE ]]; then base="$(jq -c '.intent' "$PENDING_FILE")"; else base="$(intent_json)"; fi
   merged="$(merge_intent "$base" "$change")" || die "${merged#jq: error (at <unknown>): }"
-
   chunk="$(generate_lua "$merged" "$(live_json)")"
-  apply_live "$chunk"
+
+  # Pending is written and the timer armed BEFORE the live displays are
+  # touched, so a hyprctl rejection partway through, or the process being
+  # killed, always leaves a revert ready to unwind whatever did land.
+  mkdir -p "$STATE_DIR"
+  local token since expires tmp
+  token="$(now_epoch)-$$-$RANDOM"
+  since="$(now_epoch)"; expires=$(( since + REVERT_SECONDS ))
+  tmp="$(tmp_for "$PENDING_FILE")"
+  jq -n --argjson intent "$merged" --argjson since "$since" --argjson expires "$expires" --arg token "$token" \
+    '{since: $since, expires: $expires, token: $token, intent: $intent}' > "$tmp" && mv "$tmp" "$PENDING_FILE"
+  start_timer "$token"
+
+  local err
+  if ! err="$(apply_live "$chunk")"; then
+    unwind_pending
+    die "hyprctl rejected the change: $err"
+  fi
 
   if (( now )); then
     stop_timer
     rm -f "$PENDING_FILE"
     commit_intent "$merged"
-    notify_shell
+    reload_and_check
     echo "kept"
     return
   fi
 
-  mkdir -p "$STATE_DIR"
-  local since expires
-  since="$(now_epoch)"; expires=$(( since + REVERT_SECONDS ))
-  jq -n --argjson intent "$merged" --argjson since "$since" --argjson expires "$expires" \
-    '{since: $since, expires: $expires, intent: $intent}' > "$PENDING_FILE.tmp" && mv "$PENDING_FILE.tmp" "$PENDING_FILE"
-  start_timer
   notify_shell
   echo "pending $expires"
 }
@@ -308,20 +382,30 @@ cmd_keep() {
   stop_timer
   commit_intent "$intent"
   rm -f "$PENDING_FILE"
-  hyprctl reload >/dev/null 2>&1 || true
-  local errors
-  errors="$(hyprctl configerrors 2>/dev/null | grep -v '^ok$' || true)"
-  if [[ -n $errors ]]; then
-    notify_shell
-    die "kept, but Hyprland reports config errors: $errors"
-  fi
-  notify_shell
+  reload_and_check
   echo "kept"
 }
 
 cmd_revert() {
-  local expired=0
-  [[ ${1:-} == "--expired" ]] && expired=1
+  local expired=0 token=""
+  while (( $# > 0 )); do
+    case "$1" in
+      --expired) expired=1; shift ;;
+      --token) token="${2:-}"; shift 2 ;;
+      *) die "revert: unknown option $1" ;;
+    esac
+  done
+
+  if (( expired )); then
+    # The setsid fallback timer (start_timer) cannot be cancelled, so a
+    # stale one must never revert a change that was since kept or replaced
+    # by a newer apply: only act when pending.json still names this token.
+    if [[ ! -s $PENDING_FILE ]] || [[ "$(jq -r '.token // empty' "$PENDING_FILE")" != "$token" ]]; then
+      echo "nothing to revert"
+      return 0
+    fi
+  fi
+
   # When the timer itself runs this, stopping the transient service would
   # SIGTERM this very process before the pending file is removed. The timer
   # has already elapsed, so only an interactive revert needs to cancel it.
@@ -402,11 +486,11 @@ cmd_icc() {
 cmd="${1:-}"; shift || true
 case "$cmd" in
   state) cmd_state ;;
-  apply) cmd_apply "$@" ;;
-  keep) cmd_keep ;;
-  revert) cmd_revert "$@" ;;
-  persist) cmd_persist ;;
-  hdr) cmd_hdr "$@" ;;
+  apply) acquire_lock; cmd_apply "$@" ;;
+  keep) acquire_lock; cmd_keep ;;
+  revert) acquire_lock; cmd_revert "$@" ;;
+  persist) acquire_lock; cmd_persist ;;
+  hdr) acquire_lock; cmd_hdr "$@" ;;
   brightness) cmd_brightness "$@" ;;
   identify) cmd_identify ;;
   open) cmd_open ;;

@@ -4,7 +4,17 @@ set -euo pipefail
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
 sandbox="$(make_sandbox)"
-trap 'rm -rf "$sandbox"' EXIT
+sandboxes=("$sandbox")
+trap 'rm -rf "${sandboxes[@]}"' EXIT
+
+# A few of the newer tests below need a clean, isolated pending/timer state
+# rather than the one this file keeps building up above; give them their own.
+new_sandbox() {
+  local dir
+  dir="$(make_sandbox)"
+  sandboxes+=("$dir")
+  echo "$dir"
+}
 
 # ---- state
 state="$(run_cli "$sandbox" state)"
@@ -66,8 +76,9 @@ pass "revert"
 
 # ---- the timer's own revert must not stop its own service before cleaning up
 run_cli "$sandbox" apply '{"displays":[{"name":"DP-1","scale":2}]}' >/dev/null
+token="$(jq -r '.token' "$sandbox/state/pending.json")"
 : > "$sandbox/systemctl.log"
-out="$(run_cli "$sandbox" revert --expired)"
+out="$(run_cli "$sandbox" revert --expired --token "$token")"
 assert_eq "$out" "reverted" "expired revert reports"
 [[ ! -e $sandbox/state/pending.json ]] || fail "expired revert clears pending"
 assert_not_contains "$(cat "$sandbox/systemctl.log")" "stop" "expired revert does not stop its own unit"
@@ -91,7 +102,9 @@ if run_cli "$sandbox" apply '{"displays":[{"name":"DP-2","evil":1}]}' 2>/dev/nul
 pass "validation rejects bad input"
 
 # ---- disable + mirror + icc + global
-run_cli "$sandbox" apply --now '{"displays":[{"name":"DP-1","enabled":false},{"name":"DP-2","icc":"/home/p/My Profile.icc","vrr":1}],"global":{"cm_auto_hdr":0}}' >/dev/null
+# DP-2's kept intent still has cm:hdr from the tests above; move it to "auto"
+# in the same change, since icc together with hdr is now rejected (6a).
+run_cli "$sandbox" apply --now '{"displays":[{"name":"DP-1","enabled":false},{"name":"DP-2","cm":"auto","icc":"/home/p/My Profile.icc","vrr":1}],"global":{"cm_auto_hdr":0}}' >/dev/null
 lua="$(cat "$sandbox/state/displays-layout.lua")"
 assert_contains "$lua" 'hl.monitor({ output = "DP-1", disabled = true })' "disabled display rule"
 assert_contains "$lua" 'icc = [==[/home/p/My Profile.icc]==]' "icc path as long string"
@@ -117,3 +130,110 @@ pass "hdr shortcut"
 out="$(run_cli "$sandbox" icc list)"
 jq -e 'type == "array"' <<<"$out" >/dev/null || fail "icc list is a JSON array"
 pass "icc list"
+
+# ---- apply writes a transaction token, and the timer names it
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" apply '{"displays":[{"name":"DP-2","bitdepth":10,"cm":"hdr","sdr_max_luminance":203}]}' >/dev/null
+token="$(jq -r '.token' "$sandbox2/state/pending.json")"
+[[ -n $token && $token != "null" ]] || fail "pending.json carries a token" "$token"
+assert_contains "$(cat "$sandbox2/systemd-run.log")" "revert --expired --token $token" "timer command line names the token"
+pass "apply writes a transaction token and arms the timer with it"
+
+# ---- a hyprctl rejection unwinds instead of leaving a dangling pending/timer
+sandbox2="$(new_sandbox)"
+if FAKE_HYPRCTL_EVAL_FAIL=1 run_cli "$sandbox2" apply '{"displays":[{"name":"DP-2","bitdepth":10,"cm":"hdr","sdr_max_luminance":203}]}' 2>/dev/null; then
+  fail "apply exits non-zero when hyprctl rejects the eval"
+fi
+[[ ! -e $sandbox2/state/pending.json ]] || fail "no pending.json survives a failed apply"
+assert_contains "$(cat "$sandbox2/systemctl.log")" "stop" "unwind stops the timer"
+assert_contains "$(tail -1 "$sandbox2/hyprctl.log")" "reload" "unwind reloads to restore the last kept config"
+pass "a failing hyprctl eval unwinds the pending apply"
+
+# ---- revert --expired only acts when the token matches a still-pending change
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" apply '{"displays":[{"name":"DP-1","scale":2}]}' >/dev/null
+: > "$sandbox2/hyprctl.log"
+out="$(run_cli "$sandbox2" revert --expired --token "not-the-real-token")"
+assert_eq "$out" "nothing to revert" "mismatched token does nothing"
+[[ -s $sandbox2/state/pending.json ]] || fail "mismatched token leaves pending.json in place"
+[[ -z "$(cat "$sandbox2/hyprctl.log")" ]] || fail "mismatched token does not reload" "$(cat "$sandbox2/hyprctl.log")"
+
+real_token="$(jq -r '.token' "$sandbox2/state/pending.json")"
+out="$(run_cli "$sandbox2" revert --expired --token "$real_token")"
+assert_eq "$out" "reverted" "matching token reverts"
+[[ ! -e $sandbox2/state/pending.json ]] || fail "matching token clears pending.json"
+assert_contains "$(cat "$sandbox2/hyprctl.log")" "reload" "matching token reloads"
+
+: > "$sandbox2/hyprctl.log"
+out="$(run_cli "$sandbox2" revert --expired --token "$real_token")"
+assert_eq "$out" "nothing to revert" "no pending: expired revert does nothing"
+[[ -z "$(cat "$sandbox2/hyprctl.log")" ]] || fail "no pending: expired revert does not reload" "$(cat "$sandbox2/hyprctl.log")"
+pass "revert --expired only acts on a matching token"
+
+# ---- top-level keys: only displays/global are accepted, and one must be present
+sandbox2="$(new_sandbox)"
+if run_cli "$sandbox2" apply '{"unexpected":true}' 2>/dev/null; then fail "unknown top-level key rejected"; fi
+if run_cli "$sandbox2" apply '{}' 2>/dev/null; then fail "empty change rejected"; fi
+[[ ! -e $sandbox2/state/pending.json ]] || fail "no pending.json armed by a rejected top-level change"
+out="$(run_cli "$sandbox2" apply '{"displays":[{"name":"DP-1","scale":1.8}]}')"
+assert_contains "$out" "pending" "a valid change still applies"
+pass "top-level keys are validated"
+
+# ---- colour invariants apply to the merged display (existing intent + change)
+sandbox2="$(new_sandbox)"
+if run_cli "$sandbox2" apply '{"displays":[{"name":"DP-1","icc":"/tmp/a.icc","cm":"hdr"}]}' 2>/dev/null; then
+  fail "icc together with cm hdr rejected"
+fi
+if run_cli "$sandbox2" apply '{"displays":[{"name":"DP-2","icc":"/tmp/a.icc","cm":"hdredid"}]}' 2>/dev/null; then
+  fail "icc together with cm hdredid rejected"
+fi
+# supports_hdr follows Hyprland's own convention: -1 forces HDR off, 0 is
+# auto/EDID (the default, must NOT block hdr), 1 forces it on.
+if run_cli "$sandbox2" apply '{"displays":[{"name":"DP-1","supports_hdr":-1,"cm":"hdr"}]}' 2>/dev/null; then
+  fail "supports_hdr forced off (-1) together with cm hdr rejected"
+fi
+out="$(run_cli "$sandbox2" apply '{"displays":[{"name":"DP-1","supports_hdr":0,"cm":"hdr"}]}')"
+assert_contains "$out" "pending" "supports_hdr 0 (auto/EDID default) does not block hdr"
+run_cli "$sandbox2" revert >/dev/null
+# kept intent already has cm:hdr; a later change that only sets icc must be
+# checked against that merged state, not just the change in isolation.
+run_cli "$sandbox2" apply --now '{"displays":[{"name":"DP-1","bitdepth":10,"cm":"hdr","sdr_max_luminance":203}]}' >/dev/null
+if run_cli "$sandbox2" apply '{"displays":[{"name":"DP-1","icc":"/tmp/a.icc"}]}' 2>/dev/null; then
+  fail "icc rejected against a kept cm:hdr intent (merged-state check)"
+fi
+pass "colour invariants apply to the merged display, not just the change"
+
+# ---- apply --now reloads and checks configerrors, like keep
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" apply --now '{"displays":[{"name":"DP-2","bitdepth":10,"cm":"hdr","sdr_max_luminance":203}]}' >/dev/null
+log="$(cat "$sandbox2/hyprctl.log")"
+assert_contains "$log" "reload" "apply --now reloads"
+assert_contains "$log" "configerrors" "apply --now checks configerrors"
+pass "apply --now validates the written Lua like keep does"
+
+# ---- structural check: every display key merge_intent accepts must reach
+# generate_lua's output, or the timer's plain `hyprctl reload` cannot
+# reconstruct it after a revert. "enabled" is the one exception: Hyprland's
+# hl.monitor has no such key, so it is folded into the presence/absence of
+# "disabled" instead of being written verbatim (see the loop's note below).
+sandbox2="$(new_sandbox)"
+change='{"displays":[{"name":"DP-2",
+  "mode":"preferred","position":"100x50","scale":1.5,"transform":1,
+  "vrr":1,"enabled":true,"mirror":"DP-1","bitdepth":10,"cm":"auto",
+  "sdr_eotf":"srgb","sdrbrightness":1.2,"sdrsaturation":1.1,
+  "sdr_min_luminance":0.2,"sdr_max_luminance":203,
+  "min_luminance":0.05,"max_luminance":500,"max_avg_luminance":450,
+  "icc":"/home/p/profile.icc","supports_hdr":1,"supports_wide_color":1
+}]}'
+run_cli "$sandbox2" apply --now "$change" >/dev/null
+lua="$(cat "$sandbox2/state/displays-layout.lua")"
+for key in mode position scale transform vrr mirror bitdepth cm sdr_eotf \
+           sdrbrightness sdrsaturation sdr_min_luminance sdr_max_luminance \
+           max_avg_luminance icc supports_hdr supports_wide_color; do
+  assert_contains "$lua" "$key = " "generated Lua emits $key"
+done
+# min_luminance/max_luminance searched with a leading ", " so the match can't
+# land inside sdr_min_luminance/sdr_max_luminance, which contain them as a substring.
+assert_contains "$lua" ", min_luminance = " "generated Lua emits min_luminance distinctly from sdr_min_luminance"
+assert_contains "$lua" ", max_luminance = " "generated Lua emits max_luminance distinctly from sdr_max_luminance"
+pass "every accepted display key reaches the generated Lua (enabled excluded: see note above)"
