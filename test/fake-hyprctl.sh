@@ -76,7 +76,7 @@ case "$1 $2" in
     cp "$dir/monitors.pristine.json" "$dir/monitors.json"
     : > "$dir/probe.txt"
     if [[ ${FAKE_HYPRCTL_TOGGLES_NOT_LOADED:-} != 1 ]]; then
-      # Sorted like require_all: displays-layout, displays-pending, internal-monitor-*.
+      # Sorted like require_all: candela-layout, candela-pending, internal-monitor-*.
       for f in "$dir/state/candela-layout.lua" "$dir/state/candela-pending.lua" "$dir/state/internal-monitor-disable.lua"; do
         [[ -f $f ]] || continue
         apply_rules < "$f"

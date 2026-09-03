@@ -262,7 +262,7 @@ Session 3 (3 Sep 2026, evening):
 - **A global set by a toggles file is visible to `hyprctl eval` after a reload.** The layout probe works on 0.56.2: `doctor` reports the file ran. `eval` prints only `ok` or an error, never a return value, so the probe is an `assert`.
 - **The two MateViews' EDIDs differ** (manufacture week 28 against 25 of 2021) although Hyprland reports a blank serial for both and the numeric serial in the base block is identical. The EDID hash is a usable identity on this desk; make, model and serial are not.
 - **Omarchy's clamshell script evals the built-in panel at `position = "auto"`** and never reads our layout (§6.7). Omarchy reloads Hyprland from that script, from its modeless-recovery loop and on theme changes, which is why the pending change is on disk (§6.3).
-- **Toggles load in sorted filename order** (`find | sort` in `require_all.lua`): `displays-layout` < `displays-pending` < `internal-monitor-*`.
+- **Toggles load in sorted filename order** (`find | sort` in `require_all.lua`): `candela-layout` < `candela-pending` < `internal-monitor-*`.
 - **The every-screen strip and keep with the studio open were seen live** (screenshots of both screens, no shell warnings); the built-in panel paths, `recover` at boot and the strip's keyboard are covered by the sandbox only.
 
 ## 10. Prior art, read but not copied

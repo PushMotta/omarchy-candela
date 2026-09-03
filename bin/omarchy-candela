@@ -48,7 +48,7 @@ INTENT_FILE="$STATE_DIR/intent.json"
 PENDING_FILE="$STATE_DIR/pending.json"
 LUA_FILE="${OMARCHY_CANDELA_LUA_FILE:-$STATE_HOME/omarchy/toggles/hypr/candela-layout.lua}"
 # Everything below lives beside the layout: Omarchy loads that directory in
-# sorted filename order, so "displays-layout" < "displays-pending" <
+# sorted filename order, so "candela-layout" < "candela-pending" <
 # "internal-monitor-*" is the precedence, and it is the one we want.
 TOGGLES_DIR="$(dirname "$LUA_FILE")"
 PENDING_LUA="${OMARCHY_CANDELA_PENDING_LUA_FILE:-$TOGGLES_DIR/candela-pending.lua}"

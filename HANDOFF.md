@@ -188,7 +188,7 @@ Live testing flips Pedro's real displays. He asked to be **warned before** anyth
 15. A `return 1` from a command function trips the ERR trap's "aborted at line" message; intended non-zero verdicts (`doctor`, a revert that did not restore) use `exit 1`.
 16. A display's live geometry once it is off is 0x0 at "preferred", so a rule generated from live state brings it back on top of the origin: geometry is remembered in intent at switch-off.
 17. Omarchy's clamshell script owns the built-in panel: it re-enables it with `hyprctl eval` at `position = "auto"` (gotcha 5 again) and a scale it reads from monitors.lua or `internal-monitor-scale`, never from our layout, within seconds of any lid or monitor event. Only its own `internal-monitor-disable.lua` stops it. DESIGN.md §6.7.
-18. Toggles load in `find | sort` order: `displays-layout` < `displays-pending` < `internal-monitor-*`. Name new toggles files with that in mind.
+18. Toggles load in `find | sort` order: `candela-layout` < `candela-pending` < `internal-monitor-*`. Name new toggles files with that in mind.
 
 ## Decisions taken (do not re-litigate)
 
