@@ -127,12 +127,45 @@ function colourMode(display) {
   return "sdr"
 }
 
-function offeredModes(caps) {
+// Hyprland's own override convention for supports_hdr / supports_wide_color
+// (CLuaConfigInt(0, -1, 1)): 1 forces the capability on, -1 forces it off,
+// and 0 — the default, or the field being absent from intent — means trust
+// whatever the EDID-derived fallback says.
+function override(value, fallback) {
+  var n = Number(value)
+  if (n === 1) return true
+  if (n === -1) return false
+  return fallback
+}
+
+// `intent` carries the user's overrides (supports_hdr, supports_wide_color,
+// icc), on top of what the EDID (`caps`) reports. Omitting it entirely
+// reproduces the old EDID-only behaviour.
+function offeredModes(caps, intent) {
   var c = caps || {}
+  var i = intent || {}
+  var hdrCapable = override(i.supports_hdr, !!c.supportsHdr)
+  // An HDR-capable panel is wide-capable too, same rule as before overrides existed.
+  var wideCapable = override(i.supports_wide_color, !!c.supportsWideColor) || hdrCapable
+  var iccLoaded = typeof i.icc === "string" && i.icc.length > 0
   var out = ["sdr"]
-  if (c.supportsWideColor || c.supportsHdr) out.push("wide")
-  if (c.supportsHdr) out.push("hdr")
+  if (wideCapable) out.push("wide")
+  if (hdrCapable && !iccLoaded) out.push("hdr")   // DESIGN.md §4.4: ICC and HDR are mutually exclusive
   return out
+}
+
+// Why "hdr" is missing from offeredModes(), in the precedence the UI should
+// state it: an ICC profile beats a forced-off capability beats a plain
+// EDID that never claimed HDR.
+function hdrUnavailableReason(caps, intent) {
+  var c = caps || {}
+  var i = intent || {}
+  var hdrCapable = override(i.supports_hdr, !!c.supportsHdr)
+  var iccLoaded = typeof i.icc === "string" && i.icc.length > 0
+  if (hdrCapable && !iccLoaded) return ""
+  if (iccLoaded) return "an ICC profile is loaded"
+  if (Number(i.supports_hdr) === -1) return "the HDR capability is forced off"
+  return "the panel does not report HDR"
 }
 
 function sdrWhiteRange(caps) {
@@ -388,7 +421,7 @@ if (typeof module !== "undefined") {
     REFERENCE_WHITE: REFERENCE_WHITE, SDR_WHITE_FLOOR: SDR_WHITE_FLOOR, SCALE_PRESETS: SCALE_PRESETS,
     cleanScale: cleanScale, availableScales: availableScales, scaleIndex: scaleIndex,
     bitdepthFromFormat: bitdepthFromFormat, formatMode: formatMode, parseMode: parseMode, modeOptions: modeOptions, currentModeValue: currentModeValue,
-    effectiveIntent: effectiveIntent, colourMode: colourMode, offeredModes: offeredModes, sdrWhiteRange: sdrWhiteRange, defaultSdrWhite: defaultSdrWhite,
+    effectiveIntent: effectiveIntent, colourMode: colourMode, offeredModes: offeredModes, hdrUnavailableReason: hdrUnavailableReason, sdrWhiteRange: sdrWhiteRange, defaultSdrWhite: defaultSdrWhite,
     fieldsForMode: fieldsForMode, sdrWhiteToSlider: sdrWhiteToSlider, sliderToSdrWhite: sliderToSdrWhite,
     outputCaption: outputCaption, capabilityLine: capabilityLine, luminanceLine: luminanceLine, primariesLine: primariesLine,
     displayTitle: displayTitle, panelLine: panelLine, metaLine: metaLine,

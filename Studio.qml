@@ -139,6 +139,9 @@ Item {
   function iccOf(d) { return String(field(d, "icc", "")) }
   function presetOf(d) { return String(field(d, "cm", d.live ? d.live.cm : "srgb")) }
   function saturationOf(d) { return Number(field(d, "sdrsaturation", d.live ? d.live.sdrSaturation : 1)) || 1 }
+  // Fallback -1, not 0: Hyprland's own convention is 1 force-on / 0
+  // force-off / -1 trust-the-EDID, and a display that has never had this
+  // field set is exactly the "absent" case, not "forced off".
   function capOf(d, key) { return Number(field(d, key, 0)) }
   function lumOf(d, key) { var v = field(d, key, null); return v === null || v === undefined ? NaN : Number(v) }
   function autoHdrOf() {
@@ -151,6 +154,32 @@ Item {
   function setColour(d, mode) {
     var f = Model.fieldsForMode(mode, d.capabilities, Model.effectiveIntent(d))
     for (var k in f) setField(d.name, k, f[k])
+  }
+
+  // What offeredModes/hdrUnavailableReason need to see: draft values count,
+  // not just what has already been kept or is pending, so an override or an
+  // ICC pick that has not been applied yet still gates the pills right away.
+  function colourIntent(d) {
+    return { icc: field(d, "icc", ""), supports_hdr: capOf(d, "supports_hdr"), supports_wide_color: capOf(d, "supports_wide_color") }
+  }
+
+  // A capability override can make the draft's current colour mode
+  // unreachable (e.g. forcing HDR off while the draft sits in HDR). Move it
+  // to the best mode still offered so the draft never asks the backend to
+  // apply a state it will reject.
+  function reconcileColour(d) {
+    if (!d) return
+    var offered = Model.offeredModes(d.capabilities, colourIntent(d))
+    if (offered.indexOf(colourOf(d)) === -1) setColour(d, offered.indexOf("wide") !== -1 ? "wide" : "sdr")
+  }
+
+  function hdrReasonSentence(d) {
+    // Only worth a sentence when HDR is blocked rather than absent: a panel
+    // that never reported HDR would otherwise carry this line forever. Same
+    // rule as the popup's caption.
+    if (!d || !d.capabilities || !d.capabilities.supportsHdr) return ""
+    var reason = Model.hdrUnavailableReason(d.capabilities, colourIntent(d))
+    return reason ? "HDR is unavailable while " + reason + "." : ""
   }
 
   readonly property var rects: {
@@ -199,7 +228,12 @@ Item {
   property string focusArea: "inspector"   // "canvas" | "inspector" | "actions"
   property string currentRow: "mode"
   property bool advancedOpen: false
+  // 0..2 (Identify/Revert/Apply) normally, 0..1 (Revert/Keep) while pending.
+  // Lands on Keep when a countdown starts, matching the bar's own default,
+  // and back on Apply when it ends so the cursor isn't left on a Revert
+  // that no longer means "discard the draft".
   property int actionIndex: 2
+  onHasPendingChanged: actionIndex = hasPending ? 1 : 2
 
   readonly property var rows: {
     var list = ["mode", "vrr", "scale", "rotation", "posx", "posy", "mirror", "enabled"]
@@ -242,7 +276,7 @@ Item {
         var scales = Model.availableScales(d.width, d.height)
         var i = Model.scaleIndex(scales, scaleOf(d)); if (i < 0) i = 0
         var n = Math.max(0, Math.min(scales.length - 1, i + delta))
-        setField(d.name, "scale", Number(scales[n].label)); break
+        setField(d.name, "scale", scales[n].effective); break
       }
       case "rotation": setField(d.name, "transform", cycle([0, 1, 2, 3], transformOf(d), delta)); break
       case "posx": { var p = positionOf(d); moveDisplay(d.name, p.x + delta * step, p.y); break }
@@ -252,13 +286,14 @@ Item {
         setField(d.name, "mirror", cycle(m, mirrorOf(d), delta)); break
       }
       case "enabled": setField(d.name, "enabled", !enabledOf(d)); break
-      case "colour": setColour(d, cycle(Model.offeredModes(d.capabilities), colourOf(d), delta)); break
+      case "colour": setColour(d, cycle(Model.offeredModes(d.capabilities, colourIntent(d)), colourOf(d), delta)); break
       case "sdrwhite": {
         var r = Model.sdrWhiteRange(d.capabilities)
         setField(d.name, "sdr_max_luminance", Math.max(r.min, Math.min(r.max, sdrWhiteOf(d) + delta * 10))); break
       }
       case "transfer": setField(d.name, "sdr_eotf", cycle(["default", "gamma22", "srgb"], eotfOf(d), delta)); break
       case "icc": {
+        if (colourOf(d) === "hdr") break   // picker is disabled while the draft is in HDR
         var paths = [""].concat(iccOptions.map(function(o) { return o.value }).filter(function(v) { return v !== "" }))
         setField(d.name, "icc", cycle(paths, iccOf(d), delta)); break
       }
@@ -267,8 +302,8 @@ Item {
       case "minlum": adjustLum(d, "min_luminance", delta * (big ? 1 : 0.1), 0.005); break
       case "maxlum": adjustLum(d, "max_luminance", delta * step, 1); break
       case "avglum": adjustLum(d, "max_avg_luminance", delta * step, 1); break
-      case "caphdr": setField(d.name, "supports_hdr", cycle([0, 1, -1], capOf(d, "supports_hdr"), delta)); break
-      case "capwide": setField(d.name, "supports_wide_color", cycle([0, 1, -1], capOf(d, "supports_wide_color"), delta)); break
+      case "caphdr": setField(d.name, "supports_hdr", cycle([0, 1, -1], capOf(d, "supports_hdr"), delta)); reconcileColour(d); break
+      case "capwide": setField(d.name, "supports_wide_color", cycle([0, 1, -1], capOf(d, "supports_wide_color"), delta)); reconcileColour(d); break
       case "autohdr": setGlobal("cm_auto_hdr", cycle([0, 1, 2], autoHdrOf(), delta)); break
     }
   }
@@ -294,7 +329,7 @@ Item {
       case "mode": modeDropdown.toggle(); break
       case "enabled": setField(d.name, "enabled", !enabledOf(d)); break
       case "advanced": advancedOpen = !advancedOpen; break
-      case "icc": iccDropdown.toggle(); break
+      case "icc": if (colourOf(d) !== "hdr") iccDropdown.toggle(); break   // disabled while the draft is in HDR
       case "posx": posXField.field.forceActiveFocus(); break
       case "posy": posYField.field.forceActiveFocus(); break
       case "minlum": minLumField.field.forceActiveFocus(); break
@@ -332,7 +367,16 @@ Item {
     if (k === Qt.Key_R) { revertOrDiscard(); return true }
     if (k === Qt.Key_I) { if (service) service.identify(); return true }
     if (k === Qt.Key_Return || k === Qt.Key_Enter || k === Qt.Key_Space) {
-      if (focusArea === "actions") { if (actionIndex === 0) { if (service) service.identify() } else if (actionIndex === 1) revertOrDiscard(); else applyDraft(); return true }
+      if (focusArea === "actions") {
+        // Pending mode has exactly two targets, Revert and Keep, in that
+        // order — the normal three-target Identify/Revert/Apply mapping
+        // does not apply while the countdown strip has replaced the bar.
+        if (hasPending) { if (actionIndex === 0) { if (service) service.revert() } else if (service) service.keep() }
+        else if (actionIndex === 0) { if (service) service.identify() }
+        else if (actionIndex === 1) revertOrDiscard()
+        else applyDraft()
+        return true
+      }
       if (focusArea === "inspector") { rowActivate(); return true }
       return true
     }
@@ -351,8 +395,9 @@ Item {
       return false
     }
     if (focusArea === "actions") {
+      var maxAction = hasPending ? 1 : 2
       if (left) { actionIndex = Math.max(0, actionIndex - 1); return true }
-      if (right) { actionIndex = Math.min(2, actionIndex + 1); return true }
+      if (right) { actionIndex = Math.min(maxAction, actionIndex + 1); return true }
       if (up) { focusArea = "inspector"; return true }
       return false
     }
@@ -591,7 +636,7 @@ Item {
                           horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.controlPaddingY
                           bordered: true
                           active: root.display ? Model.round2(root.scaleOf(root.display)) === modelData.effective : false
-                          onClicked: if (root.display) root.setField(root.display.name, "scale", Number(modelData.label))
+                          onClicked: if (root.display) root.setField(root.display.name, "scale", modelData.effective)
                           onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "scale" } }
                         }
                       }
@@ -687,13 +732,22 @@ Item {
                 InspectorRow {
                   rowId: "colour"
                   visible: root.caps.available === true
-                  ButtonGroup {
-                    options: Model.offeredModes(root.caps).map(function(m) { return { value: m, label: m === "sdr" ? "SDR" : (m === "wide" ? "Wide" : "HDR") } })
-                    value: root.display ? root.colourOf(root.display) : "sdr"
-                    foreground: root.foreground; background: root.background; accent: root.accent; fontFamily: root.fontFamily
-                    focusable: false
-                    onChanged: function(v) { if (root.display) root.setColour(root.display, v) }
-                    onHovered: function(i, h) { if (h) { root.focusArea = "inspector"; root.currentRow = "colour" } }
+                  Column {
+                    width: parent.width; spacing: Style.spacing.labelGap
+                    ButtonGroup {
+                      options: root.display ? Model.offeredModes(root.caps, root.colourIntent(root.display)).map(function(m) { return { value: m, label: m === "sdr" ? "SDR" : (m === "wide" ? "Wide" : "HDR") } }) : []
+                      value: root.display ? root.colourOf(root.display) : "sdr"
+                      foreground: root.foreground; background: root.background; accent: root.accent; fontFamily: root.fontFamily
+                      focusable: false
+                      onChanged: function(v) { if (root.display) root.setColour(root.display, v) }
+                      onHovered: function(i, h) { if (h) { root.focusArea = "inspector"; root.currentRow = "colour" } }
+                    }
+                    Text {
+                      textFormat: Text.PlainText
+                      text: root.display ? root.hdrReasonSentence(root.display) : ""
+                      visible: text !== ""
+                      color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width
+                    }
                   }
                 }
 
@@ -753,6 +807,7 @@ Item {
                   visible: root.caps.available === true
                   Column {
                     width: parent.width; spacing: Style.spacing.labelGap
+                    readonly property bool hdrDraft: root.display && root.colourOf(root.display) === "hdr"
                     SearchableDropdown {
                       id: iccDropdown
                       width: parent.width
@@ -763,10 +818,16 @@ Item {
                       emptyText: "No .icc or .icm files in ~/.local/share/icc, ~/.color/icc or /usr/share/color/icc"
                       foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily
                       hasCursor: root.focusArea === "inspector" && root.currentRow === "icc"
+                      enabled: !parent.hdrDraft
+                      opacity: enabled ? 1 : 0.45
                       onChanged: function(v) { if (root.display) root.setField(root.display.name, "icc", v) }
                       onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "icc" } }
                     }
-                    Text { textFormat: Text.PlainText; text: "A profile forces the sRGB transfer and replaces the colour preset. HDR is unavailable while one is loaded."; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width }
+                    Text {
+                      textFormat: Text.PlainText
+                      text: parent.hdrDraft ? "Clear HDR to load an ICC profile." : "A profile forces the sRGB transfer and replaces the colour preset. HDR is unavailable while one is loaded."
+                      color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width
+                    }
                   }
                 }
 
@@ -898,7 +959,7 @@ Item {
                       value: root.display ? String(root.capOf(root.display, "supports_hdr")) : "0"
                       foreground: root.foreground; background: root.background; accent: root.accent; fontFamily: root.fontFamily
                       focusable: false
-                      onChanged: function(v) { if (root.display) root.setField(root.display.name, "supports_hdr", Number(v)) }
+                      onChanged: function(v) { if (root.display) { root.setField(root.display.name, "supports_hdr", Number(v)); root.reconcileColour(root.display) } }
                       onHovered: function(i, h) { if (h) { root.focusArea = "inspector"; root.currentRow = "caphdr" } }
                     }
                   }
@@ -915,7 +976,7 @@ Item {
                       value: root.display ? String(root.capOf(root.display, "supports_wide_color")) : "0"
                       foreground: root.foreground; background: root.background; accent: root.accent; fontFamily: root.fontFamily
                       focusable: false
-                      onChanged: function(v) { if (root.display) root.setField(root.display.name, "supports_wide_color", Number(v)) }
+                      onChanged: function(v) { if (root.display) { root.setField(root.display.name, "supports_wide_color", Number(v)); root.reconcileColour(root.display) } }
                       onHovered: function(i, h) { if (h) { root.focusArea = "inspector"; root.currentRow = "capwide" } }
                     }
                   }
@@ -948,12 +1009,15 @@ Item {
           Item {
             id: actionsArea
             width: parent.width
-            implicitHeight: root.hasPending ? applyBar.implicitHeight : Math.max(hintText.implicitHeight, actionButtons.implicitHeight) + Style.spacing.md
+            implicitHeight: root.hasPending
+              ? applyBar.implicitHeight + pendingHint.implicitHeight + Style.spacing.xs
+              : Math.max(hintText.implicitHeight, actionButtons.implicitHeight) + Style.spacing.md
 
             ApplyBar {
               id: applyBar
               visible: root.hasPending
               width: parent.width
+              anchors.top: parent.top
               remaining: root.service ? root.service.pendingRemaining : 0
               total: root.service ? root.service.revertSeconds : 15
               foreground: root.foreground
@@ -962,6 +1026,20 @@ Item {
               onKeep: root.service.keep()
               onRevert: root.service.revert()
               onHovered: function(index, h) { if (h) { root.focusArea = "actions"; root.actionIndex = index } }
+            }
+
+            // Pending mode's own keyboard hint, same style as the normal
+            // bar's, printed under the strip instead of sharing its row.
+            Text {
+              id: pendingHint
+              visible: root.hasPending
+              textFormat: Text.PlainText
+              text: "↵ keep · r revert · esc revert"
+              color: root.dim
+              font.family: root.fontFamily; font.pixelSize: Style.font.caption
+              anchors.top: applyBar.bottom
+              anchors.topMargin: Style.spacing.xs
+              anchors.left: parent.left
             }
 
             Rectangle { visible: !root.hasPending; width: parent.width; height: 1; color: Util.alpha(root.foreground, 0.12); anchors.top: parent.top }

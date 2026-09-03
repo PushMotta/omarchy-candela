@@ -16,6 +16,14 @@ import "components"
 // hover so keyboard and pointer share one highlight.
 Panel {
   id: root
+  // Bar widgets (kind "bar-widget", loaded through Bar.qml's ModuleSlot) are
+  // only ever handed `bar`, `moduleName`, and `settings` — never a
+  // `manifest`, unlike the service/overlay kinds (Service.qml, Studio.qml)
+  // which the shell loads through a different path that does inject one.
+  // The bar overwrites `moduleName` with whatever id is configured in
+  // shell.json the instant this widget is mounted, so in normal operation
+  // this literal is only ever the value before that happens. Keep it in
+  // sync with manifest.json's "id" by hand if the plugin is ever renamed.
   moduleName: "pmotta.displays"
   manageIpc: false
 
@@ -39,7 +47,11 @@ Panel {
   }
   readonly property var caps: display && display.capabilities ? display.capabilities : ({})
   readonly property string colourMode: display ? Model.colourMode(display) : "sdr"
-  readonly property var offeredModes: Model.offeredModes(caps)
+  // Pending wins over kept — the same view Model.offeredModes and
+  // Model.hdrUnavailableReason need to honour the ICC/forced-off/no-HDR
+  // invariants consistently with the rest of the app.
+  readonly property var intent: Model.effectiveIntent(display)
+  readonly property var offeredModes: Model.offeredModes(caps, intent)
   readonly property int enabledCount: {
     var n = 0
     for (var i = 0; i < displays.length; i++) if (displays[i].enabled) n++
@@ -50,8 +62,12 @@ Panel {
   // display's value (DDC reads are slow), so the rest is read on demand.
   property int brightnessPercent: 0
   property bool brightnessAvailable: false
-  property bool brightnessSetQueued: false
   property real wheelAccumulator: 0
+  // Which display the running DDC read is for, and which display asked for
+  // one while it was busy — so a read finishing never paints its result
+  // under a display the popup has since moved on from.
+  property string brightnessReadFor: ""
+  property string brightnessReadNext: ""
 
   // SDR white: a live preview value while dragging, else the compositor's.
   readonly property var sdrRange: Model.sdrWhiteRange(caps)
@@ -147,7 +163,7 @@ Panel {
         if (displays[selectedIndex]) selectDisplay(displays[selectedIndex].name)
         break
       case "scale":
-        if (scaleValues[selectedIndex]) setScale(scaleValues[selectedIndex].label)
+        if (scaleValues[selectedIndex]) setScale(scaleValues[selectedIndex].effective)
         break
       case "colour":
         if (offeredModes[selectedIndex]) setColourMode(offeredModes[selectedIndex])
@@ -203,17 +219,22 @@ Panel {
     if (armedOffName !== "" && indexOfDisplay(armedOffName) < 0) disarmOff()
     clampCursor()
   }
+  // Covers both switching the selected display and the state arriving for
+  // the first time (display goes from null to the initial selection), so
+  // the bar icon's wheel works before the popup has ever been opened.
+  onDisplayChanged: readBrightness()
 
   // ---------------------------------------------------------- actions
   function selectDisplay(name) {
     if (name === selectedName) return
     selectedName = name
-    readBrightness()
+    // readBrightness() runs via onDisplayChanged below, once `display`
+    // re-resolves to the new selection.
   }
 
-  function setScale(label) {
+  function setScale(scale) {
     if (!display || !service) return
-    service.applyDisplay(display.name, { scale: Number(label) }, false)
+    service.applyDisplay(display.name, { scale: scale }, false)
   }
 
   function setColourMode(mode) {
@@ -275,7 +296,15 @@ Panel {
       brightnessPercent = Number(display.brightness)
       return
     }
-    if (brightnessProc.running) return
+    if (brightnessProc.running) {
+      // A read is already in flight for another display; remember this one
+      // and pick it up when that read finishes rather than dropping it or
+      // starting a second process against the same collector.
+      brightnessReadNext = display.name
+      return
+    }
+    brightnessReadNext = ""
+    brightnessReadFor = display.name
     brightnessProc.command = [service.cli, "brightness", display.name]
     brightnessProc.running = true
   }
@@ -328,9 +357,24 @@ Panel {
       waitForEnd: true
       onStreamFinished: {
         var v = String(text || "").trim()
-        root.brightnessAvailable = /^[0-9]+$/.test(v)
-        if (root.brightnessAvailable) root.brightnessPercent = Math.max(0, Math.min(100, parseInt(v, 10)))
+        // Apply only if the popup is still looking at the display this read
+        // was started for: switching DP-1 → DP-2 while DP-1's read is in
+        // flight must not paint DP-1's value under DP-2's label.
+        if (root.display && root.display.name === root.brightnessReadFor) {
+          root.brightnessAvailable = /^[0-9]+$/.test(v)
+          if (root.brightnessAvailable) root.brightnessPercent = Math.max(0, Math.min(100, parseInt(v, 10)))
+        }
+        root.brightnessReadFor = ""
       }
+    }
+    // The queued read starts here, not in onStreamFinished: that signal can
+    // fire while `running` is still true, and readBrightness() would only
+    // queue itself again.
+    onRunningChanged: {
+      if (running || root.brightnessReadNext === "") return
+      var next = root.brightnessReadNext
+      root.brightnessReadNext = ""
+      if (root.display && root.display.name === next) root.readBrightness()
     }
   }
 
@@ -373,7 +417,9 @@ Panel {
 
   Connections {
     target: root.service
-    function onStateChangedExternally() { if (root.opened) root.readBrightness() }
+    // Not gated on `opened`: a fresh shell must have brightness ready for
+    // the bar icon's wheel before the popup is opened for the first time.
+    function onStateChangedExternally() { root.readBrightness() }
   }
 
   // ---------------------------------------------------------- bar button
@@ -638,7 +684,7 @@ Panel {
                   bordered: true
                   active: root.activeScaleIndex() === index
                   hasCursor: root.cursorActive && root.focusSection === "scale" && root.selectedIndex === index
-                  onClicked: root.setScale(modelData.label)
+                  onClicked: root.setScale(modelData.effective)
                   onHovered: function(h) { if (h) root.hoverInto("scale", index) }
                 }
               }
@@ -696,7 +742,18 @@ Panel {
 
             Text {
               textFormat: Text.PlainText
-              text: root.display ? "Output " + Model.outputCaption(root.display) : ""
+              text: {
+                if (!root.display) return ""
+                var caption = "Output " + Model.outputCaption(root.display)
+                // Only surface the reason when HDR is blocked rather than
+                // genuinely unsupported — every SDR-only panel would
+                // otherwise carry this line for no reason.
+                if (root.caps.supportsHdr && root.offeredModes.indexOf("hdr") === -1) {
+                  var reason = Model.hdrUnavailableReason(root.caps, root.intent)
+                  if (reason) caption += " · HDR unavailable: " + reason
+                }
+                return caption
+              }
               color: Qt.darker(root.fg, 1.5)
               font.family: root.fam; font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap

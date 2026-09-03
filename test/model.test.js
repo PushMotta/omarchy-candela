@@ -57,6 +57,63 @@ test("offered modes are gated by EDID", () => {
   assert.deepEqual(M.offeredModes({ available: true, supportsHdr: false, supportsWideColor: true }), ["sdr", "wide"])
 })
 
+test("offeredModes with no intent (or {}) reproduces the EDID-only behaviour", () => {
+  assert.deepEqual(M.offeredModes(caps), M.offeredModes(caps, {}))
+  assert.deepEqual(M.offeredModes(caps, {}), ["sdr", "wide", "hdr"])
+  const sdrOnly = { supportsHdr: false, supportsWideColor: false }
+  assert.deepEqual(M.offeredModes(sdrOnly), M.offeredModes(sdrOnly, undefined))
+  assert.deepEqual(M.offeredModes(sdrOnly, {}), ["sdr"])
+})
+
+test("supports_hdr override forces HDR on or off regardless of what the EDID says", () => {
+  // Hyprland's convention: 1 forces on, -1 forces off, 0 (the default) trusts
+  // the EDID. EDID reports HDR: 1 and 0/absent leave it offered, -1 removes it.
+  assert.deepEqual(M.offeredModes(caps, { supports_hdr: 1 }), ["sdr", "wide", "hdr"])
+  assert.deepEqual(M.offeredModes(caps, { supports_hdr: 0 }), ["sdr", "wide", "hdr"])
+  assert.deepEqual(M.offeredModes(caps, { supports_hdr: -1 }), ["sdr", "wide"])
+  // EDID does not report HDR: 1 forces it on (and wide along with it);
+  // 0, -1 and absent all leave it off.
+  const noHdr = { supportsHdr: false, supportsWideColor: false }
+  assert.deepEqual(M.offeredModes(noHdr, { supports_hdr: 1 }), ["sdr", "wide", "hdr"])
+  assert.deepEqual(M.offeredModes(noHdr, { supports_hdr: 0 }), ["sdr"])
+  assert.deepEqual(M.offeredModes(noHdr, { supports_hdr: -1 }), ["sdr"])
+  assert.deepEqual(M.offeredModes(noHdr, {}), ["sdr"])
+})
+
+test("supports_wide_color override behaves the same way, independent of HDR", () => {
+  const noHdr = { supportsHdr: false, supportsWideColor: false }
+  assert.deepEqual(M.offeredModes(noHdr, { supports_wide_color: 1 }), ["sdr", "wide"])
+  assert.deepEqual(M.offeredModes(noHdr, { supports_wide_color: 0 }), ["sdr"])
+  assert.deepEqual(M.offeredModes(noHdr, { supports_wide_color: -1 }), ["sdr"])
+  assert.deepEqual(M.offeredModes(noHdr, {}), ["sdr"])
+  const wideEdid = { supportsHdr: false, supportsWideColor: true }
+  assert.deepEqual(M.offeredModes(wideEdid, { supports_wide_color: 1 }), ["sdr", "wide"])
+  assert.deepEqual(M.offeredModes(wideEdid, { supports_wide_color: 0 }), ["sdr", "wide"])
+  assert.deepEqual(M.offeredModes(wideEdid, { supports_wide_color: -1 }), ["sdr"])
+  // An HDR-capable panel is wide-capable even if wide itself is forced off.
+  assert.deepEqual(M.offeredModes(caps, { supports_wide_color: -1 }), ["sdr", "wide", "hdr"])
+})
+
+test("an ICC profile removes hdr from offeredModes but leaves wide alone", () => {
+  assert.deepEqual(M.offeredModes(caps, { icc: "/usr/share/color/icc/foo.icc" }), ["sdr", "wide"])
+  assert.deepEqual(M.offeredModes(caps, { icc: "" }), ["sdr", "wide", "hdr"])
+  assert.deepEqual(M.offeredModes(caps, { icc: "/x.icc", supports_hdr: 1 }), ["sdr", "wide"])
+})
+
+test("hdrUnavailableReason follows icc > forced-off > EDID precedence", () => {
+  assert.equal(M.hdrUnavailableReason(caps, {}), "")
+  assert.equal(M.hdrUnavailableReason(caps, { supports_hdr: 0 }), "")
+  assert.equal(M.hdrUnavailableReason(caps, { supports_hdr: 1 }), "")
+  assert.equal(M.hdrUnavailableReason(caps, { icc: "/x.icc" }), "an ICC profile is loaded")
+  assert.equal(M.hdrUnavailableReason(caps, { supports_hdr: -1 }), "the HDR capability is forced off")
+  // Both apply at once: ICC wins.
+  assert.equal(M.hdrUnavailableReason(caps, { supports_hdr: -1, icc: "/x.icc" }), "an ICC profile is loaded")
+  const noHdr = { supportsHdr: false, supportsWideColor: false }
+  assert.equal(M.hdrUnavailableReason(noHdr, {}), "the panel does not report HDR")
+  assert.equal(M.hdrUnavailableReason(noHdr, { supports_hdr: 0 }), "the panel does not report HDR")
+  assert.equal(M.hdrUnavailableReason(noHdr, { supports_hdr: 1 }), "")
+})
+
 test("SDR white anchors at 203 and clamps to max-average", () => {
   assert.deepEqual(M.sdrWhiteRange(caps), { min: 80, max: 497, reference: 203 })
   assert.equal(M.defaultSdrWhite(caps), 203)
