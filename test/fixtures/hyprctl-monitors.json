@@ -1,0 +1,157 @@
+[
+  {
+    "id": 0,
+    "name": "DP-1",
+    "description": "Huawei Technologies Co. Inc. MateView",
+    "make": "Huawei Technologies Co., Inc.",
+    "model": "MateView",
+    "serial": "             ",
+    "width": 3840,
+    "height": 2560,
+    "physicalWidth": 600,
+    "physicalHeight": 400,
+    "refreshRate": 59.98400,
+    "x": 0,
+    "y": 0,
+    "activeWorkspace": {
+      "id": 1,
+      "name": "1"
+    },
+    "specialWorkspace": {
+      "id": 0,
+      "name": ""
+    },
+    "reserved": [
+      0,
+      26,
+      0,
+      0
+    ],
+    "scale": 1.6,
+    "transform": 0,
+    "focused": true,
+    "dpmsStatus": true,
+    "vrr": false,
+    "solitary": "0",
+    "solitaryBlockedBy": [
+      "WINDOWED",
+      "CANDIDATE"
+    ],
+    "activelyTearing": false,
+    "tearingBlockedBy": [
+      "NOT_TORN",
+      "USER",
+      "CANDIDATE",
+      "HW_CURSOR"
+    ],
+    "directScanoutTo": "0",
+    "directScanoutBlockedBy": [
+      "USER",
+      "CANDIDATE"
+    ],
+    "disabled": false,
+    "currentFormat": "XRGB8888",
+    "mirrorOf": "none",
+    "availableModes": [
+      "3840x2560@59.98Hz",
+      "3840x2560@30.00Hz",
+      "3600x2400@60.00Hz",
+      "3840x2160@59.94Hz",
+      "3840x2160@29.97Hz",
+      "3000x2000@60.00Hz",
+      "2560x1440@59.95Hz",
+      "2160x1440@59.95Hz",
+      "1920x1080@59.94Hz",
+      "1280x1024@60.02Hz",
+      "1280x800@59.81Hz",
+      "1280x720@59.94Hz",
+      "1024x768@60.00Hz",
+      "800x600@60.32Hz",
+      "720x480@59.94Hz",
+      "640x480@59.94Hz"
+    ],
+    "colorManagementPreset": "srgb",
+    "sdrBrightness": 1,
+    "sdrSaturation": 1,
+    "sdrMinLuminance": 0.2,
+    "sdrMaxLuminance": 80,
+    "hardwareCursorsInUse": true
+  },
+  {
+    "id": 1,
+    "name": "DP-2",
+    "description": "Huawei Technologies Co. Inc. MateView",
+    "make": "Huawei Technologies Co., Inc.",
+    "model": "MateView",
+    "serial": "             ",
+    "width": 3840,
+    "height": 2560,
+    "physicalWidth": 600,
+    "physicalHeight": 400,
+    "refreshRate": 59.98400,
+    "x": 2400,
+    "y": 0,
+    "activeWorkspace": {
+      "id": 2,
+      "name": "2"
+    },
+    "specialWorkspace": {
+      "id": 0,
+      "name": ""
+    },
+    "reserved": [
+      0,
+      26,
+      0,
+      0
+    ],
+    "scale": 1.6,
+    "transform": 0,
+    "focused": false,
+    "dpmsStatus": true,
+    "vrr": false,
+    "solitary": "0",
+    "solitaryBlockedBy": [
+      "OPAQUE"
+    ],
+    "activelyTearing": false,
+    "tearingBlockedBy": [
+      "NOT_TORN",
+      "USER",
+      "CANDIDATE",
+      "HW_CURSOR"
+    ],
+    "directScanoutTo": "0",
+    "directScanoutBlockedBy": [
+      "USER",
+      "CANDIDATE"
+    ],
+    "disabled": false,
+    "currentFormat": "XRGB8888",
+    "mirrorOf": "none",
+    "availableModes": [
+      "3840x2560@59.98Hz",
+      "3840x2560@30.00Hz",
+      "3600x2400@60.00Hz",
+      "3840x2160@59.94Hz",
+      "3840x2160@29.97Hz",
+      "3000x2000@60.00Hz",
+      "2560x1440@59.95Hz",
+      "2160x1440@59.95Hz",
+      "1920x1080@59.94Hz",
+      "1280x1024@60.02Hz",
+      "1280x800@59.81Hz",
+      "1280x720@59.94Hz",
+      "1024x768@60.00Hz",
+      "800x600@60.32Hz",
+      "720x480@59.94Hz",
+      "640x480@59.94Hz"
+    ],
+    "colorManagementPreset": "srgb",
+    "sdrBrightness": 1,
+    "sdrSaturation": 1,
+    "sdrMinLuminance": 0.2,
+    "sdrMaxLuminance": 80,
+    "hardwareCursorsInUse": true
+  }
+]

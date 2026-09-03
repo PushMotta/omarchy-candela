@@ -1,0 +1,400 @@
+#!/bin/bash
+
+# omarchy:summary=Configure displays: geometry, signal and colour, with safe apply and revert
+# omarchy:args=<state|apply|keep|revert|persist|hdr|brightness|identify|open|edid|icc> [...]
+# omarchy:examples=omarchy-displays state | omarchy-displays hdr on --display DP-2 | omarchy-displays apply @layout.json | omarchy-displays keep
+
+# The backend behind the Displays plugin. Everything the UI does is a
+# subcommand here, so it is scriptable and bindable.
+#
+# Model:
+#   intent.json   what the user chose through this tool, per connector
+#   pending.json  an applied-but-not-kept intent, with an expiry
+#   displays-layout.lua  generated from intent + live geometry; Omarchy loads it
+#                 after the user's monitors.lua on every reload
+#
+# `apply` writes pending, applies live through `hyprctl eval` for EVERY
+# connected display in one chunk (mixing explicit and auto positions moves
+# displays), and starts a detached revert timer. `keep` commits pending to
+# intent, regenerates the Lua, and reloads. `revert` (or the timer) drops
+# pending and reloads, which restores the last kept configuration.
+
+set -euo pipefail
+
+PLUGIN_ID="${OMARCHY_DISPLAYS_PLUGIN_ID:-pmotta.displays}"
+SELF="$(readlink -f "$0")"
+SELF_DIR="$(dirname "$SELF")"
+EDID_TOOL="$SELF_DIR/omarchy-displays-edid"
+
+STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+STATE_DIR="${OMARCHY_DISPLAYS_STATE_DIR:-$STATE_HOME/omarchy/displays}"
+INTENT_FILE="$STATE_DIR/intent.json"
+PENDING_FILE="$STATE_DIR/pending.json"
+LUA_FILE="${OMARCHY_DISPLAYS_LUA_FILE:-$STATE_HOME/omarchy/toggles/hypr/displays-layout.lua}"
+REVERT_UNIT="omarchy-displays-revert"
+REVERT_SECONDS="${OMARCHY_DISPLAYS_REVERT_SECONDS:-15}"
+
+usage() {
+  cat <<'USAGE'
+Usage: omarchy-displays <command> [args]
+
+  state                          JSON: displays, capabilities, live and kept config, pending apply
+  apply [--now] <json|@file|->   Apply a change live; reverts in 15 s unless kept (--now keeps immediately)
+  keep                           Keep the pending change and persist it
+  revert [--expired]             Drop the pending change and restore the kept configuration
+  persist                        Regenerate the layout file from the kept configuration
+  hdr <on|off|wide> [--display NAME] [--sdr-white NITS] [--now]
+  brightness <NAME> [+N%|N%-|N%] Show or set brightness for one display
+  identify                       Flash each connector name on its own display
+  open                           Open the Displays studio
+  edid <NAME>                    Parsed EDID capabilities as JSON
+  icc list                       Installed ICC profiles as JSON
+
+Change JSON shape (any subset per display):
+  {"displays":[{"name":"DP-2","bitdepth":10,"cm":"hdr","sdr_max_luminance":203}],
+   "global":{"cm_auto_hdr":1}}
+USAGE
+}
+
+die() { echo "omarchy-displays: $*" >&2; exit 1; }
+
+now_epoch() { date +%s; }
+
+read_json_arg() {
+  local arg="${1:-}"
+  if [[ -z $arg || $arg == "-" ]]; then
+    cat
+  elif [[ $arg == @* ]]; then
+    cat "${arg#@}"
+  else
+    printf '%s' "$arg"
+  fi
+}
+
+live_json() {
+  hyprctl monitors all -j 2>/dev/null || die "hyprctl is not answering"
+}
+
+intent_json() {
+  if [[ -s $INTENT_FILE ]]; then cat "$INTENT_FILE"; else echo '{"version":1,"displays":{},"global":{}}'; fi
+}
+
+pending_json() {
+  if [[ -s $PENDING_FILE ]]; then cat "$PENDING_FILE"; else echo 'null'; fi
+}
+
+focused_name() {
+  live_json | jq -r '[.[] | select(.focused == true)][0].name // ""'
+}
+
+edid_for() {
+  "$EDID_TOOL" "$1" 2>/dev/null || jq -nc --arg connector "$1" '{connector: $connector, available: false}'
+}
+
+# Validation and merge of a change into an intent document. Runs in jq so the
+# same rules apply to every entry point. Unknown keys are rejected; every
+# value is checked against what hl.monitor accepts.
+merge_intent() {
+  local intent="$1" change="$2"
+  jq -n --argjson intent "$intent" --argjson change "$change" '
+    def fail(msg): error("invalid change: " + msg);
+    def is_name: type == "string" and test("^[A-Za-z0-9._-]+$");
+    def check_display(d):
+      (d.name // "" | if is_name then . else fail("display name") end) as $name
+      | (d | del(.name) | to_entries | map(
+          .key as $k | .value as $v
+          | if $v == null then {key: $k, value: null}
+            elif $k == "mode" then (if ($v|type)=="string" and ($v|test("^(preferred|highres|highrr|[0-9]+x[0-9]+(@[0-9]+(\\.[0-9]+)?)?)$")) then . else fail("mode") end)
+            elif $k == "position" then (if ($v|type)=="string" and ($v|test("^(auto|auto-(left|right|up|down)|-?[0-9]+x-?[0-9]+)$")) then . else fail("position") end)
+            elif $k == "scale" then (if (($v|type)=="number" and $v > 0 and $v <= 10) or $v == "auto" then . else fail("scale") end)
+            elif $k == "transform" then (if ($v|type)=="number" and ($v|floor)==$v and $v >= 0 and $v <= 7 then . else fail("transform") end)
+            elif $k == "vrr" then (if ($v|type)=="number" and ($v|floor)==$v and $v >= -1 and $v <= 3 then . else fail("vrr") end)
+            elif $k == "enabled" then (if ($v|type)=="boolean" then . else fail("enabled") end)
+            elif $k == "mirror" then (if ($v|type)=="string" and ($v == "" or ($v|is_name)) then . else fail("mirror") end)
+            elif $k == "bitdepth" then (if $v == 8 or $v == 10 then . else fail("bitdepth") end)
+            elif $k == "cm" then (if ($v|type)=="string" and (["auto","srgb","dcip3","dp3","adobe","wide","edid","hdr","hdredid"] | index($v)) != null then . else fail("cm") end)
+            elif $k == "sdr_eotf" then (if ($v|type)=="string" and (["default","gamma22","srgb"] | index($v)) != null then . else fail("sdr_eotf") end)
+            elif ($k == "sdrbrightness" or $k == "sdrsaturation") then (if ($v|type)=="number" and $v >= 0 and $v <= 4 then . else fail($k) end)
+            elif ($k == "sdr_min_luminance" or $k == "min_luminance") then (if ($v|type)=="number" and $v >= 0 and $v <= 100 then . else fail($k) end)
+            elif ($k == "sdr_max_luminance" or $k == "max_luminance" or $k == "max_avg_luminance") then (if ($v|type)=="number" and $v >= 0 and $v <= 10000 then . else fail($k) end)
+            elif $k == "icc" then (if ($v|type)=="string" and ($v|test("]==]")|not) and ($v|test("\n")|not) then . else fail("icc") end)
+            elif ($k == "supports_hdr" or $k == "supports_wide_color") then (if $v == -1 or $v == 0 or $v == 1 then . else fail($k) end)
+            else fail("unknown key " + $k) end
+        ) | from_entries) as $fields
+      | {name: $name, fields: $fields};
+    def check_global(g):
+      (g // {}) | to_entries | map(
+        .key as $k | .value as $v
+        | if $v == null then .
+          elif $k == "cm_auto_hdr" then (if $v == 0 or $v == 1 or $v == 2 then . else fail("cm_auto_hdr") end)
+          else fail("unknown global " + $k) end
+      ) | from_entries;
+    ($change.displays // []) | map(check_display(.)) as $checked
+    | check_global($change.global) as $g
+    | reduce $checked[] as $c ($intent;
+        .displays[$c.name] = ((.displays[$c.name] // {}) + $c.fields | with_entries(select(.value != null))))
+    | .global = ((.global // {}) + $g | with_entries(select(.value != null)))
+    | .version = 1
+  ' 2>&1 || return 1
+}
+
+# Lua generation from intent + live geometry. Every connected, enabled display
+# gets a full rule so nothing falls back to Hyprland's auto placement. Values
+# were validated on the way into intent, so they are emitted verbatim.
+generate_lua() {
+  local intent="$1" live="$2" stamp="${3:-$(date --iso-8601=seconds)}"
+  jq -r -n --argjson intent "$intent" --argjson live "$live" --arg stamp "$stamp" --arg plugin "$PLUGIN_ID" '
+    def lua_str: "\"" + (tostring | gsub("\\\\"; "\\\\\\\\") | gsub("\""; "\\\"")) + "\"";
+    def lua_val($k): if $k == "icc" then "[==[" + tostring + "]==]" elif type == "string" then lua_str else tostring end;
+    def r2: (. * 100 | round) / 100;
+    def mode_of($d): if ($d.width // 0) > 0 then "\($d.width)x\($d.height)@\($d.refreshRate | r2)" else "preferred" end;
+    def rule($d):
+      ($intent.displays[$d.name] // {}) as $i
+      | if $i.enabled == false then
+          "hl.monitor({ output = \($d.name | lua_str), disabled = true })"
+        else
+          ([ "output = \($d.name | lua_str)",
+             "mode = \(($i.mode // mode_of($d)) | lua_str)",
+             "position = \(($i.position // "\($d.x)x\($d.y)") | lua_str)",
+             "scale = \(($i.scale // $d.scale) | lua_val("scale"))",
+             "transform = \(($i.transform // $d.transform // 0) | tostring)" ]
+           + ([ "vrr","mirror","bitdepth","cm","sdr_eotf","sdrbrightness","sdrsaturation",
+                "sdr_min_luminance","sdr_max_luminance","min_luminance","max_luminance","max_avg_luminance",
+                "icc","supports_hdr","supports_wide_color" ]
+              | map(. as $k | select($i[$k] != null and ($k != "mirror" or $i[$k] != "") and ($k != "icc" or $i[$k] != "")) | "\($k) = \($i[$k] | lua_val($k))")))
+          | "hl.monitor({ " + join(", ") + " })"
+        end;
+    [ "-- Generated by \($plugin) (omarchy-displays). Do not edit: it is rewritten on every keep.",
+      "-- Kept \($stamp). Change displays with the Displays panel or `omarchy-displays`.",
+      "" ]
+    + [ $live[] | select((.name // "") != "") | select((.disabled != true) or (($intent.displays[.name] // {}) | has("enabled"))) | rule(.) ]
+    + (if ($intent.global.cm_auto_hdr != null) then ["", "hl.config({ render = { cm_auto_hdr = \($intent.global.cm_auto_hdr) } })"] else [] end)
+    | join("\n")
+  '
+}
+
+apply_live() {
+  local chunk="$1"
+  hyprctl eval "$chunk" >/dev/null 2>&1 || die "hyprctl rejected the change"
+}
+
+stop_timer() {
+  systemctl --user stop "$REVERT_UNIT.timer" "$REVERT_UNIT.service" >/dev/null 2>&1 || true
+}
+
+start_timer() {
+  stop_timer
+  systemd-run --user --quiet --collect --unit="$REVERT_UNIT" \
+    --on-active="${REVERT_SECONDS}s" --timer-property=AccuracySec=200ms \
+    -- "$SELF" revert --expired >/dev/null 2>&1 || {
+    # No systemd user manager (tests, odd sessions): fall back to a detached shell.
+    (setsid bash -c "sleep $REVERT_SECONDS; '$SELF' revert --expired" >/dev/null 2>&1 &)
+  }
+}
+
+notify_shell() {
+  omarchy-shell -q "$PLUGIN_ID" refresh 2>/dev/null || true
+}
+
+commit_intent() {
+  local intent="$1"
+  mkdir -p "$STATE_DIR" "$(dirname "$LUA_FILE")"
+  printf '%s\n' "$intent" | jq . > "$INTENT_FILE.tmp" && mv "$INTENT_FILE.tmp" "$INTENT_FILE"
+  generate_lua "$intent" "$(live_json)" > "$LUA_FILE.tmp" && mv "$LUA_FILE.tmp" "$LUA_FILE"
+}
+
+cmd_state() {
+  local live intent pending focused edids brightness auto_hdr sdr_eotf
+  live="$(live_json)"
+  intent="$(intent_json)"
+  pending="$(pending_json)"
+  focused="$(printf '%s' "$live" | jq -r '[.[] | select(.focused == true)][0].name // ""')"
+
+  edids="{}"
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    edids="$(jq -c --arg n "$name" --argjson e "$(edid_for "$name")" '. + {($n): $e}' <<<"$edids")"
+  done < <(printf '%s' "$live" | jq -r '.[].name')
+
+  brightness=""
+  [[ -n $focused ]] && brightness="$(omarchy-brightness-display --monitor "$focused" 2>/dev/null || true)"
+  auto_hdr="$(hyprctl getoption render:cm_auto_hdr -j 2>/dev/null | jq '.int // null' 2>/dev/null || echo null)"
+  sdr_eotf="$(hyprctl getoption render:cm_sdr_eotf -j 2>/dev/null | jq -r '.str // "default"' 2>/dev/null || echo default)"
+
+  jq -n --argjson live "$live" --argjson intent "$intent" --argjson pending "$pending" \
+        --argjson edids "$edids" --arg focused "$focused" --arg brightness "$brightness" \
+        --argjson autoHdr "$auto_hdr" --arg sdrEotf "$sdr_eotf" --arg pluginId "$PLUGIN_ID" \
+        --argjson revertSeconds "$REVERT_SECONDS" --argjson now "$(now_epoch)" '
+    def bitdepth_of: if test("2101010") then 10 elif test("16161616") then 16 else 8 end;
+    {
+      version: 1,
+      pluginId: $pluginId,
+      now: $now,
+      focused: $focused,
+      revertSeconds: $revertSeconds,
+      pending: (if $pending == null then null else { since: $pending.since, expires: $pending.expires, remaining: ([$pending.expires - $now, 0] | max) } end),
+      global: { cm_auto_hdr: $autoHdr, cm_sdr_eotf: $sdrEotf, kept: ($intent.global // {}), pending: (($pending.intent.global // {}) ) },
+      displays: [ $live[] | {
+        name, description, make, model, serial: (.serial | gsub("^\\s+|\\s+$"; "")),
+        internal: (.name | test("^(eDP|LVDS|DSI)-")),
+        enabled: (.disabled != true), focused, dpms: .dpmsStatus,
+        width, height, refreshRate, x, y, scale, transform, vrr, mirrorOf,
+        physicalWidth, physicalHeight, currentFormat, availableModes,
+        live: {
+          bitdepth: (.currentFormat | bitdepth_of),
+          cm: .colorManagementPreset,
+          sdrBrightness, sdrSaturation, sdrMinLuminance, sdrMaxLuminance
+        },
+        capabilities: ($edids[.name] // {connector: .name, available: false}),
+        brightness: (if .name == $focused and ($brightness | test("^[0-9]+$")) then ($brightness | tonumber) else null end),
+        kept: ($intent.displays[.name] // {}),
+        pendingConfig: (($pending.intent.displays // {})[.name] // null)
+      } ]
+    }'
+}
+
+cmd_apply() {
+  local now=0
+  if [[ ${1:-} == "--now" ]]; then now=1; shift; fi
+  local change intent base merged chunk
+  change="$(read_json_arg "${1:-}")"
+  [[ -n $change ]] || die "apply needs a JSON change"
+  printf '%s' "$change" | jq -e . >/dev/null 2>&1 || die "change is not valid JSON"
+
+  # Chain onto a pending change, so successive slider moves accumulate.
+  if [[ -s $PENDING_FILE ]]; then base="$(jq -c '.intent' "$PENDING_FILE")"; else base="$(intent_json)"; fi
+  merged="$(merge_intent "$base" "$change")" || die "${merged#jq: error (at <unknown>): }"
+
+  chunk="$(generate_lua "$merged" "$(live_json)")"
+  apply_live "$chunk"
+
+  if (( now )); then
+    stop_timer
+    rm -f "$PENDING_FILE"
+    commit_intent "$merged"
+    notify_shell
+    echo "kept"
+    return
+  fi
+
+  mkdir -p "$STATE_DIR"
+  local since expires
+  since="$(now_epoch)"; expires=$(( since + REVERT_SECONDS ))
+  jq -n --argjson intent "$merged" --argjson since "$since" --argjson expires "$expires" \
+    '{since: $since, expires: $expires, intent: $intent}' > "$PENDING_FILE.tmp" && mv "$PENDING_FILE.tmp" "$PENDING_FILE"
+  start_timer
+  notify_shell
+  echo "pending $expires"
+}
+
+cmd_keep() {
+  [[ -s $PENDING_FILE ]] || { echo "nothing pending"; return 0; }
+  local intent
+  intent="$(jq -c '.intent' "$PENDING_FILE")"
+  stop_timer
+  commit_intent "$intent"
+  rm -f "$PENDING_FILE"
+  hyprctl reload >/dev/null 2>&1 || true
+  local errors
+  errors="$(hyprctl configerrors 2>/dev/null | grep -v '^ok$' || true)"
+  if [[ -n $errors ]]; then
+    notify_shell
+    die "kept, but Hyprland reports config errors: $errors"
+  fi
+  notify_shell
+  echo "kept"
+}
+
+cmd_revert() {
+  local expired=0
+  [[ ${1:-} == "--expired" ]] && expired=1
+  stop_timer
+  local had_pending=0
+  [[ -s $PENDING_FILE ]] && had_pending=1
+  rm -f "$PENDING_FILE"
+  hyprctl reload >/dev/null 2>&1 || true
+  if (( expired && had_pending )); then
+    omarchy-notification-send "Display changes reverted" "They were not kept within ${REVERT_SECONDS} seconds." -t 4000 2>/dev/null || true
+  fi
+  notify_shell
+  echo "reverted"
+}
+
+cmd_persist() {
+  commit_intent "$(intent_json)"
+  echo "$LUA_FILE"
+}
+
+cmd_hdr() {
+  local mode="${1:-}"; shift || true
+  [[ $mode =~ ^(on|off|wide)$ ]] || die "hdr needs on, off or wide"
+  local display="" sdr_white="" now=()
+  while (( $# > 0 )); do
+    case "$1" in
+      --display) display="${2:-}"; shift 2 ;;
+      --sdr-white) sdr_white="${2:-}"; shift 2 ;;
+      --now) now=(--now); shift ;;
+      *) die "unknown option $1" ;;
+    esac
+  done
+  [[ -n $display ]] || display="$(focused_name)"
+  [[ -n $display ]] || die "no focused display"
+  local caps change
+  caps="$(edid_for "$display")"
+  change="$(jq -nc --arg name "$display" --arg mode "$mode" --arg white "$sdr_white" --argjson caps "$caps" '
+    def clamp($lo; $hi): if . < $lo then $lo elif . > $hi then $hi else . end;
+    ($caps.hdr.maxFrameAverageLuminance // $caps.hdr.maxLuminance // 400) as $avg
+    | (if $white != "" then ($white | tonumber) else 203 end | clamp(80; ([$avg, 80] | max)) | round) as $sdrWhite
+    | { displays: [
+        if $mode == "off" then { name: $name, bitdepth: 8, cm: "srgb", sdr_max_luminance: null, sdr_min_luminance: null }
+        elif $mode == "wide" then { name: $name, bitdepth: 10, cm: "auto", sdr_max_luminance: null, sdr_min_luminance: null }
+        else { name: $name, bitdepth: 10, cm: "hdr", sdr_max_luminance: $sdrWhite,
+               sdr_min_luminance: (if ($caps.hdr.minLuminance // 0) > 0 then $caps.hdr.minLuminance else 0.2 end) }
+        end ] }')"
+  if [[ $mode == "on" ]] && ! jq -e '.supportsHdr == true' <<<"$caps" >/dev/null; then
+    echo "omarchy-displays: $display does not advertise HDR (ST 2084) in its EDID; applying anyway" >&2
+  fi
+  cmd_apply "${now[@]}" "$change"
+}
+
+cmd_brightness() {
+  local name="${1:-}"; shift || true
+  [[ -n $name ]] || die "brightness needs a display name"
+  omarchy-brightness-display --no-osd --monitor "$name" "$@"
+}
+
+cmd_identify() {
+  omarchy-shell "$PLUGIN_ID" identify >/dev/null 2>&1 || die "the Displays plugin is not running"
+}
+
+cmd_open() {
+  omarchy-shell shell summon "$PLUGIN_ID" '{}' >/dev/null 2>&1 || die "the Displays plugin is not running"
+}
+
+cmd_icc() {
+  [[ ${1:-list} == "list" ]] || die "icc supports: list"
+  local dirs=("$HOME/.local/share/icc" "$HOME/.color/icc" "$HOME/.local/share/color/icc" /usr/share/color/icc /usr/local/share/color/icc)
+  {
+    for d in "${dirs[@]}"; do
+      [[ -d $d ]] || continue
+      find "$d" -type f \( -iname '*.icc' -o -iname '*.icm' \) -print0 2>/dev/null
+    done
+  } | sort -z | jq -Rsc 'split(" ") | map(select(length > 0)) | map({path: ., name: (split("/") | last)})'
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  state) cmd_state ;;
+  apply) cmd_apply "$@" ;;
+  keep) cmd_keep ;;
+  revert) cmd_revert "$@" ;;
+  persist) cmd_persist ;;
+  hdr) cmd_hdr "$@" ;;
+  brightness) cmd_brightness "$@" ;;
+  identify) cmd_identify ;;
+  open) cmd_open ;;
+  edid) [[ -n ${1:-} ]] || die "edid needs a display name"; edid_for "$1" ;;
+  icc) cmd_icc "$@" ;;
+  -h|--help|help|"") usage ;;
+  *) usage >&2; die "unknown command $cmd" ;;
+esac

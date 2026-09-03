@@ -1,0 +1,24 @@
+#!/bin/bash
+
+# Runs every test: bash tests under test/*-test.sh and node tests under test/*.test.js.
+
+set -euo pipefail
+
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+failed=0
+
+for t in "$root"/test/*-test.sh; do
+  [[ $(basename "$t") == "base-test.sh" ]] && continue
+  [[ -f $t ]] || continue
+  echo "== $(basename "$t")"
+  if bash "$t"; then :; else failed=1; fi
+done
+
+if command -v node >/dev/null 2>&1; then
+  echo "== node tests"
+  if node --test "$root"/test/*.test.js; then :; else failed=1; fi
+else
+  echo "== node not found; skipping Model.js tests"
+fi
+
+(( failed == 0 )) && echo "ALL PASSED" || { echo "FAILURES" >&2; exit 1; }

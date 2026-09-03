@@ -1,0 +1,137 @@
+#!/bin/bash
+
+# omarchy:summary=Print a display's EDID capabilities as JSON
+# omarchy:args=<connector|edid-file>
+# omarchy:examples=omarchy-displays-edid DP-2 | omarchy-displays-edid /sys/class/drm/card1-DP-2/edid
+
+# Reads the panel's own claims: HDR static metadata (ST 2084, luminances),
+# colorimetry (BT.2020, DCI-P3), bits per primary, chromaticities, physical
+# size. Monitors lie in EDID; the numbers are reported, never trusted blindly.
+# The JSON shape is consumed by `omarchy-displays state` and Model.js.
+
+set -euo pipefail
+
+target="${1:-}"
+[[ -n $target ]] || { echo "Usage: omarchy-displays-edid <connector|edid-file>" >&2; exit 1; }
+
+drm_path="${OMARCHY_DRM_PATH:-/sys/class/drm}"
+
+edid_file=""
+connector=""
+if [[ -f $target ]]; then
+  edid_file="$target"
+  connector="$(basename "$(dirname "$target")")"
+  connector="${connector#card*-}"
+else
+  [[ $target =~ ^[A-Za-z0-9._-]+$ ]] || { echo "omarchy-displays-edid: refusing unsafe connector name" >&2; exit 1; }
+  connector="$target"
+  for candidate in "$drm_path"/card*-"$target"/edid; do
+    [[ -e $candidate ]] || continue
+    edid_file="$candidate"
+    break
+  done
+fi
+
+# sysfs attributes report a size of 0 to stat, so `-s` cannot be used here:
+# read the bytes and count them instead.
+edid_bytes=0
+[[ -n $edid_file && -r $edid_file ]] && edid_bytes="$(head -c 1024 "$edid_file" 2>/dev/null | wc -c)"
+if (( edid_bytes < 128 )); then
+  # No EDID (virtual output, powered-off panel). Emit a truthful empty record.
+  jq -nc --arg connector "$connector" '{connector: $connector, available: false}'
+  exit 0
+fi
+
+hash="sha256:$(sha256sum "$edid_file" | cut -d' ' -f1)"
+
+edid-decode "$edid_file" 2>/dev/null | awk -v connector="$connector" -v hash="$hash" '
+  function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+  function jstr(s) {
+    gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/\t/, "\\t", s)
+    return "\"" s "\""
+  }
+  function num(s) { return (s == "") ? "null" : s }
+  function bool(v) { return v ? "true" : "false" }
+
+  BEGIN {
+    manufacturer = ""; product_code = ""; serial_number = ""; product_name = ""; product_serial = ""
+    bits = ""; gamma = ""; size_w_cm = ""; size_h_cm = ""; dtd_w_mm = ""; dtd_h_mm = ""
+    pref_w = ""; pref_h = ""; pref_hz = ""
+    rx = ry = gx = gy = bx = by = wx = wy = ""
+    st2084 = 0; hlg = 0; trad_sdr = 0; trad_hdr = 0
+    max_lum = ""; max_avg_lum = ""; min_lum = ""
+    ncolor = 0; section = ""; in_vendor = 0
+  }
+
+  /^Block [0-9]+/ { section = ""; in_vendor = 0 }
+  /^  Vendor & Product Identification:/ { in_vendor = 1; next }
+  /^  [A-Za-z].*:$/ { section = trim($0); sub(/:$/, "", section); in_vendor = 0 }
+
+  in_vendor && /Manufacturer:/ { manufacturer = trim($0); sub(/^Manufacturer:[ \t]*/, "", manufacturer) }
+  in_vendor && /Model:/ { product_code = trim($0); sub(/^Model:[ \t]*/, "", product_code) }
+  in_vendor && /Serial Number:/ { serial_number = trim($0); sub(/^Serial Number:[ \t]*/, "", serial_number); sub(/ .*/, "", serial_number) }
+
+  /Bits per primary color channel:/ { bits = $NF }
+  /^    Gamma:/ { gamma = $2 }
+  /Maximum image size:/ { size_w_cm = $4; size_h_cm = $7 }
+
+  /^    Red  :/ { rx = $3; sub(/,/, "", rx); ry = $4 }
+  /^    Green:/ { gx = $2; sub(/,/, "", gx); gy = $3 }
+  /^    Blue :/ { bx = $3; sub(/,/, "", bx); by = $4 }
+  /^    White:/ { wx = $2; sub(/,/, "", wx); wy = $3 }
+
+  /^    DTD 1:/ {
+    split($3, wh, "x"); pref_w = wh[1]; pref_h = wh[2]; pref_hz = $4
+    if (match($0, /\(([0-9]+) mm x ([0-9]+) mm\)/)) {
+      mm = substr($0, RSTART + 1, RLENGTH - 2)
+      split(mm, parts, " mm x "); dtd_w_mm = parts[1]; dtd_h_mm = parts[2]; sub(/ mm/, "", dtd_h_mm)
+    }
+  }
+
+  /Display Product Serial Number:/ { s = $0; sub(/^.*Display Product Serial Number:[ \t]*/, "", s); gsub(/\047/, "", s); product_serial = trim(s) }
+  /Display Product Name:/ { s = $0; sub(/^.*Display Product Name:[ \t]*/, "", s); gsub(/\047/, "", s); product_name = trim(s) }
+
+  section == "Colorimetry Data Block" && /^    [A-Za-z0-9]/ { colors[ncolor++] = trim($0) }
+
+  section == "HDR Static Metadata Data Block" {
+    if (/SMPTE ST2084/) st2084 = 1
+    if (/Hybrid Log-Gamma/) hlg = 1
+    if (/Traditional gamma - SDR/) trad_sdr = 1
+    if (/Traditional gamma - HDR/) trad_hdr = 1
+    if (/Desired content max luminance:/ && match($0, /\(([0-9.]+) cd/)) max_lum = substr($0, RSTART + 1, RLENGTH - 4)
+    if (/Desired content max frame-average luminance:/ && match($0, /\(([0-9.]+) cd/)) max_avg_lum = substr($0, RSTART + 1, RLENGTH - 4)
+    if (/Desired content min luminance:/ && match($0, /\(([0-9.]+) cd/)) min_lum = substr($0, RSTART + 1, RLENGTH - 4)
+  }
+
+  END {
+    width_mm = (dtd_w_mm != "") ? dtd_w_mm : ((size_w_cm != "") ? size_w_cm * 10 : "")
+    height_mm = (dtd_h_mm != "") ? dtd_h_mm : ((size_h_cm != "") ? size_h_cm * 10 : "")
+    diagonal = ""; ppi = ""
+    if (width_mm != "" && height_mm != "" && width_mm > 0) {
+      diagonal = sprintf("%.1f", sqrt(width_mm * width_mm + height_mm * height_mm) / 25.4)
+      if (pref_w != "") ppi = sprintf("%.0f", pref_w / (width_mm / 25.4))
+    }
+    wide = 0
+    for (i = 0; i < ncolor; i++) if (colors[i] ~ /BT2020|DCI-P3|P3/) wide = 1
+    if (bits != "" && bits + 0 >= 10) wide = 1
+
+    printf "{"
+    printf "\"connector\":%s,\"available\":true,", jstr(connector)
+    printf "\"manufacturer\":%s,\"productCode\":%s,\"serialNumber\":%s,", jstr(manufacturer), jstr(product_code), jstr(serial_number)
+    printf "\"productName\":%s,\"productSerial\":%s,", jstr(product_name), jstr(product_serial)
+    printf "\"bitsPerPrimary\":%s,\"gamma\":%s,", num(bits), num(gamma)
+    printf "\"physicalWidthMm\":%s,\"physicalHeightMm\":%s,\"diagonalInch\":%s,\"ppi\":%s,", num(width_mm), num(height_mm), num(diagonal), num(ppi)
+    printf "\"preferredMode\":"
+    if (pref_w != "") printf "{\"width\":%s,\"height\":%s,\"refresh\":%s},", pref_w, pref_h, pref_hz; else printf "null,"
+    printf "\"primaries\":"
+    if (rx != "") printf "{\"red\":[%s,%s],\"green\":[%s,%s],\"blue\":[%s,%s],\"white\":[%s,%s]},", rx, ry, gx, gy, bx, by, wx, wy; else printf "null,"
+    printf "\"colorimetry\":["
+    for (i = 0; i < ncolor; i++) printf "%s%s", (i ? "," : ""), jstr(colors[i])
+    printf "],"
+    printf "\"hdr\":{\"st2084\":%s,\"hlg\":%s,\"traditionalSdr\":%s,\"traditionalHdr\":%s,", bool(st2084), bool(hlg), bool(trad_sdr), bool(trad_hdr)
+    printf "\"maxLuminance\":%s,\"maxFrameAverageLuminance\":%s,\"minLuminance\":%s},", num(max_lum), num(max_avg_lum), num(min_lum)
+    printf "\"supportsHdr\":%s,\"supportsWideColor\":%s,", bool(st2084), bool(wide)
+    printf "\"hash\":%s", jstr(hash)
+    printf "}\n"
+  }
+'
