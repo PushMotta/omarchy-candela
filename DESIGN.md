@@ -51,7 +51,7 @@ Sections, top to bottom:
 - **SDR white.** Visible only in HDR mode. Slider in cd/m² from 80 to the panel's sustained full-field luminance, with notches at 100, 203 (reference, labelled), 300. Drives `sdr_max_luminance`.
 - **Scale.** Existing preset pills, per selected display, clean-scale corrected.
 - **Colour.** ButtonGroup `SDR · Wide · HDR`, only the options the EDID supports. Caption under it states the resulting output, e.g. `10-bit · BT.2020 PQ · SDR white 203 cd/m²` or `8-bit · sRGB`.
-- **Displays.** One row per display: enabled state, mirror badge, focused dot. Enter toggles enable. Last enabled display cannot be disabled.
+- **Displays.** One row per display: enabled state, mirror badge, focused dot. Clicking a row selects that display; the power control at its end switches it. Switching off arms and asks for a confirming press, because it blanks a screen the user may be reading; switching on is immediate. Last enabled display cannot be disabled.
 - **Actions.** `Identify` (flashes connector name on each display for 2 s) and `Arrange…` (opens the studio).
 
 ### 3.2 Studio overlay — "Displays" (kind: overlay)

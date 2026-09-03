@@ -55,11 +55,19 @@ Requirements already present on Omarchy: `hyprctl`, `jq`, `edid-decode`
 | h / l, ← / → | adjust slider, walk pills | adjust the current row; on the canvas nudge 10 px (⇧ 100) |
 | Tab | switch bar panel | canvas ⇄ inspector ⇄ actions |
 | 1–9 | — | select display |
-| Enter | activate row | activate row / open dropdown / focus a number field |
+| Enter | select the display under the cursor; on the display already selected, its power | activate row / open dropdown / focus a number field |
 | a / r / i | — | Apply / Revert or Discard / Identify |
 | Esc | close | cancel a pending countdown, then close |
 
 Mouse hover moves the same cursor; there is never a second highlight.
+
+Clicking a display in the popup's list selects it. Switching one **off** is the
+one action that will not happen on a single press: the power control at the end
+of the row arms first and says `turn off?`, and a second press within four
+seconds carries it out. Moving off the row, or letting the window lapse, puts
+the safety back on. Switching a display on is immediate, and the last enabled
+display cannot be switched off at all. In the studio, `Enabled` stages the
+change like every other field and needs `a` to apply.
 
 ## Command line
 

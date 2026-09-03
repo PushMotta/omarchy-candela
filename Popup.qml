@@ -153,7 +153,12 @@ Panel {
         if (offeredModes[selectedIndex]) setColourMode(offeredModes[selectedIndex])
         break
       case "displays":
-        if (displays[selectedIndex]) toggleDisplay(displays[selectedIndex])
+        // Enter picks the display up; only Enter on the display already picked
+        // reaches its power, and off still needs the confirming press.
+        var target = displays[selectedIndex]
+        if (!target) break
+        if (target.name !== selectedName) selectDisplay(target.name)
+        else powerAction(target)
         break
       case "actions":
         if (selectedIndex === 0) identify(); else openStudio()
@@ -195,6 +200,7 @@ Panel {
   onVisibleSectionsChanged: clampCursor()
   onDisplaysChanged: {
     if (indexOfDisplay(selectedName) < 0 && displays.length > 0) selectedName = focusedName || displays[0].name
+    if (armedOffName !== "" && indexOfDisplay(armedOffName) < 0) disarmOff()
     clampCursor()
   }
 
@@ -215,11 +221,45 @@ Panel {
     service.setColourMode(display.name, mode)
   }
 
-  function toggleDisplay(d) {
+  // Switching a display off blanks a screen the user may be reading, so it is
+  // the one action here that will not happen on a single click. The first
+  // press arms the row and says so; a second press within the window carries
+  // it out. Anything else — moving the cursor off the row, the window running
+  // out, reopening the popup — puts the safety back on. Switching a display
+  // on is harmless and stays immediate.
+  property string armedOffName: ""
+  property double armedAt: 0
+  // A double click is one gesture, not two decisions: the confirming press is
+  // only taken once the arming has had time to be read.
+  readonly property int armSettleMs: 250
+
+  function armOff(name) { armedOffName = name; armedAt = Date.now(); armWindow.restart() }
+  function disarmOff() { armedOffName = ""; armWindow.stop() }
+
+  function powerAction(d) {
     if (!d || !service) return
-    if (d.enabled && enabledCount <= 1) return
-    service.applyDisplay(d.name, { enabled: !d.enabled }, false)
+    if (!d.enabled) { disarmOff(); service.applyDisplay(d.name, { enabled: true }, false); return }
+    if (enabledCount <= 1) return
+    if (armedOffName === d.name) {
+      if (Date.now() - armedAt < armSettleMs) { armWindow.restart(); return }
+      disarmOff()
+      service.applyDisplay(d.name, { enabled: false }, false)
+      return
+    }
+    armOff(d.name)
   }
+
+  // The arm is tied to the cursor: it only stands while the cursor is still on
+  // the row that armed it.
+  function disarmIfCursorMoved() {
+    if (armedOffName === "") return
+    if (focusSection !== "displays") { disarmOff(); return }
+    var d = displays[selectedIndex]
+    if (!d || d.name !== armedOffName) disarmOff()
+  }
+
+  onFocusSectionChanged: disarmIfCursorMoved()
+  onSelectedIndexChanged: disarmIfCursorMoved()
 
   function identify() { if (service) service.identify() }
 
@@ -266,6 +306,13 @@ Panel {
 
   function adjustSdrWhite(delta) {
     commitSdrWhite((sdrPreview >= 0 ? sdrPreview : sdrWhite) + delta)
+  }
+
+  Timer {
+    id: armWindow
+    interval: 4000
+    repeat: false
+    onTriggered: root.armedOffName = ""
   }
 
   Timer {
@@ -321,6 +368,7 @@ Panel {
       selectedIndex = sectionFirstIndex(focusSection)
       cursorActive = false
     }
+    disarmOff()
   }
 
   Connections {
@@ -711,13 +759,13 @@ Panel {
     required property var display
     required property int rowIndex
     readonly property bool canToggle: display && (!display.enabled || root.enabledCount > 1)
+    readonly property bool armed: display && root.armedOffName === display.name
 
     hasCursor: root.cursorActive && root.focusSection === "displays" && root.selectedIndex === rowIndex
     onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(row)
     current: display && display.name === root.selectedName
     foreground: root.fg
     implicitHeight: inner.implicitHeight + Style.spacing.xl
-    opacity: canToggle ? 1.0 : 0.45
 
     Row {
       id: inner
@@ -750,12 +798,14 @@ Panel {
         Tag { visible: Model.colourMode(row.display) === "hdr"; text: "HDR" }
         Tag { visible: row.display.mirrorOf && row.display.mirrorOf !== "none"; text: "mirror" }
         Tag { visible: !row.display.enabled; text: "off" }
+        Tag { visible: row.armed; urgent: true; text: "turn off?" }
       }
 
       Text {
         textFormat: Text.PlainText
-        text: row.display.enabled ? "󰄬" : ""
-        color: root.fg
+        text: "󰐥"
+        color: row.armed ? root.urgentColor : root.fg
+        opacity: row.armed ? 1.0 : (row.display.enabled ? (row.canToggle ? 0.85 : 0.3) : 0.4)
         font.family: root.fam; font.pixelSize: Style.font.subtitle
         width: Style.space(16); horizontalAlignment: Text.AlignRight
         anchors.verticalCenter: parent.verticalCenter
@@ -765,30 +815,43 @@ Panel {
     MouseArea {
       anchors.fill: parent
       hoverEnabled: true
-      cursorShape: row.canToggle ? Qt.PointingHandCursor : Qt.ArrowCursor
-      acceptedButtons: Qt.LeftButton | Qt.RightButton
+      cursorShape: Qt.PointingHandCursor
       onContainsMouseChanged: if (containsMouse) root.hoverInto("displays", row.rowIndex)
-      onClicked: function(mouse) {
-        if (mouse.button === Qt.RightButton) { root.selectDisplay(row.display.name); return }
-        if (row.canToggle) root.toggleDisplay(row.display)
-      }
+      onClicked: root.selectDisplay(row.display.name)
+    }
+
+    // Declared after the row's own area, so the power target sits on top of it.
+    MouseArea {
+      anchors.right: parent.right
+      anchors.top: parent.top
+      anchors.bottom: parent.bottom
+      width: Style.space(30)
+      hoverEnabled: true
+      enabled: row.canToggle
+      cursorShape: Qt.PointingHandCursor
+      onContainsMouseChanged: if (containsMouse) root.hoverInto("displays", row.rowIndex)
+      onClicked: root.powerAction(row.display)
     }
   }
 
   component Tag: BorderSurface {
+    id: tag
     property string text: ""
+    property bool urgent: false
     implicitWidth: tagText.implicitWidth + Style.space(8)
     implicitHeight: tagText.implicitHeight + Style.space(2)
     anchors.verticalCenter: parent ? parent.verticalCenter : undefined
     color: "transparent"
     radius: Style.cornerRadius
-    borderSpec: Border.controlSpec("normal", root.fg, Color.accent)
+    borderSpec: tag.urgent
+      ? Border.flat(root.urgentColor, Math.max(1, Style.space(1)))
+      : Border.controlSpec("normal", root.fg, Color.accent)
     Text {
       id: tagText
       anchors.centerIn: parent
       textFormat: Text.PlainText
-      text: parent.text
-      color: Qt.darker(root.fg, 1.4)
+      text: tag.text
+      color: tag.urgent ? root.urgentColor : Qt.darker(root.fg, 1.4)
       font.family: root.fam; font.pixelSize: Style.font.caption; font.bold: true
     }
   }
