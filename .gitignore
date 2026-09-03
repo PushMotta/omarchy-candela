@@ -1,0 +1,5 @@
+# scratch and local state
+*.log
+/tmp/
+/node_modules/
+/.cache/

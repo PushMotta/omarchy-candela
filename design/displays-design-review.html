@@ -1,0 +1,596 @@
+<title>Displays for Omarchy</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;700&display=swap">
+<style>
+  /* ------------------------------------------------------------ page tokens */
+  :root {
+    --ground: #EDEEEA;
+    --ground-2: #E4E6E1;
+    --ink: #1E2320;
+    --ink-2: #6B716C;
+    --rule: #D3D6D0;
+    --page-accent: #3D5A4C;
+    --note: #C9781E;
+    --note-ink: #FFFFFF;
+    --frame: #DADDD6;
+    --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --head: "Manrope", "IBM Plex Sans", system-ui, sans-serif;
+    --mono: "JetBrains Mono", "JetBrainsMono Nerd Font", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #161816; --ground-2: #1D201D; --ink: #E6E8E3; --ink-2: #9AA09B;
+      --rule: #2A2E2B; --page-accent: #8FB8A2; --note: #E0913A; --note-ink: #161816; --frame: #242825;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #161816; --ground-2: #1D201D; --ink: #E6E8E3; --ink-2: #9AA09B;
+    --rule: #2A2E2B; --page-accent: #8FB8A2; --note: #E0913A; --note-ink: #161816; --frame: #242825;
+  }
+
+  body { background: var(--ground); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.5; }
+  * { box-sizing: border-box; }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 40px 28px 80px; }
+  h1, h2, h3 { font-family: var(--head); letter-spacing: -0.02em; text-wrap: balance; margin: 0; }
+  h1 { font-size: 44px; font-weight: 800; line-height: 1.05; }
+  h2 { font-size: 24px; font-weight: 700; margin-top: 8px; }
+  h3 { font-size: 16px; font-weight: 700; }
+  p { margin: 0; max-width: 68ch; }
+  .eyebrow { font-family: var(--sans); font-weight: 600; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); }
+  .dek { font-size: 18px; color: var(--ink); max-width: 62ch; margin-top: 14px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 18px; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .meta b { color: var(--ink); font-weight: 600; }
+  section { margin-top: 56px; padding-top: 28px; border-top: 1px solid var(--rule); }
+  section > .eyebrow { margin-bottom: 6px; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 28px; margin-top: 18px; }
+  .cols p { font-size: 15px; color: var(--ink); }
+  .cols h3 { margin-bottom: 6px; }
+  a { color: var(--page-accent); }
+  code { font-family: var(--mono); font-size: 0.9em; background: var(--ground-2); padding: 1px 5px; border-radius: 3px; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14px; margin-top: 16px; }
+  th, td { text-align: left; padding: 9px 12px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-weight: 600; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); }
+  td code, td .mono { font-family: var(--mono); font-size: 13px; }
+  .tabnum { font-variant-numeric: tabular-nums; }
+  .tablewrap { overflow-x: auto; }
+
+  /* ---------------------------------------------------------- theme switch */
+  .switcher { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin-top: 18px; padding: 12px 14px; background: var(--ground-2); border: 1px solid var(--rule); }
+  .switcher .lbl { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
+  .seg { display: flex; gap: 0; border: 1px solid var(--rule); }
+  .seg button { font: 500 13px var(--sans); background: transparent; color: var(--ink); border: 0; border-right: 1px solid var(--rule); padding: 6px 12px; cursor: pointer; }
+  .seg button:last-child { border-right: 0; }
+  .seg button[aria-pressed="true"] { background: var(--page-accent); color: var(--ground); }
+  .seg button:focus-visible { outline: 2px solid var(--note); outline-offset: -2px; }
+  .switcher .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; border: 1px solid rgba(0,0,0,.25); }
+
+  /* ------------------------------------------------------------ boards */
+  .board { margin-top: 22px; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 28px; align-items: start; }
+  .board.single { grid-template-columns: 1fr; }
+  @media (max-width: 900px) { .board { grid-template-columns: 1fr; } }
+  .frame { position: relative; background: var(--frame); border: 1px solid var(--rule); padding: 28px; overflow-x: auto; }
+  .frame.desktop { padding: 0; }
+  .callouts { font-size: 14px; }
+  .callouts h3 { margin-bottom: 10px; }
+  .callouts ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  .callouts li { display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start; }
+  .callouts li p { color: var(--ink); }
+  .pin, .callouts .n { width: 22px; height: 22px; border-radius: 50%; background: var(--note); color: var(--note-ink); font: 700 12px/22px var(--sans); text-align: center; }
+  .pin { position: absolute; z-index: 5; box-shadow: 0 0 0 2px var(--frame); }
+  .frame-cap { margin-top: 10px; font-size: 13px; color: var(--ink-2); }
+  .states { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 22px; margin-top: 22px; }
+  .states .frame { padding: 24px; }
+
+  /* ====================================================== mock: shell tokens */
+  .mock {
+    --m-bg: #222222; --m-fg: #c2c2b0; --m-accent: #78824b; --m-urgent: #685742; --m-muted: #666666;
+    --m-radius: 0px; --m-pill: 0px;
+    --m-dim: color-mix(in srgb, var(--m-fg) 71%, black);
+    --m-dim2: color-mix(in srgb, var(--m-fg) 67%, black);
+    --m-fill-normal: color-mix(in srgb, var(--m-fg) 4%, transparent);
+    --m-fill-hover: color-mix(in srgb, var(--m-fg) 8%, transparent);
+    --m-fill-selected: color-mix(in srgb, var(--m-fg) 18%, transparent);
+    --m-border-normal: color-mix(in srgb, var(--m-fg) 40%, transparent);
+    --m-border-hover: color-mix(in srgb, var(--m-fg) 25%, transparent);
+    --m-sep: color-mix(in srgb, var(--m-fg) 12%, transparent);
+    font-family: var(--mono); font-size: 12px; line-height: 1.25; color: var(--m-fg);
+  }
+  .mock[data-mtheme="tokyo-night"] { --m-bg: #1a1b26; --m-fg: #a9b1d6; --m-accent: #7aa2f7; --m-urgent: #f7768e; --m-muted: #414868; }
+  .mock[data-mtheme="catppuccin-latte"] { --m-bg: #eff1f5; --m-fg: #4c4f69; --m-accent: #1e66f5; --m-urgent: #d20f39; --m-muted: #acb0be; }
+  .mock[data-mtheme="rose-pine"] { --m-bg: #faf4ed; --m-fg: #575279; --m-accent: #56949f; --m-urgent: #b4637a; --m-muted: #cecacd; }
+  .mock[data-mtheme="vantablack"] { --m-bg: #000000; --m-fg: #ffffff; --m-accent: #8d8d8d; --m-urgent: #a4a4a4; --m-muted: #7a7a7a; }
+  .mock[data-rounded="true"] { --m-radius: 8px; --m-pill: 999px; }
+  .mock * { box-sizing: border-box; }
+  .mock .t-caption { font-size: 10px; } .mock .t-small { font-size: 11px; } .mock .t-body { font-size: 12px; }
+  .mock .t-subtitle { font-size: 13px; } .mock .t-title { font-size: 14px; } .mock .t-heading { font-size: 16px; }
+  .mock .t-display { font-size: 24px; } .mock .t-display-lg { font-size: 28px; }
+  .mock .dim { color: var(--m-dim); }
+  .mock .bold { font-weight: 700; }
+  .mock .caps { text-transform: uppercase; letter-spacing: 1.2px; font-weight: 700; font-size: 10px; }
+  .mock .sec { font-size: 10px; font-weight: 700; color: var(--m-dim); text-transform: uppercase; letter-spacing: 0; padding-top: 2px; }
+  .mock .sep { height: 1px; background: var(--m-sep); }
+  .mock .row-h { display: flex; justify-content: space-between; align-items: center; }
+  .mock .val { font-size: 10px; font-weight: 700; color: var(--m-dim); font-variant-numeric: tabular-nums; padding-right: 6px; }
+
+  /* desktop + bar context */
+  .desk { background: linear-gradient(160deg, color-mix(in srgb, var(--m-bg) 92%, var(--m-accent)) 0%, color-mix(in srgb, var(--m-bg) 80%, black) 100%); position: relative; }
+  .bar { height: 26px; background: var(--m-bg); color: var(--m-fg); display: flex; align-items: center; justify-content: space-between; padding: 0 8px; font-size: 12px; }
+  .bar .grp { display: flex; align-items: center; gap: 14px; }
+  .bar .ws { display: flex; gap: 8px; align-items: center; }
+  .bar .ws i { width: 9px; height: 9px; border: 1px solid var(--m-fg); display: inline-block; }
+  .bar .ws i.on { background: var(--m-fg); }
+  .bar svg { width: 14px; height: 14px; fill: none; stroke: var(--m-fg); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .bar .active-icon { background: var(--m-fill-selected); padding: 2px 6px; }
+  .popup { position: relative; margin: 5px 52px 28px auto; width: 408px; background: var(--m-bg); border: 2px solid var(--m-accent); border-radius: var(--m-radius); padding: 14px; display: grid; gap: 14px; }
+
+  /* hero */
+  .hero { display: grid; grid-template-columns: 30px 1fr auto; gap: 14px; align-items: center; }
+  .hero svg { width: 26px; height: 26px; fill: none; stroke: var(--m-fg); stroke-width: 1.5; stroke-linejoin: round; }
+  .hero .title { font-size: 14px; font-weight: 700; }
+  .hero .meta { font-size: 10px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: var(--m-dim); margin-top: 2px; }
+  .chips { display: flex; gap: 6px; }
+  .chip { font-size: 10px; font-weight: 700; padding: 4px 8px; border: 1px solid var(--m-border-normal); border-radius: var(--m-radius); background: var(--m-fill-normal); }
+  .chip.on { background: var(--m-fill-selected); border-color: transparent; }
+
+  /* slider */
+  .slider { position: relative; height: 22px; margin: 2px 6px; }
+  .slider .track { position: absolute; left: 0; right: 0; top: 9px; height: 4px; border-radius: 2px; background: var(--m-fill-selected); }
+  .slider .fill { position: absolute; left: 0; top: 9px; height: 4px; border-radius: 2px; background: var(--m-fg); }
+  .slider .knob { position: absolute; top: 4px; width: 14px; height: 14px; border-radius: 50%; background: var(--m-fg); border: 2px solid var(--m-bg); margin-left: -7px; }
+  .slider .tick { position: absolute; top: 7px; width: 2px; height: 8px; background: var(--m-bg); margin-left: -1px; }
+  .slider .tick.ref { background: var(--m-accent); height: 12px; top: 5px; }
+  .cursor-row { padding: 4px 0; border-radius: var(--m-radius); }
+  .cursor-row.hot { background: var(--m-fill-hover); box-shadow: inset 0 0 0 1px var(--m-border-hover); }
+
+  /* pills, groups, toggles, dropdowns, fields */
+  .pills { display: grid; gap: 3px; }
+  .pill { font-size: 10px; text-align: center; padding: 6px 4px; border: 1px solid var(--m-border-normal); border-radius: var(--m-radius); background: transparent; }
+  .pill.on { background: var(--m-fill-selected); border-color: transparent; }
+  .pill.hot { background: var(--m-fill-hover); border-color: var(--m-border-hover); }
+  .group { display: flex; gap: 6px; }
+  .group .pill { flex: 1; font-size: 12px; padding: 6px 10px; }
+  .caption { font-size: 10px; color: var(--m-dim2); line-height: 1.4; }
+  .toggle { display: flex; justify-content: space-between; align-items: center; padding: 12px; border: 1px solid var(--m-border-normal); border-radius: var(--m-radius); background: var(--m-fill-normal); }
+  .toggle .lab { font-size: 13px; font-weight: 700; }
+  .toggle .desc { font-size: 10px; color: var(--m-dim2); margin-top: 3px; }
+  .sw { position: relative; width: 42px; height: 22px; border-radius: var(--m-pill); background: var(--m-fill-normal); border: 1px solid var(--m-border-normal); }
+  .sw i { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: var(--m-pill); background: color-mix(in srgb, var(--m-fg) 80%, black); }
+  .sw.on { background: var(--m-fill-selected); border-color: transparent; }
+  .sw.on i { left: 22px; background: var(--m-fg); }
+  .field { display: grid; gap: 4px; }
+  .field .lab { font-size: 10px; font-weight: 700; color: var(--m-dim); }
+  .field .box { height: 28px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border: 1px solid var(--m-border-normal); border-radius: var(--m-radius); background: var(--m-fill-normal); font-size: 12px; }
+  .field .box.num { justify-content: center; font-variant-numeric: tabular-nums; }
+  .field .box svg { width: 10px; height: 10px; stroke: var(--m-fg); fill: none; stroke-width: 1.6; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  /* list rows */
+  .list { display: grid; gap: 2px; }
+  .lrow { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: center; padding: 8px 6px; border-radius: var(--m-radius); }
+  .lrow.current { background: var(--m-fill-selected); }
+  .lrow.hot { background: var(--m-fill-hover); box-shadow: inset 0 0 0 1px var(--m-border-hover); }
+  .lrow svg { width: 16px; height: 16px; stroke: var(--m-fg); fill: none; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+  .lrow .tag { font-size: 10px; font-weight: 700; padding: 1px 5px; border: 1px solid var(--m-border-normal); border-radius: var(--m-radius); color: var(--m-dim); margin-left: 6px; }
+
+  /* studio */
+  .studio-scrim { background: color-mix(in srgb, var(--m-bg) 50%, transparent); padding: 34px; }
+  .studio { width: 1100px; max-width: 100%; margin: 0 auto; background: var(--m-bg); border: 2px solid var(--m-accent); border-radius: var(--m-radius); padding: 18px; display: grid; grid-template-rows: auto 1fr auto; gap: 14px; min-height: 700px; }
+  .studio .head { display: flex; justify-content: space-between; align-items: baseline; }
+  .studio .body { display: grid; grid-template-columns: minmax(0, 3fr) minmax(360px, 2fr); gap: 18px; min-height: 0; }
+  .canvas { position: relative; border: 1px solid var(--m-sep); border-radius: var(--m-radius);
+    background-image: radial-gradient(color-mix(in srgb, var(--m-fg) 16%, transparent) 1px, transparent 1.2px); background-size: 24px 24px; background-position: 12px 12px; min-height: 420px; }
+  .disp { position: absolute; border: 1px solid var(--m-border-normal); background: color-mix(in srgb, var(--m-fg) 6%, var(--m-bg)); border-radius: var(--m-radius); padding: 10px 12px; display: flex; flex-direction: column; justify-content: space-between; }
+  .disp.sel { border: 2px solid var(--m-accent); background: color-mix(in srgb, var(--m-fg) 10%, var(--m-bg)); }
+  .disp .name { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .disp .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--m-accent); }
+  .disp .sub { font-size: 10px; color: var(--m-dim); }
+  .disp .badge { font-size: 10px; font-weight: 700; border: 1px solid var(--m-border-normal); padding: 1px 5px; border-radius: var(--m-radius); }
+  .guide { position: absolute; width: 1px; background: var(--m-accent); opacity: .6; }
+  .canvas-cap { position: absolute; left: 12px; bottom: 10px; font-size: 10px; color: var(--m-dim); font-variant-numeric: tabular-nums; }
+  .inspector { display: grid; gap: 12px; align-content: start; overflow: visible; min-width: 0; }
+  .inspector .sep { margin: 2px 0; }
+  .gamut { display: grid; grid-template-columns: 1fr 120px; gap: 12px; align-items: center; }
+  .gamut svg { width: 120px; height: 100px; }
+  .gamut .k { display: grid; gap: 3px; font-size: 10px; color: var(--m-dim); }
+  .gamut .k i { display: inline-block; width: 14px; height: 0; border-top: 1px dashed currentColor; vertical-align: middle; margin-right: 6px; }
+  .actions { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--m-sep); padding-top: 12px; }
+  .actions .hint { font-size: 10px; color: var(--m-dim); }
+  .btns { display: flex; gap: 8px; }
+  .btn { font-size: 12px; padding: 6px 12px; border: 1px solid var(--m-border-normal); border-radius: var(--m-radius); }
+  .btn.primary { background: var(--m-fill-selected); border-color: transparent; font-weight: 700; }
+  .pending { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; background: var(--m-fill-hover); border: 1px solid var(--m-border-hover); border-radius: var(--m-radius); }
+  .pending .cd { font-variant-numeric: tabular-nums; }
+  .pending .barline { height: 3px; background: var(--m-fill-selected); border-radius: 2px; position: relative; flex: 1; max-width: 160px; }
+  .pending .barline i { position: absolute; left: 0; top: 0; bottom: 0; width: 78%; background: var(--m-accent); border-radius: 2px; }
+  .identify { width: 220px; background: var(--m-bg); border: 2px solid var(--m-accent); border-radius: var(--m-radius); padding: 16px 18px; }
+  .identify .big { font-size: 28px; font-weight: 700; }
+  .modes { display: grid; gap: 8px; }
+  .modes .m { display: grid; grid-template-columns: 90px 1fr; gap: 10px; align-items: baseline; }
+  .modes .m .pill { display: inline-block; padding: 4px 10px; font-size: 12px; }
+
+  .decisions ol { margin: 14px 0 0; padding-left: 22px; display: grid; gap: 10px; max-width: 70ch; }
+  .decisions li strong { font-weight: 600; }
+  .small { font-size: 13px; color: var(--ink-2); }
+  @media (prefers-reduced-motion: no-preference) { .seg button, .chip, .pill { transition: background-color .12s; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Design review 01 · 3 September 2026 · Omarchy shell plugin</div>
+    <h1 style="margin-top:10px">Displays for Omarchy</h1>
+    <p class="dek">A displays product for a keyboard-driven desktop: arrange displays, drive them at their real capabilities, and put them into the right colour mode with the compositor telling the truth in physical units. Two surfaces, one backend, zero programmer's art.</p>
+    <div class="meta">
+      <span><b>Target</b> Omarchy 4.0.2 · Hyprland 0.56.2 (Lua)</span>
+      <span><b>Form</b> user plugin at first-party quality</span>
+      <span><b>Mockup tokens</b> real <code>colors.toml</code> and <code>shell.toml</code> values</span>
+      <span><b>Status</b> awaiting review before QML</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="eyebrow">Thesis</div>
+    <div class="cols">
+      <div>
+        <h3>What exists</h3>
+        <p>Omarchy has a brightness popup with scale presets and an enable list. Everything else is "open monitors.lua in an editor". Nothing knows what the panel can do, and nothing says what the compositor is actually sending.</p>
+      </div>
+      <div>
+        <h3>What we build</h3>
+        <p>A <b>popup</b> for the daily controls and a <b>studio</b> overlay for arrangement, signal, geometry and colour. One control, <i>SDR · Wide · HDR</i>, maps to the five Hyprland fields that matter. Every risky change previews live and reverts itself unless kept.</p>
+      </div>
+      <div>
+        <h3>The bar to clear</h3>
+        <p>Not "has the knobs". A colour professional sees the panel described in cd/m² and chromaticities, flips to HDR once, and never opens a config file. A laptop user sees brightness, scale, rotation, and nothing in the way.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Mockups</div>
+    <h2>Rendered in the shell's own tokens</h2>
+    <p class="small" style="margin-top:8px">Type is JetBrains Mono at the 12 px base scale. Fills, borders and separators use the exact alphas from <code>Style.qml</code>. Switch the theme to check nothing is hard-coded; toggle rounding to see the pill / square behaviour follow Hyprland's <code>decoration:rounding</code>.</p>
+    <div class="switcher" role="group" aria-label="Preview theme">
+      <span class="lbl">Preview theme</span>
+      <div class="seg" id="themeSeg">
+        <button type="button" data-t="miasma" aria-pressed="true"><span class="swatch" style="background:#78824b"></span>miasma</button>
+        <button type="button" data-t="tokyo-night" aria-pressed="false"><span class="swatch" style="background:#7aa2f7"></span>tokyo-night</button>
+        <button type="button" data-t="catppuccin-latte" aria-pressed="false"><span class="swatch" style="background:#1e66f5"></span>catppuccin-latte</button>
+        <button type="button" data-t="rose-pine" aria-pressed="false"><span class="swatch" style="background:#56949f"></span>rose-pine</button>
+        <button type="button" data-t="vantablack" aria-pressed="false"><span class="swatch" style="background:#8d8d8d"></span>vantablack</button>
+      </div>
+      <span class="lbl">Corners</span>
+      <div class="seg" id="roundSeg">
+        <button type="button" data-r="false" aria-pressed="true">square (rounding 0)</button>
+        <button type="button" data-r="true" aria-pressed="false">rounded (rounding 8)</button>
+      </div>
+    </div>
+
+    <!-- ============================================================ BOARD A -->
+    <h3 style="margin-top:34px">A · Bar popup</h3>
+    <p class="small" style="margin-top:4px">Anchored under the bar icon, 380 px content width, same chrome as the audio and bluetooth popups. Shown with DP-2 selected and already in HDR.</p>
+    <div class="board">
+      <div class="frame desktop mock" data-mtheme="miasma" data-rounded="false">
+        <div class="desk">
+          <div class="bar">
+            <div class="grp">
+              <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+              <div class="ws"><i class="on"></i><i></i><i></i><i></i><i></i></div>
+            </div>
+            <div class="grp"><span>Thursday 11:05</span></div>
+            <div class="grp">
+              <svg viewBox="0 0 24 24"><path d="M5 12a7 7 0 0 1 14 0M8 12a4 4 0 0 1 8 0M12 12v.01"/></svg>
+              <svg viewBox="0 0 24 24"><path d="M4 10v4h3l5 4V6L7 10H4zM16 9a4 4 0 0 1 0 6"/></svg>
+              <span class="active-icon"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="1"/><path d="M9 20h6M12 17v3"/></svg></span>
+              <svg viewBox="0 0 24 24"><rect x="3" y="8" width="15" height="8" rx="1"/><path d="M20 11v2M6 10v4"/></svg>
+            </div>
+          </div>
+
+          <div class="popup">
+            <span class="pin" style="top:10px;left:-11px">1</span>
+            <div class="hero">
+              <svg viewBox="0 0 24 24"><rect x="2.5" y="4.5" width="19" height="13" rx="1"/><path d="M8 20h8M12 17.5V20"/></svg>
+              <div>
+                <div class="title">DP-2 · MateView</div>
+                <div class="meta">3840×2560 · 60 Hz · 1.6× · HDR</div>
+              </div>
+              <div class="chips"><span class="chip">DP-1</span><span class="chip on">DP-2</span></div>
+            </div>
+
+            <div class="sep"></div>
+            <div style="display:grid;gap:6px">
+              <div class="row-h"><span class="sec">Brightness</span><span class="val">62%</span></div>
+              <div class="cursor-row"><div class="slider"><div class="track"></div><div class="fill" style="width:62%"></div><div class="knob" style="left:62%"></div></div></div>
+            </div>
+
+            <div class="sep"></div>
+            <div style="display:grid;gap:6px;position:relative">
+              <span class="pin" style="top:-6px;left:-27px">2</span>
+              <div class="row-h"><span class="sec">SDR white</span><span class="val">203 cd/m²</span></div>
+              <div class="cursor-row hot"><div class="slider">
+                <div class="track"></div><div class="fill" style="width:36%"></div>
+                <div class="tick" style="left:5%"></div><div class="tick ref" style="left:36%"></div><div class="tick" style="left:60%"></div>
+                <div class="knob" style="left:36%"></div>
+              </div></div>
+              <div class="caption" style="padding:0 6px">80 → 497 cd/m². Marked: 203, the BT.2408 reference white.</div>
+            </div>
+
+            <div class="sep"></div>
+            <div style="display:grid;gap:8px">
+              <div class="row-h"><span class="sec">Scale</span><span class="val">DP-2</span></div>
+              <div class="pills" style="grid-template-columns:repeat(6,1fr)">
+                <span class="pill">1x</span><span class="pill">1.25x</span><span class="pill on">1.6x</span><span class="pill">2x</span><span class="pill">3x</span><span class="pill">4x</span>
+              </div>
+            </div>
+
+            <div class="sep"></div>
+            <div style="display:grid;gap:8px;position:relative">
+              <span class="pin" style="top:-6px;left:-27px">3</span>
+              <div class="row-h"><span class="sec">Colour</span><span class="val">EDID: HDR10 · BT.2020</span></div>
+              <div class="group"><span class="pill">SDR</span><span class="pill">Wide</span><span class="pill on">HDR</span></div>
+              <div class="caption">Output 10-bit · BT.2020 PQ · SDR white 203 cd/m² · peak 497 cd/m²</div>
+            </div>
+
+            <div class="sep"></div>
+            <div style="display:grid;gap:8px;position:relative">
+              <span class="pin" style="top:-6px;right:-11px">4</span>
+              <span class="sec">Displays</span>
+              <div class="list">
+                <div class="lrow"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="1"/><path d="M9 20h6"/></svg><span>DP-1 · MateView</span><span>✓</span></div>
+                <div class="lrow current"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="1"/><path d="M9 20h6"/></svg><span>DP-2 · MateView <span class="tag">focused</span><span class="tag">HDR</span></span><span>✓</span></div>
+              </div>
+            </div>
+
+            <div class="sep"></div>
+            <div class="list" style="position:relative">
+              <span class="pin" style="top:6px;left:-27px">5</span>
+              <div class="lrow"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2 2"/></svg><span>Identify displays</span><span class="dim">›</span></div>
+              <div class="lrow"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="8" height="8"/><rect x="13" y="12" width="8" height="8"/></svg><span>Arrange…</span><span class="dim">›</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <aside class="callouts">
+        <h3>Callouts</h3>
+        <ol>
+          <li><span class="n">1</span><p><b>Hero names the display, not the panel.</b> Title is connector plus model; the meta line is the live state Hyprland reports: mode, refresh, scale and output format. Chips switch which display the popup drives; the focused one is preselected.</p></li>
+          <li><span class="n">2</span><p><b>SDR white in cd/m², only in HDR.</b> Replaces the meaningless "brightness of SDR" multiplier. Range is 80 to the panel's declared max-average luminance, with 203 marked in the accent colour. Drives <code>sdr_max_luminance</code>. Hyprland's default is 80, which is why HDR desktops look washed out.</p></li>
+          <li><span class="n">3</span><p><b>One colour control, three honest states.</b> Options appear only when the EDID supports them. The caption states the resulting output so the user never has to infer what "HDR" did.</p></li>
+          <li><span class="n">4</span><p><b>Display list carries state tags.</b> Focused, HDR, mirror. Enter toggles enable; the last enabled display refuses to be disabled.</p></li>
+          <li><span class="n">5</span><p><b>Two actions, no settings sprawl.</b> Identify flashes each connector on its own screen. Arrange opens the studio. Everything else lives there.</p></li>
+        </ol>
+      </aside>
+    </div>
+
+    <!-- ============================================================ BOARD B -->
+    <h3 style="margin-top:44px">B · Studio overlay</h3>
+    <p class="small" style="margin-top:4px">Summoned from Setup › Monitors, from the popup's Arrange, or from the command line. Centred over the shell scrim at about 1100 × 700 logical px. Canvas left, inspector right, actions along the bottom.</p>
+    <div class="board single">
+      <div class="frame desktop mock" data-mtheme="miasma" data-rounded="false">
+        <div class="studio-scrim">
+          <div class="studio">
+            <div class="head">
+              <div class="t-heading bold">Displays</div>
+              <div class="caption">2 displays · 1 in HDR · layout unchanged</div>
+            </div>
+            <div class="body">
+              <div class="canvas">
+                <span class="pin" style="top:10px;left:10px">1</span>
+                <div class="disp" style="left:46px;top:70px;width:300px;height:200px">
+                  <div class="name">DP-1</div>
+                  <div class="sub">MateView · 3840×2560 · 60 Hz · 1.6×<br>2400×1600 logical</div>
+                </div>
+                <div class="guide" style="left:346px;top:60px;height:220px"></div>
+                <div class="disp sel" style="left:346px;top:70px;width:300px;height:200px">
+                  <div class="name"><span class="dot"></span>DP-2 <span class="badge">HDR</span></div>
+                  <div class="sub">MateView · 3840×2560 · 60 Hz · 1.6×<br>2400×1600 logical</div>
+                </div>
+                <div class="canvas-cap">DP-1 at 0, 0 · DP-2 at 2400, 0 · logical px · edges snapped · no overlap</div>
+              </div>
+
+              <div class="inspector">
+                <div style="position:relative">
+                  <span class="pin" style="top:-4px;left:-24px">2</span>
+                  <div class="t-title bold">DP-2 · Huawei MateView</div>
+                  <div class="caption" style="margin-top:3px">HWV 28194 · 600×400 mm · 28.2″ · 163 ppi · serial blank, identified by connector</div>
+                </div>
+                <div class="gamut">
+                  <div class="k">
+                    <div class="t-small" style="color:var(--m-fg)">HDR10 · BT.2020 · 10-bit</div>
+                    <div>Peak 497 cd/m² · avg 497 · min 0.000</div>
+                    <div>Primaries (EDID) R .680 .320 · G .265 .680 · B .150 .060</div>
+                    <div><i style="color:var(--m-accent)"></i>panel &nbsp; <i></i>BT.2020 &nbsp; <i></i>P3 &nbsp; <i></i>sRGB</div>
+                  </div>
+                  <svg viewBox="0 0 200 160" aria-label="Gamut triangles on CIE xy">
+                    <rect x="20" y="10" width="160" height="140" fill="none" stroke="currentColor" stroke-opacity=".25"/>
+                    <text x="22" y="158" font-size="8" fill="currentColor" fill-opacity=".6">0</text>
+                    <text x="168" y="158" font-size="8" fill="currentColor" fill-opacity=".6">x .8</text>
+                    <text x="6" y="14" font-size="8" fill="currentColor" fill-opacity=".6">y</text>
+                    <!-- BT.2020 R(.708,.292) G(.170,.797) B(.131,.046) -->
+                    <polygon points="161.6,103.4 54,22.6 46.2,142.6" fill="none" stroke="currentColor" stroke-opacity=".45" stroke-dasharray="3 2"/>
+                    <!-- P3 R(.680,.320) G(.265,.690) B(.150,.060) -->
+                    <polygon points="156,98 73,39.6 50,140.4" fill="none" stroke="currentColor" stroke-opacity=".45" stroke-dasharray="3 2"/>
+                    <!-- sRGB R(.640,.330) G(.300,.600) B(.150,.060) -->
+                    <polygon points="148,97.2 80,54 50,140.4" fill="none" stroke="currentColor" stroke-opacity=".45" stroke-dasharray="3 2"/>
+                    <!-- panel EDID R(.6796,.3203) G(.2646,.6796) B(.1503,.0595) -->
+                    <polygon points="155.9,98.8 72.3,41.3 50,140.5" fill="var(--m-accent)" fill-opacity=".18" stroke="var(--m-accent)" stroke-width="1.5"/>
+                    <circle cx="70.1" cy="97.3" r="2" fill="var(--m-fg)"/>
+                  </svg>
+                </div>
+
+                <div class="sep"></div>
+                <span class="sec">Signal</span>
+                <div class="two">
+                  <div class="field"><span class="lab">Mode</span><div class="box"><span>3840×2560 @ 59.98 Hz</span><svg viewBox="0 0 10 10"><path d="M2 4l3 3 3-3"/></svg></div></div>
+                  <div class="field"><span class="lab">Variable refresh</span><div class="group"><span class="pill on">Off</span><span class="pill">On</span><span class="pill">Fullscreen</span></div></div>
+                </div>
+
+                <div class="sep"></div>
+                <span class="sec">Geometry</span>
+                <div class="pills" style="grid-template-columns:repeat(6,1fr)">
+                  <span class="pill">1x</span><span class="pill">1.25x</span><span class="pill on">1.6x</span><span class="pill">2x</span><span class="pill">3x</span><span class="pill">4x</span>
+                </div>
+                <div class="two">
+                  <div class="field"><span class="lab">Rotation</span><div class="group"><span class="pill on">0°</span><span class="pill">90°</span><span class="pill">180°</span><span class="pill">270°</span></div></div>
+                  <div class="two">
+                    <div class="field"><span class="lab">X</span><div class="box num">2400</div></div>
+                    <div class="field"><span class="lab">Y</span><div class="box num">0</div></div>
+                  </div>
+                </div>
+
+                <div class="sep"></div>
+                <div style="position:relative"><span class="pin" style="top:-5px;left:-24px">3</span><span class="sec">Colour</span></div>
+                <div class="group"><span class="pill">SDR</span><span class="pill">Wide</span><span class="pill on">HDR</span></div>
+                <div style="display:grid;gap:6px">
+                  <div class="row-h"><span class="sec">SDR white</span><span class="val">203 cd/m²</span></div>
+                  <div class="slider"><div class="track"></div><div class="fill" style="width:36%"></div><div class="tick" style="left:5%"></div><div class="tick ref" style="left:36%"></div><div class="tick" style="left:60%"></div><div class="knob" style="left:36%"></div></div>
+                </div>
+                <div class="two">
+                  <div class="field"><span class="lab">SDR transfer</span><div class="group"><span class="pill on">Default</span><span class="pill">2.2</span><span class="pill">sRGB</span></div></div>
+                  <div class="field"><span class="lab">ICC profile</span><div class="box"><span class="dim">None</span><svg viewBox="0 0 10 10"><path d="M2 4l3 3 3-3"/></svg></div></div>
+                </div>
+                <div class="caption">Default follows Hyprland's gamma 2.2. An ICC profile forces sRGB and replaces the preset; HDR is unavailable while one is loaded.</div>
+
+                <div class="sep"></div>
+                <div class="lrow" style="position:relative"><span class="pin" style="top:8px;left:-24px">4</span><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>Advanced · preset, luminance and capability overrides, auto-HDR</span><span class="dim">›</span></div>
+              </div>
+            </div>
+
+            <div class="actions" style="position:relative">
+              <span class="pin" style="top:12px;left:-28px">5</span>
+              <span class="hint">j/k move · h/l adjust · ⇥ canvas ⇄ inspector · ↑↓←→ nudge 10 px · ⇧ 100 px · a apply · r revert · i identify · esc close</span>
+              <div class="btns"><span class="btn">Identify</span><span class="btn">Revert</span><span class="btn primary">Apply</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="callouts" style="margin-top:18px">
+      <ol style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+        <li><span class="n">1</span><p><b>Canvas in logical pixels</b>, because that is what Hyprland positions in. Edges snap, the guide shows the snap, overlap turns the block urgent and disables Apply. Mirrors stack with a badge. The caption prints the numbers.</p></li>
+        <li><span class="n">2</span><p><b>Panel section states EDID truth</b>, including the blank-serial caveat this desk has. The gamut plot draws the panel's own primaries over sRGB, P3 and BT.2020 outlines. Capability line is what gates the colour options.</p></li>
+        <li><span class="n">3</span><p><b>Colour section is the whole HDR story</b> in four rows: mode, SDR white, SDR transfer, ICC. Saturation and everything with a physical footgun sits behind Advanced with a caption explaining it.</p></li>
+        <li><span class="n">4</span><p><b>Advanced is a row, not a tab.</b> Preset override (auto…hdredid), min / max / average luminance with EDID values as placeholders, <code>supports_hdr</code> and <code>supports_wide_color</code> overrides, and the global auto-HDR switch.</p></li>
+        <li><span class="n">5</span><p><b>Actions with the keys printed.</b> Apply previews live and starts the countdown below. Revert returns to the persisted layout. The hint line is caption size and reads left to right in the order you use it.</p></li>
+      </ol>
+    </div>
+
+    <!-- ============================================================ BOARD C -->
+    <h3 style="margin-top:44px">C · Small states</h3>
+    <div class="states">
+      <div class="frame mock" data-mtheme="miasma" data-rounded="false">
+        <div class="pending">
+          <div><div class="t-subtitle bold">Keep these settings?</div><div class="caption">Reverting in <span class="cd">12 s</span> unless kept. The timer runs outside the shell.</div></div>
+          <div class="barline"><i></i></div>
+          <div class="btns"><span class="btn">Revert</span><span class="btn primary">Keep</span></div>
+        </div>
+        <div class="frame-cap" style="color:var(--m-dim)">Apply bar, pending state. Same component in popup and studio.</div>
+      </div>
+      <div class="frame mock" data-mtheme="miasma" data-rounded="false" style="display:grid;place-items:center">
+        <div class="identify">
+          <div class="big">DP-2</div>
+          <div class="caption" style="margin-top:4px">MateView · right · 3840×2560 · HDR</div>
+        </div>
+        <div class="frame-cap" style="color:var(--m-dim)">Identify badge, one per display, 2 s.</div>
+      </div>
+      <div class="frame mock" data-mtheme="miasma" data-rounded="false">
+        <div class="modes">
+          <div class="m"><span class="pill on">SDR</span><span class="caption">Output 8-bit · sRGB · transfer gamma 2.2</span></div>
+          <div class="m"><span class="pill on">Wide</span><span class="caption">Output 10-bit · BT.2020 container, SDR transfer · no PQ metadata</span></div>
+          <div class="m"><span class="pill on">HDR</span><span class="caption">Output 10-bit · BT.2020 PQ · SDR white 203 cd/m² · peak 497 cd/m²</span></div>
+        </div>
+        <div class="frame-cap" style="color:var(--m-dim)">The caption under the colour control, per state.</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Colour model</div>
+    <h2>One control, five fields</h2>
+    <div class="tablewrap"><table>
+      <tr><th>Mode</th><th>bitdepth</th><th>cm</th><th>Also written</th><th>Offered when</th></tr>
+      <tr><td><b>SDR</b></td><td class="tabnum">8</td><td><code>srgb</code></td><td><code>sdr_eotf</code> as chosen</td><td>always</td></tr>
+      <tr><td><b>Wide</b></td><td class="tabnum">10</td><td><code>auto</code> → wide</td><td>—</td><td>EDID has BT.2020 colorimetry or 10 bpc</td></tr>
+      <tr><td><b>HDR</b></td><td class="tabnum">10</td><td><code>hdr</code> (<code>hdredid</code> via Advanced)</td><td><code>sdr_max_luminance</code> = SDR white (203 default) · <code>sdr_min_luminance</code>, <code>min_luminance</code>, <code>max_luminance</code>, <code>max_avg_luminance</code> from EDID unless overridden · <code>sdrsaturation</code></td><td>EDID HDR static metadata declares ST 2084</td></tr>
+    </table></div>
+    <div class="cols" style="margin-top:22px">
+      <div><h3>SDR white</h3><p>203 cd/m² by default, clamped to the panel's max-average luminance. Ceiling is sustained full-field, not peak: mapping SDR white to peak makes a white window dim under the panel's brightness limiter.</p></div>
+      <div><h3>Transfer</h3><p>Hyprland defaults SDR to gamma 2.2 since 0.55. Exposed as Default · 2.2 · sRGB with the caption "choose sRGB if terminals look lighter than before 0.53".</p></div>
+      <div><h3>Auto HDR</h3><p><code>render:cm_auto_hdr</code> is on by default and has two open bugs when <code>cm ≠ srgb</code>. It is shown in Advanced and never changed silently.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Architecture</div>
+    <h2>Bash backend, QML front, generated Lua</h2>
+    <div class="cols">
+      <div><h3>Backend</h3><p>One command, <code>omarchy-displays</code>, with subcommands: state, apply, keep, revert, persist, identify, hdr, edid, icc. Bash 5 and jq in the house style; reads <code>hyprctl -j</code>, <code>edid-decode</code> and DRM sysfs. JSON in, JSON out, so every UI action is also a keybinding.</p></div>
+      <div><h3>Persistence</h3><p>A generated file at <code>~/.local/state/omarchy/toggles/hypr/displays-layout.lua</code>, which Omarchy already loads after the user's monitors.lua on every reload. One <code>hl.monitor</code> per managed display with every managed field explicit. The user's own file is never parsed or edited.</p></div>
+      <div><h3>Safety</h3><p>Apply saves the previous live state, applies through <code>hyprctl eval</code> for every display in one chunk, and spawns a detached 15 s revert timer. The shell shows the countdown but does not own it, so the revert fires even if the shell dies at 10-bit on a Mesa-rendered laptop.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Scope</div>
+    <h2>v1 and what waits</h2>
+    <div class="tablewrap"><table>
+      <tr><th style="width:50%">v1</th><th>v2</th></tr>
+      <tr><td>Popup and studio, all sections shown above</td><td>Saved profiles (docked / undocked) applied on hotplug and lid</td></tr>
+      <tr><td>SDR · Wide · HDR mapping, SDR white, transfer, ICC, luminance and capability overrides</td><td>HDR test patterns rendered by the shell for probe measurement</td></tr>
+      <tr><td>Mode, VRR, scale, rotation, position with snapping, mirror, enable</td><td>Workspace-to-display planner</td></tr>
+      <tr><td>Identify, apply and revert countdown, full CLI, hotplug refresh</td><td>Colour-correct screenshots under HDR (separate track)</td></tr>
+    </table></div>
+  </section>
+
+  <section class="decisions">
+    <div class="eyebrow">Decisions needed</div>
+    <h2>Six calls before QML</h2>
+    <ol>
+      <li><strong>Two surfaces, this section order.</strong> Approve, or move things between popup and studio.</li>
+      <li><strong>SDR white default at 203 cd/m²</strong>, clamped to max-average. Agree, or anchor differently for your panels.</li>
+      <li><strong>Wide as a first-class third state</strong>, or folded under Advanced.</li>
+      <li><strong>Plugin id and name.</strong> <code>pmotta.displays</code> and "Displays" are placeholders.</li>
+      <li><strong>Generated state file</strong> (recommended) versus a managed block inside monitors.lua.</li>
+      <li><strong>Probe availability</strong> for validating the SDR-white anchor and EDID luminances on the MateViews.</li>
+    </ol>
+  </section>
+
+  <section>
+    <div class="eyebrow">Findings from today's live tests</div>
+    <div class="cols">
+      <div><h3>10-bit did not crash this shell</h3><p>DP-2 ran <code>XBGR2101010</code> for 12 s with the shell's PID unchanged and no coredump. The trace in issue #9804 runs through Mesa's EGL, so that shell rendered on an integrated GPU. Hybrid laptops stay at risk; the detached revert timer covers them.</p></div>
+      <div><h3>HDR entry works</h3><p><code>bitdepth = 10, cm = "hdr"</code> gave <code>colorManagementPreset: hdr</code> within a second. <code>sdrMaxLuminance</code> stayed at Hyprland's default of 80, which is the washed-out desktop in one number. The tool writes SDR white on every HDR entry.</p></div>
+      <div><h3>Never mix explicit and auto positions</h3><p>Declaring DP-2 alone at <code>2400x0</code> moved DP-1 to <code>4800x0</code>. Declaring both in one chunk held. Every apply declares every display, and <code>hyprctl reload</code> is the revert primitive.</p></div>
+    </div>
+  </section>
+
+  <p class="small" style="margin-top:48px">Full specification with the backend contract, interaction table and prior-art notes: <code>DESIGN.md</code> in the project.</p>
+</div>
+
+<script>
+  (function () {
+    var mocks = document.querySelectorAll('.mock');
+    function setAll(attr, value, seg) {
+      mocks.forEach(function (m) { m.setAttribute(attr, value); });
+      seg.querySelectorAll('button').forEach(function (b) {
+        var key = attr === 'data-mtheme' ? b.dataset.t : b.dataset.r;
+        b.setAttribute('aria-pressed', key === value ? 'true' : 'false');
+      });
+      try { localStorage.setItem('displays-review-' + attr, value); } catch (e) {}
+    }
+    var themeSeg = document.getElementById('themeSeg');
+    var roundSeg = document.getElementById('roundSeg');
+    themeSeg.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b) return; setAll('data-mtheme', b.dataset.t, themeSeg);
+    });
+    roundSeg.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b) return; setAll('data-rounded', b.dataset.r, roundSeg);
+    });
+    try {
+      var t = localStorage.getItem('displays-review-data-mtheme');
+      var r = localStorage.getItem('displays-review-data-rounded');
+      if (t && themeSeg.querySelector('[data-t="' + t + '"]')) setAll('data-mtheme', t, themeSeg);
+      if (r === 'true' || r === 'false') setAll('data-rounded', r, roundSeg);
+    } catch (e) {}
+  })();
+</script>
