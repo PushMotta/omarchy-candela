@@ -37,10 +37,18 @@ doing right now rather than what was asked for.
 ## Install
 
 ```bash
-git clone https://github.com/PushMotta/omarchy-displays ~/.config/omarchy/plugins/pmotta.displays
-omarchy-shell shell rescanPlugins
-omarchy plugin enable pmotta.displays
+omarchy plugin add https://github.com/PushMotta/omarchy-displays.git --enable
 ```
+
+That clones the repo into `~/.config/omarchy/plugins/pmotta.displays`, validates
+the manifest, and enables the plugin over IPC. Nothing is executed from the
+repo during install, no hook runs, and no sudo is needed. Without `--enable`
+it asks first, so you can read the code before switching it on. To develop
+against a checkout instead, symlink the checkout to that same path and run
+`omarchy-shell shell rescanPlugins`.
+
+Update with `omarchy plugin update pmotta.displays`; it shows the diff before
+applying it.
 
 The bar widget lands in the right section. Optional keybindings, in
 `~/.config/hypr/bindings.lua`:
@@ -59,7 +67,29 @@ to `~/.config/omarchy/extensions/omarchy-menu.jsonc` (it hot-reloads):
 
 Requirements already present on Omarchy: `hyprctl`, `jq`, `edid-decode`
 (v4l-utils), `ddcutil`/`brightnessctl` through `omarchy-brightness-display`,
-`socat`, `systemd-run`.
+`socat`, `systemd-run`. Nothing else is downloaded or installed. The plugin
+runs as your user and asks for no privileges; the one system service it
+touches is a transient `systemd --user` timer for its own revert countdown.
+
+## Remove
+
+```bash
+omarchy plugin disable pmotta.displays
+omarchy plugin remove pmotta.displays
+```
+
+`remove` deletes the git checkout (or unlinks a symlink). It does not touch
+what the plugin wrote for you, so that your display layout survives a
+reinstall. To go back to a stock machine, also:
+
+```bash
+rm -rf ~/.local/state/omarchy/displays                         # intent and pending state
+rm -f  ~/.local/state/omarchy/toggles/hypr/displays-layout.lua # the generated layout rule
+hyprctl reload                                                 # back to your own monitors.lua
+```
+
+and drop the optional `setup.monitors` override and keybindings above if you
+added them. No file outside those paths is ever written.
 
 ## Keys
 
