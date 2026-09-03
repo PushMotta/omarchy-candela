@@ -4,8 +4,13 @@
   "name": "Displays",
   "version": "0.1.0",
   "author": "Pedro Motta",
+  "license": "MIT",
   "description": "Arrange displays, drive them at their real capabilities, and switch colour modes (SDR, wide gamut, HDR) with a safe apply and revert.",
-  "kinds": ["bar-widget", "overlay", "service"],
+  "kinds": [
+    "bar-widget",
+    "overlay",
+    "service"
+  ],
   "entryPoints": {
     "barWidget": "Popup.qml",
     "overlay": "Studio.qml",
