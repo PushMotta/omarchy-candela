@@ -20,6 +20,10 @@ BorderSurface {
   signal revert()
   signal hovered(int index, bool isHovered)
 
+  // Narrow hosts (the 380 px popup) drop the progress line and keep the
+  // countdown in words; the studio's action bar has room for both.
+  readonly property bool compact: width < Style.space(420)
+
   implicitHeight: content.implicitHeight + Style.spacing.xl * 2
   radius: Style.cornerRadius
   color: Style.hoverFillFor(foreground, Color.accent)
@@ -35,13 +39,13 @@ BorderSurface {
     spacing: Style.spacing.rowPaddingX
 
     Column {
-      width: parent.width - buttons.width - progress.width - parent.spacing * 2
+      width: parent.width - buttons.width - (progress.visible ? progress.width + parent.spacing : 0) - parent.spacing
       spacing: Style.spacing.xs
       anchors.verticalCenter: parent.verticalCenter
 
       Text {
         textFormat: Text.PlainText
-        text: "Keep these settings?"
+        text: root.compact ? "Keep changes?" : "Keep these settings?"
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.subtitle
@@ -63,7 +67,8 @@ BorderSurface {
 
     Item {
       id: progress
-      width: Style.space(70)
+      visible: !root.compact
+      width: visible ? Style.space(70) : 0
       height: Style.space(4)
       anchors.verticalCenter: parent.verticalCenter
 

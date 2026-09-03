@@ -49,6 +49,12 @@ Item {
   }
 
   // ---------------------------------------------------------- lifecycle
+  // Logical pixels and cd/m² are not currency: no thousands separators.
+  Component.onCompleted: {
+    var fields = [posXField, posYField, minLumField, maxLumField, avgLumField]
+    for (var i = 0; i < fields.length; i++) if (fields[i] && fields[i].field) fields[i].field.locale = Qt.locale("C")
+  }
+
   function open(payloadJson) {
     var wanted = service ? service.liveFocused : ""
     var chosen = null
