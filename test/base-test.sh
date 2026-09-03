@@ -29,35 +29,29 @@ assert_not_contains() {
   [[ $haystack != *"$needle"* ]] || fail "$label" "unexpected: $needle"
 }
 
-# A sandbox with a fake hyprctl that serves the fixture and records calls.
+# A sandbox with a fake hyprctl (test/fake-hyprctl.sh) that keeps a live
+# monitor state the way Hyprland does and records every call. $1 picks the
+# fixture: "desk" (default, two MateViews) or "laptop" (a built-in panel and
+# one MateView).
 make_sandbox() {
-  local dir
+  local dir fixture="${1:-desk}"
   dir="$(mktemp -d)"
   # Its own runtime dir with no hypr/ inside, so the tests never lean on the
   # host's compositor — the CI runner has none, and a revert timer can fire
   # after Hyprland has gone.
-  mkdir -p "$dir/bin" "$dir/state" "$dir/runtime" "$dir/drm/card1-DP-1" "$dir/drm/card1-DP-2"
+  mkdir -p "$dir/bin" "$dir/state" "$dir/runtime" "$dir/drm/card1-DP-1" "$dir/drm/card1-DP-2" "$dir/drm/card1-eDP-1"
   cp "$FIXTURES/mateview-dp1.edid" "$dir/drm/card1-DP-1/edid"
   cp "$FIXTURES/mateview-dp1.edid" "$dir/drm/card1-DP-2/edid"
+  cp "$FIXTURES/mateview-dp1.edid" "$dir/drm/card1-eDP-1/edid"
   cat > "$dir/bin/hyprctl" <<EOF
 #!/bin/bash
-echo "\$*" >> "$dir/hyprctl.log"
-case "\$1 \$2" in
-  "monitors all") cat "$dir/monitors.json" ;;
-  "getoption render:cm_auto_hdr") echo '{"option":"render:cm_auto_hdr","int":1}' ;;
-  "getoption render:cm_sdr_eotf") echo '{"option":"render:cm_sdr_eotf","str":"default"}' ;;
-  "eval "*)
-    printf '%s\n' "\$2" > "$dir/eval-last.txt"
-    if [[ "\${FAKE_HYPRCTL_EVAL_FAIL:-}" == "1" ]]; then
-      echo "fake hyprctl: eval rejected" >&2
-      exit 1
-    fi
-    echo ok
-    ;;
-  "reload "*|"reload") echo ok ;;
-  "configerrors "*|"configerrors") echo ok ;;
-  *) echo "unhandled: \$*" >&2; exit 1 ;;
-esac
+FAKE_DIR="$dir" exec bash "$ROOT/test/fake-hyprctl.sh" "\$@"
+EOF
+  # Omarchy's clamshell script is what makes the internal-monitor-scale file
+  # worth writing; its presence is all the CLI checks for.
+  cat > "$dir/bin/omarchy-hyprland-monitor-clamshell" <<'EOF'
+#!/bin/bash
+exit 0
 EOF
   cat > "$dir/bin/omarchy-brightness-display" <<'EOF'
 #!/bin/bash
@@ -81,7 +75,10 @@ EOF
 exit 0
 EOF
   chmod +x "$dir"/bin/*
-  cp "$FIXTURES/hyprctl-monitors.json" "$dir/monitors.json"
+  local source="$FIXTURES/hyprctl-monitors.json"
+  [[ $fixture == laptop ]] && source="$FIXTURES/hyprctl-monitors-laptop.json"
+  cp "$source" "$dir/monitors.json"
+  cp "$source" "$dir/monitors.pristine.json"
   echo "$dir"
 }
 
@@ -93,6 +90,7 @@ run_cli() {
   OMARCHY_DRM_PATH="$sandbox/drm" \
   OMARCHY_DISPLAYS_STATE_DIR="$sandbox/state" \
   OMARCHY_DISPLAYS_LUA_FILE="$sandbox/state/displays-layout.lua" \
+  OMARCHY_DISPLAYS_VERIFY_SECONDS="${OMARCHY_DISPLAYS_VERIFY_SECONDS:-0.5}" \
   HOME="$sandbox" \
     "$ROOT/bin/omarchy-displays" "$@"
 }

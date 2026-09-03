@@ -1,23 +1,36 @@
 #!/bin/bash
 
 # omarchy:summary=Configure displays: geometry, signal and colour, with safe apply and revert
-# omarchy:args=<state|apply|keep|revert|persist|hdr|brightness|identify|open|edid|icc> [...]
-# omarchy:examples=omarchy-displays state | omarchy-displays hdr on --display DP-2 | omarchy-displays apply @layout.json | omarchy-displays keep
+# omarchy:args=<state|apply|keep|revert|persist|hdr|brightness|identify|open|edid|icc|recover|doctor> [...]
+# omarchy:examples=omarchy-displays state | omarchy-displays hdr on --display DP-2 | omarchy-displays apply @layout.json | omarchy-displays keep | omarchy-displays doctor
 
 # The backend behind the Displays plugin. Everything the UI does is a
 # subcommand here, so it is scriptable and bindable.
 #
 # Model:
-#   intent.json   what the user chose through this tool, per connector
-#   pending.json  an applied-but-not-kept intent, with an expiry
+#   intent.json          what the user chose through this tool, per connector
+#   pending.json         an applied-but-not-kept intent, with an expiry and a token
 #   displays-layout.lua  generated from intent + live geometry; Omarchy loads it
-#                 after the user's monitors.lua on every reload
+#                        after the user's monitors.lua on every reload
+#   displays-pending.lua the pending intent in the same form, loaded after the
+#                        layout, so a reload from anywhere (Omarchy's clamshell
+#                        script, a theme change) re-applies the preview instead
+#                        of silently reverting it
 #
 # `apply` writes pending, applies live through `hyprctl eval` for EVERY
 # connected display in one chunk (mixing explicit and auto positions moves
-# displays), and starts a detached revert timer. `keep` commits pending to
-# intent, regenerates the Lua, and reloads. `revert` (or the timer) drops
-# pending and reloads, which restores the last kept configuration.
+# displays), reads the compositor back to confirm it landed where asked, and
+# starts a detached revert timer. `keep` commits pending to intent,
+# regenerates the Lua, reloads, and proves the file ran. `revert` (or the
+# timer) drops pending and reloads, which restores the last kept
+# configuration.
+#
+# A laptop's built-in panel is switched off through Omarchy's own
+# internal-monitor-disable toggle rather than a rule of ours: Omarchy's
+# clamshell script honours that flag and would re-enable the panel over a
+# plain rule within seconds of any monitor event, and Omarchy's boot-time
+# recovery service already clears the flag when no external display is
+# connected.
 
 set -Eeuo pipefail
 # A set -e exit with no message is the worst failure mode for a tool that
@@ -34,8 +47,17 @@ STATE_DIR="${OMARCHY_DISPLAYS_STATE_DIR:-$STATE_HOME/omarchy/displays}"
 INTENT_FILE="$STATE_DIR/intent.json"
 PENDING_FILE="$STATE_DIR/pending.json"
 LUA_FILE="${OMARCHY_DISPLAYS_LUA_FILE:-$STATE_HOME/omarchy/toggles/hypr/displays-layout.lua}"
+# Everything below lives beside the layout: Omarchy loads that directory in
+# sorted filename order, so "displays-layout" < "displays-pending" <
+# "internal-monitor-*" is the precedence, and it is the one we want.
+TOGGLES_DIR="$(dirname "$LUA_FILE")"
+PENDING_LUA="${OMARCHY_DISPLAYS_PENDING_LUA_FILE:-$TOGGLES_DIR/displays-pending.lua}"
+INTERNAL_FLAG="$TOGGLES_DIR/internal-monitor-disable.lua"   # Omarchy's own toggle, shared
+INTERNAL_SCALE_FILE="$TOGGLES_DIR/internal-monitor-scale"    # read by Omarchy's clamshell script
 REVERT_UNIT="omarchy-displays-revert"
 REVERT_SECONDS="${OMARCHY_DISPLAYS_REVERT_SECONDS:-15}"
+VERIFY_SECONDS="${OMARCHY_DISPLAYS_VERIFY_SECONDS:-3}"
+INTERNAL_RE='^(eDP|LVDS|DSI)-'
 
 # A transient systemd unit (the revert timer) may lack the compositor's
 # instance signature; recover it from the newest instance runtime dir, the
@@ -65,6 +87,8 @@ Usage: omarchy-displays <command> [args]
   open                           Open the Displays studio
   edid <NAME>                    Parsed EDID capabilities as JSON
   icc list                       Installed ICC profiles as JSON
+  recover                        If every display is off, switch the built-in (or first) one back on
+  doctor                         Check that the layout is loaded, the compositor agrees, and nothing fights it
 
 Change JSON shape (any subset per display):
   {"displays":[{"name":"DP-2","bitdepth":10,"cm":"hdr","sdr_max_luminance":203}],
@@ -75,9 +99,12 @@ USAGE
 die() { echo "omarchy-displays: $*" >&2; exit 1; }
 
 now_epoch() { date +%s; }
+now_ms() { echo $(( $(date +%s%N) / 1000000 )); }
 
-# Serialize the commands that write state (apply/keep/revert/persist/hdr, the
-# last of which just calls cmd_apply in-process) so a concurrent invocation —
+is_internal() { [[ $1 =~ $INTERNAL_RE ]]; }
+
+# Serialize the commands that write state (apply/keep/revert/persist/hdr/recover,
+# the last two of which call cmd_apply in-process) so a concurrent invocation —
 # an expired revert racing an interactive keep, say — cannot interleave.
 acquire_lock() {
   mkdir -p "$STATE_DIR"
@@ -187,20 +214,68 @@ merge_intent() {
   ' 2>&1 || return 1
 }
 
+# A display being switched off keeps its rule, so that it comes back where it
+# was: record the live mode, position, scale and rotation into intent at the
+# moment it goes off, unless intent already says. Without this a re-enabled
+# display is generated from its live geometry, which for an off display is
+# 0x0 at "preferred", on top of whatever sits at the origin.
+remember_geometry() {
+  local merged="$1" live="$2" change="$3"
+  jq -n --argjson merged "$merged" --argjson live "$live" --argjson change "$change" '
+    def r2: (. * 100 | round) / 100;
+    reduce ($change.displays // [] | .[] | select(.enabled == false) | .name) as $n ($merged;
+      ([$live[] | select(.name == $n and .disabled != true and .width > 0)][0]) as $d
+      | if $d == null then . else
+          .displays[$n] |= (. + {
+            mode: (.mode // "\($d.width)x\($d.height)@\($d.refreshRate | r2)"),
+            position: (.position // "\($d.x)x\($d.y)"),
+            scale: (.scale // $d.scale),
+            transform: (.transform // $d.transform) })
+        end)'
+}
+
+# Refuse a change that would leave nothing to draw on. The popup and studio
+# enforce this too; the CLI must not be the door that gets round it.
+check_some_display_stays_on() {
+  local intent="$1" live="$2"
+  jq -e -n --argjson intent "$intent" --argjson live "$live" '
+    [ $live[] | select((.name // "") != "")
+      | ($intent.displays[.name] // {}) as $i
+      | if $i.enabled == false then false elif $i.enabled == true then true else (.disabled != true) end ]
+    | any' >/dev/null 2>&1 || die "refusing to switch off the last enabled display"
+}
+
 # Lua generation from intent + live geometry. Every connected, enabled display
 # gets a full rule so nothing falls back to Hyprland's auto placement. Values
 # were validated on the way into intent, so they are emitted verbatim.
+#
+# $5 selects the audience: "live" is the chunk sent to `hyprctl eval` and says
+# everything, including a laptop panel going off; "file" (default) is what is
+# written to disk, where a built-in panel's off state is Omarchy's flag file,
+# not a rule of ours (see the header). $4 is a probe token: the file sets a
+# global to it so a later `hyprctl eval` can prove the file actually ran.
 generate_lua() {
-  local intent="$1" live="$2" stamp="${3:-$(date --iso-8601=seconds)}"
-  jq -r -n --argjson intent "$intent" --argjson live "$live" --arg stamp "$stamp" --arg plugin "$PLUGIN_ID" '
+  local intent="$1" live="$2" stamp="${3:-$(date --iso-8601=seconds)}" probe="${4:-}" audience="${5:-file}"
+  jq -r -n --argjson intent "$intent" --argjson live "$live" --arg stamp "$stamp" --arg plugin "$PLUGIN_ID" \
+        --arg probe "$probe" --arg audience "$audience" --arg internal_re "$INTERNAL_RE" '
     def lua_str: "\"" + (tostring | gsub("\\\\"; "\\\\\\\\") | gsub("\""; "\\\"")) + "\"";
     def lua_val($k): if $k == "icc" then "[==[" + tostring + "]==]" elif type == "string" then lua_str else tostring end;
     def r2: (. * 100 | round) / 100;
     def mode_of($d): if ($d.width // 0) > 0 then "\($d.width)x\($d.height)@\($d.refreshRate | r2)" else "preferred" end;
+    # An off display with no say from intent is left to whatever switched it
+    # off, except that the file names the built-in panel'"'"'s owner so the
+    # rule'"'"'s absence is not a mystery to a reader.
     def rule($d):
       ($intent.displays[$d.name] // {}) as $i
-      | if $i.enabled == false then
-          "hl.monitor({ output = \($d.name | lua_str), disabled = true })"
+      | ($d.name | test($internal_re)) as $internal
+      | if $i.enabled == false or ($d.disabled == true and $i.enabled != true) then
+          if $audience == "file" and $internal then
+            "-- \($d.name) is off. The built-in panel'"'"'s off state is Omarchy'"'"'s internal-monitor-disable toggle, which its clamshell script honours; this file never carries a rule for it."
+          elif $i.enabled == false then
+            "hl.monitor({ output = \($d.name | lua_str), disabled = true })"
+          else
+            ""
+          end
         else
           ([ "output = \($d.name | lua_str)",
              "mode = \(($i.mode // mode_of($d)) | lua_str)",
@@ -216,8 +291,9 @@ generate_lua() {
     [ "-- Generated by \($plugin) (omarchy-displays). Do not edit: it is rewritten on every keep.",
       "-- Kept \($stamp). Change displays with the Displays panel or `omarchy-displays`.",
       "" ]
-    + [ $live[] | select((.name // "") != "") | select((.disabled != true) or (($intent.displays[.name] // {}) | has("enabled"))) | rule(.) ]
+    + [ $live[] | select((.name // "") != "") | rule(.) | select(. != "") ]
     + (if ($intent.global.cm_auto_hdr != null) then ["", "hl.config({ render = { cm_auto_hdr = \($intent.global.cm_auto_hdr) } })"] else [] end)
+    + (if $probe != "" then ["", "-- Load probe: `omarchy-displays doctor` asks Hyprland whether this value is set.", "omarchy_displays_layout_probe = \($probe | lua_str)"] else [] end)
     | join("\n")
   '
 }
@@ -233,6 +309,67 @@ apply_live() {
   [[ -n $statements ]] || return 0
   output="$(hyprctl eval "$statements" 2>&1)" || { printf '%s' "$output"; return 1; }
   if [[ $output != ok* ]]; then printf '%s' "$output"; return 1; fi
+}
+
+# Read the compositor back until it matches the intent, or give up after
+# VERIFY_SECONDS. Hyprland can accept a chunk and still land elsewhere (a mode
+# it quietly falls back from, a scale it corrects); "ok" from eval is not the
+# same as the change being on the glass. Prints the mismatches on failure.
+# Only fields the intent names are compared, and only ones hyprctl reports
+# faithfully: position and mode are skipped on a mirror, cm only for presets
+# Hyprland echoes back verbatim, scale to hyprctl's two decimals.
+verify_live() {
+  local intent="$1" deadline mismatch live
+  deadline=$(( $(now_ms) + $(awk -v s="$VERIFY_SECONDS" 'BEGIN { printf "%d", s * 1000 }') ))
+  while :; do
+    live="$(hyprctl monitors all -j 2>/dev/null)" || { printf 'hyprctl is not answering'; return 1; }
+    mismatch="$(jq -r -n --argjson intent "$intent" --argjson live "$live" '
+      def depth_of: if test("2101010") then 10 elif test("16161616") then 16 else 8 end;
+      def r2: (. * 100 | round) / 100;
+      [ ($intent.displays // {}) | to_entries[] | .key as $n | .value as $i
+        | ([$live[] | select(.name == $n)][0]) as $d
+        | select($d != null)
+        | if $i.enabled == false then
+            (if $d.disabled != true then "\($n) is still on" else empty end)
+          elif $d.disabled == true then
+            (if $i.enabled == true then "\($n) is still off" else empty end)
+          else
+            ( if ($i.mirror // "") != "" then
+                (if $d.mirrorOf != $i.mirror then "\($n) mirrors \($d.mirrorOf), wanted \($i.mirror)" else empty end)
+              else
+                (if $i.mirror == "" and $d.mirrorOf != "none" and $d.mirrorOf != null then "\($n) still mirrors \($d.mirrorOf)" else empty end),
+                (if ($i.mode // "" | test("^[0-9]+x[0-9]+")) then
+                    ($i.mode | capture("^(?<w>[0-9]+)x(?<h>[0-9]+)(@(?<r>[0-9.]+))?")) as $m
+                    | (if $d.width != ($m.w | tonumber) or $d.height != ($m.h | tonumber) then "\($n) mode \($d.width)x\($d.height), wanted \($m.w)x\($m.h)" else empty end),
+                      (if $m.r != null and (($d.refreshRate - ($m.r | tonumber)) | fabs) > 0.2 then "\($n) refresh \($d.refreshRate | r2) Hz, wanted \($m.r)" else empty end)
+                  else empty end),
+                (if ($i.position // "" | test("^-?[0-9]+x-?[0-9]+$")) then
+                    ($i.position | capture("^(?<x>-?[0-9]+)x(?<y>-?[0-9]+)$")) as $p
+                    | (if $d.x != ($p.x | tonumber) or $d.y != ($p.y | tonumber) then "\($n) at \($d.x)x\($d.y), wanted \($i.position)" else empty end)
+                  else empty end),
+                (if ($i.scale | type) == "number" and (($d.scale - $i.scale) | fabs) > 0.006 then "\($n) scale \($d.scale), wanted \($i.scale)" else empty end),
+                (if $i.transform != null and $d.transform != $i.transform then "\($n) transform \($d.transform), wanted \($i.transform)" else empty end)
+              end ),
+            (if $i.bitdepth != null and ($d.currentFormat // "" | depth_of) != $i.bitdepth then "\($n) is \($d.currentFormat // "" | depth_of)-bit, wanted \($i.bitdepth)" else empty end),
+            (if ($i.cm // "" | IN("srgb", "hdr", "hdredid")) and $d.colorManagementPreset != $i.cm then "\($n) colour preset \($d.colorManagementPreset), wanted \($i.cm)" else empty end),
+            (if $i.sdr_max_luminance != null and (($d.sdrMaxLuminance // 0) | round) != ($i.sdr_max_luminance | round) then "\($n) SDR white \($d.sdrMaxLuminance) cd/m², wanted \($i.sdr_max_luminance)" else empty end)
+          end
+      ] | join("; ")')"
+    [[ -n $mismatch ]] || return 0
+    (( $(now_ms) >= deadline )) && break
+    sleep 0.2
+  done
+  printf '%s' "$mismatch"
+  return 1
+}
+
+# Did the layout file run on the last reload? It sets a global to the probe
+# written into it; asking Hyprland for that global is the only proof that the
+# toggles directory is still being loaded.
+probe_loaded() {
+  local out
+  out="$(hyprctl eval "assert(omarchy_displays_layout_probe == \"$1\", \"displays-layout.lua did not run\")" 2>&1)" || return 1
+  [[ $out == ok* ]]
 }
 
 stop_timer() {
@@ -257,40 +394,125 @@ notify_shell() {
   omarchy-shell -q "$PLUGIN_ID" refresh 2>/dev/null || true
 }
 
-# Undo a pending apply that never fully landed: stop the timer, drop the
-# pending file, and reload so hyprctl falls back to the last kept Lua.
-unwind_pending() {
-  stop_timer
-  rm -f "$PENDING_FILE"
-  hyprctl reload >/dev/null 2>&1 || true
-}
-
-# Reload so Hyprland re-reads the just-written layout, then check for config
-# errors — the one path both `keep` and `apply --now` use, so a bad write is
-# never silently reported as kept.
-reload_and_check() {
-  hyprctl reload >/dev/null 2>&1 || true
-  local errors
-  errors="$(hyprctl configerrors 2>/dev/null | grep -v '^ok$' || true)"
-  notify_shell
-  [[ -z $errors ]] || die "kept, but Hyprland reports config errors: $errors"
-}
-
 # A temp file beside $1, not a fixed name, so two concurrent writers cannot
 # clobber each other's temp file. Caller does `cmd > "$tmp" && mv "$tmp" "$1"`.
 tmp_for() { mktemp "$(dirname "$1")/.$(basename "$1").XXXXXX"; }
 
+# ---------------------------------------------------------------- built-in panel
+#
+# The built-in panel's off state is Omarchy's flag file, and a change that
+# touches it records what the flag looked like before, so revert can put it
+# back. One panel per machine, so one flag.
+
+# What this change says about the built-in panel: "off", "on", or "" for nothing.
+internal_verdict() {
+  jq -r --arg re "$INTERNAL_RE" '
+    [ .displays // [] | .[] | select(.name | test($re)) | select(has("enabled")) | .enabled ]
+    | if length == 0 then "" elif .[-1] == false then "off" else "on" end' <<<"$1"
+}
+
+internal_name_in() {
+  jq -r --arg re "$INTERNAL_RE" '[ .displays // [] | .[] | select(.name | test($re)) | select(has("enabled")) | .name ] | last // ""' <<<"$1"
+}
+
+flag_snapshot() {
+  if [[ -f $INTERNAL_FLAG ]]; then jq -nc --arg c "$(cat "$INTERNAL_FLAG")" '{present: true, content: $c}'
+  else echo '{"present":false}'; fi
+}
+
+restore_flag() {
+  local snap="${1:-null}"
+  [[ -n $snap && $snap != null ]] || return 0
+  if [[ $(jq -r '.present' <<<"$snap") == true ]]; then
+    mkdir -p "$TOGGLES_DIR"
+    jq -r '.content' <<<"$snap" > "$INTERNAL_FLAG"
+  else
+    rm -f "$INTERNAL_FLAG"
+  fi
+}
+
+# Same content Omarchy's own `omarchy-hyprland-monitor-internal off` writes.
+apply_internal_verdict() {
+  local verdict="$1" name="$2"
+  case "$verdict" in
+    off) mkdir -p "$TOGGLES_DIR"; printf 'hl.monitor({ output = "%s", disabled = true })\n' "$name" > "$INTERNAL_FLAG" ;;
+    on) rm -f "$INTERNAL_FLAG" ;;
+  esac
+}
+
+# The flag is the source of truth for the panel's off state, so intent never
+# stores "enabled" for it: a stale value there would fight Omarchy's own
+# toggle on the next keep.
+strip_internal_enabled() {
+  jq --arg re "$INTERNAL_RE" '.displays |= with_entries(if (.key | test($re)) then .value |= del(.enabled) else . end)' <<<"$1"
+}
+
+# Omarchy's clamshell script restores the panel at the scale in this file when
+# it cannot read one from monitors.lua (it never reads our layout), so keep
+# it current with what was kept. Only where that script exists.
+write_internal_scale() {
+  local intent="$1" live="$2" scale
+  command -v omarchy-hyprland-monitor-clamshell >/dev/null 2>&1 || return 0
+  scale="$(jq -r -n --argjson intent "$intent" --argjson live "$live" --arg re "$INTERNAL_RE" '
+    ([$live[] | select(.name | test($re))][0]) as $d
+    | if $d == null then "" else (($intent.displays[$d.name] // {}).scale // (if $d.disabled != true and $d.scale > 0 then $d.scale else "" end)) end
+    | if (type == "number") then tostring else "" end')"
+  [[ $scale =~ ^[0-9]+([.][0-9]+)?$ ]] || return 0
+  mkdir -p "$TOGGLES_DIR"
+  printf '%s\n' "$scale" > "$INTERNAL_SCALE_FILE"
+}
+
+# ---------------------------------------------------------------- state files
+
+# Undo a pending apply that never fully landed: stop the timer, drop the
+# pending files, put Omarchy's flag back, and reload so hyprctl falls back to
+# the last kept Lua.
+unwind_pending() {
+  local before=null
+  [[ -s $PENDING_FILE ]] && before="$(jq -c '.internalFlagBefore // null' "$PENDING_FILE")"
+  stop_timer
+  rm -f "$PENDING_FILE" "$PENDING_LUA"
+  restore_flag "$before"
+  hyprctl reload >/dev/null 2>&1 || true
+}
+
+# Reload so Hyprland re-reads the just-written layout, then check for config
+# errors, prove the file ran, and read the displays back — the one path both
+# `keep` and `apply --now` use, so a bad write is never silently reported as
+# kept.
+reload_and_check() {
+  local intent="$1" probe="${2:-}" errors mismatch
+  hyprctl reload >/dev/null 2>&1 || true
+  errors="$(hyprctl configerrors 2>/dev/null | grep -v '^ok$' || true)"
+  notify_shell
+  [[ -z $errors ]] || die "kept, but Hyprland reports config errors: $errors"
+  if [[ -n $probe ]] && ! probe_loaded "$probe"; then
+    die "kept, but Hyprland did not run $LUA_FILE on reload: is require(\"default.hypr.toggles\") still in ~/.config/hypr/hyprland.lua? \`omarchy-displays doctor\` explains."
+  fi
+  if ! mismatch="$(verify_live "$intent")"; then
+    die "kept, but the compositor did not land on it: $mismatch"
+  fi
+}
+
+LAST_PROBE=""
 commit_intent() {
-  local intent="$1" tmp
-  mkdir -p "$STATE_DIR" "$(dirname "$LUA_FILE")"
+  local intent="$1" live tmp probe
+  live="$(live_json)"
+  intent="$(strip_internal_enabled "$intent")"
+  probe="$(now_epoch)-$$-$RANDOM"
+  mkdir -p "$STATE_DIR" "$TOGGLES_DIR"
   tmp="$(tmp_for "$INTENT_FILE")"
   printf '%s\n' "$intent" | jq . > "$tmp" && mv "$tmp" "$INTENT_FILE"
   tmp="$(tmp_for "$LUA_FILE")"
-  generate_lua "$intent" "$(live_json)" > "$tmp" && mv "$tmp" "$LUA_FILE"
+  generate_lua "$intent" "$live" "" "$probe" file > "$tmp" && mv "$tmp" "$LUA_FILE"
+  write_internal_scale "$intent" "$live"
+  LAST_PROBE="$probe"
 }
 
+# ---------------------------------------------------------------- commands
+
 cmd_state() {
-  local live intent pending focused edids brightness auto_hdr sdr_eotf
+  local live intent pending focused edids brightness auto_hdr sdr_eotf internal_flag
   live="$(live_json)"
   intent="$(intent_json)"
   pending="$(pending_json)"
@@ -306,11 +528,13 @@ cmd_state() {
   [[ -n $focused ]] && brightness="$(omarchy-brightness-display --monitor "$focused" 2>/dev/null || true)"
   auto_hdr="$(hyprctl getoption render:cm_auto_hdr -j 2>/dev/null | jq '.int // null' 2>/dev/null || echo null)"
   sdr_eotf="$(hyprctl getoption render:cm_sdr_eotf -j 2>/dev/null | jq -r '.str // "default"' 2>/dev/null || echo default)"
+  internal_flag=false; [[ -f $INTERNAL_FLAG ]] && internal_flag=true
 
   jq -n --argjson live "$live" --argjson intent "$intent" --argjson pending "$pending" \
         --argjson edids "$edids" --arg focused "$focused" --arg brightness "$brightness" \
         --argjson autoHdr "$auto_hdr" --arg sdrEotf "$sdr_eotf" --arg pluginId "$PLUGIN_ID" \
-        --argjson revertSeconds "$REVERT_SECONDS" --argjson now "$(now_epoch)" '
+        --argjson revertSeconds "$REVERT_SECONDS" --argjson now "$(now_epoch)" \
+        --argjson internalFlag "$internal_flag" --arg internalRe "$INTERNAL_RE" '
     def bitdepth_of: if test("2101010") then 10 elif test("16161616") then 16 else 8 end;
     {
       version: 1,
@@ -319,10 +543,10 @@ cmd_state() {
       focused: $focused,
       revertSeconds: $revertSeconds,
       pending: (if $pending == null then null else { since: $pending.since, expires: $pending.expires, remaining: ([$pending.expires - $now, 0] | max) } end),
-      global: { cm_auto_hdr: $autoHdr, cm_sdr_eotf: $sdrEotf, kept: ($intent.global // {}), pending: (($pending.intent.global // {}) ) },
+      global: { cm_auto_hdr: $autoHdr, cm_sdr_eotf: $sdrEotf, kept: ($intent.global // {}), pending: (($pending.intent.global // {}) ), internalPanelOffByOmarchy: $internalFlag },
       displays: [ $live[] | {
         name, description, make, model, serial: (.serial | gsub("^\\s+|\\s+$"; "")),
-        internal: (.name | test("^(eDP|LVDS|DSI)-")),
+        internal: (.name | test($internalRe)),
         enabled: (.disabled != true), focused, dpms: .dpmsStatus,
         width, height, refreshRate, x, y, scale, transform, vrr, mirrorOf,
         physicalWidth, physicalHeight, currentFormat, availableModes,
@@ -342,15 +566,31 @@ cmd_state() {
 cmd_apply() {
   local now=0
   if [[ ${1:-} == "--now" ]]; then now=1; shift; fi
-  local change intent base merged chunk
+  local change intent base merged live chunk_live chunk_file
   change="$(read_json_arg "${1:-}")"
   [[ -n $change ]] || die "apply needs a JSON change"
   printf '%s' "$change" | jq -e . >/dev/null 2>&1 || die "change is not valid JSON"
 
   # Chain onto a pending change, so successive slider moves accumulate.
-  if [[ -s $PENDING_FILE ]]; then base="$(jq -c '.intent' "$PENDING_FILE")"; else base="$(intent_json)"; fi
+  local before_flag=null
+  if [[ -s $PENDING_FILE ]]; then
+    base="$(jq -c '.intent' "$PENDING_FILE")"
+    before_flag="$(jq -c '.internalFlagBefore // null' "$PENDING_FILE")"
+  else
+    base="$(intent_json)"
+  fi
   merged="$(merge_intent "$base" "$change")" || die "${merged#jq: error (at <unknown>): }"
-  chunk="$(generate_lua "$merged" "$(live_json)")"
+  live="$(live_json)"
+  merged="$(remember_geometry "$merged" "$live" "$change")"
+  check_some_display_stays_on "$merged" "$live"
+  chunk_live="$(generate_lua "$merged" "$live" "" "" live)"
+
+  local verdict internal
+  verdict="$(internal_verdict "$change")"
+  internal="$(internal_name_in "$change")"
+  # The first change in a chain to touch the panel's flag records what it
+  # looked like before; later ones in the same chain keep that original.
+  if [[ -n $verdict && $before_flag == null ]]; then before_flag="$(flag_snapshot)"; fi
 
   # Pending is written and the timer armed BEFORE the live displays are
   # touched, so a hyprctl rejection partway through, or the process being
@@ -360,21 +600,35 @@ cmd_apply() {
   token="$(now_epoch)-$$-$RANDOM"
   since="$(now_epoch)"; expires=$(( since + REVERT_SECONDS ))
   tmp="$(tmp_for "$PENDING_FILE")"
-  jq -n --argjson intent "$merged" --argjson since "$since" --argjson expires "$expires" --arg token "$token" \
-    '{since: $since, expires: $expires, token: $token, intent: $intent}' > "$tmp" && mv "$tmp" "$PENDING_FILE"
+  jq -n --argjson intent "$merged" --argjson since "$since" --argjson expires "$expires" --arg token "$token" --argjson before "$before_flag" \
+    '{since: $since, expires: $expires, token: $token, intent: $intent, internalFlagBefore: $before}' > "$tmp" && mv "$tmp" "$PENDING_FILE"
   start_timer "$token"
 
+  if (( ! now )); then
+    # The preview on disk, loaded after the layout: a reload from anywhere
+    # during the window re-applies it instead of reverting it.
+    mkdir -p "$TOGGLES_DIR"
+    chunk_file="$(generate_lua "$merged" "$live" "pending since $since; reverts at $expires unless kept" "" file)"
+    tmp="$(tmp_for "$PENDING_LUA")"
+    printf '%s\n' "$chunk_file" > "$tmp" && mv "$tmp" "$PENDING_LUA"
+  fi
+  apply_internal_verdict "$verdict" "$internal"
+
   local err
-  if ! err="$(apply_live "$chunk")"; then
+  if ! err="$(apply_live "$chunk_live")"; then
     unwind_pending
     die "hyprctl rejected the change: $err"
+  fi
+  if ! err="$(verify_live "$merged")"; then
+    unwind_pending
+    die "applied, but the compositor did not land on it, so it was undone: $err"
   fi
 
   if (( now )); then
     stop_timer
-    rm -f "$PENDING_FILE"
+    rm -f "$PENDING_FILE" "$PENDING_LUA"
     commit_intent "$merged"
-    reload_and_check
+    reload_and_check "$(intent_json)" "$LAST_PROBE"
     echo "kept"
     return
   fi
@@ -389,8 +643,8 @@ cmd_keep() {
   intent="$(jq -c '.intent' "$PENDING_FILE")"
   stop_timer
   commit_intent "$intent"
-  rm -f "$PENDING_FILE"
-  reload_and_check
+  rm -f "$PENDING_FILE" "$PENDING_LUA"
+  reload_and_check "$(intent_json)" "$LAST_PROBE"
   echo "kept"
 }
 
@@ -418,15 +672,23 @@ cmd_revert() {
   # SIGTERM this very process before the pending file is removed. The timer
   # has already elapsed, so only an interactive revert needs to cancel it.
   (( expired )) || stop_timer
-  local had_pending=0
-  [[ -s $PENDING_FILE ]] && had_pending=1
-  rm -f "$PENDING_FILE"
+  local had_pending=0 before=null
+  if [[ -s $PENDING_FILE ]]; then had_pending=1; before="$(jq -c '.internalFlagBefore // null' "$PENDING_FILE")"; fi
+  rm -f "$PENDING_FILE" "$PENDING_LUA"
+  restore_flag "$before"
   hyprctl reload >/dev/null 2>&1 || true
   if (( expired && had_pending )); then
     omarchy-notification-send "Display changes reverted" "They were not kept within ${REVERT_SECONDS} seconds." -t 4000 2>/dev/null || true
   fi
   notify_shell
   echo "reverted"
+  # The reload is the whole of the revert, so say so if it did not take:
+  # an exit code the shell can show beats a display quietly left changed.
+  local mismatch
+  if (( had_pending )) && ! mismatch="$(verify_live "$(intent_json)")"; then
+    echo "omarchy-displays: reverted, but the compositor did not return to the kept configuration: $mismatch" >&2
+    exit 1
+  fi
 }
 
 cmd_persist() {
@@ -488,7 +750,135 @@ cmd_icc() {
       [[ -d $d ]] || continue
       find "$d" -type f \( -iname '*.icc' -o -iname '*.icm' \) -print0 2>/dev/null
     done
-  } | sort -z | jq -Rsc 'split(" ") | map(select(length > 0)) | map({path: ., name: (split("/") | last)})'
+  } | sort -z | jq -Rsc 'split(" ") | map(select(length > 0)) | map({path: ., name: (split("/") | last)})'
+}
+
+# A machine with every display off has nowhere to show a Keep button. A kept
+# layout that switches one display off is unconditional in Lua, so booting it
+# without the other display attached leaves the screen black; Omarchy's own
+# recovery unit covers its flag, this covers ours. Prefer the built-in panel,
+# the one display a laptop always has, else whatever comes first.
+cmd_recover() {
+  local live rescue
+  live="$(live_json)"
+  if ! jq -e 'length > 0 and all(.disabled == true)' <<<"$live" >/dev/null; then
+    echo "nothing to recover"
+    return 0
+  fi
+  rescue="$(jq -r --arg re "$INTERNAL_RE" '([.[] | select(.name | test($re))][0] // .[0]).name' <<<"$live")"
+  omarchy-notification-send "Displays" "Every display was off. Switching $rescue back on." -t 6000 2>/dev/null || true
+  cmd_apply --now "$(jq -nc --arg n "$rescue" '{displays: [{name: $n, enabled: true}]}')" >/dev/null
+  echo "recovered $rescue"
+}
+
+# Everything that has to hold for keep and revert to mean what they say,
+# checked and said in one place. Exit 1 on anything that would break them.
+cmd_doctor() {
+  local status=0 live="" line
+  ok() { echo "ok    $*"; }
+  warn() { echo "warn  $*"; }
+  bad() { echo "FAIL  $*"; status=1; }
+
+  if live="$(hyprctl monitors all -j 2>/dev/null)"; then
+    ok "hyprctl answers: $(jq 'length' <<<"$live") displays, $(hyprctl version 2>/dev/null | head -1 | cut -d' ' -f1-2)"
+  else
+    bad "hyprctl is not answering"
+    live="[]"
+  fi
+
+  local hypr_lua="$HOME/.config/hypr/hyprland.lua"
+  if [[ -f $hypr_lua ]]; then
+    if grep -qE '^[[:space:]]*require\("default\.hypr\.toggles"\)' "$hypr_lua"; then
+      ok "hyprland.lua loads the toggles directory, where the kept layout lives"
+    else
+      bad "$hypr_lua does not require(\"default.hypr.toggles\"): the kept layout is never read, and revert cannot restore it"
+    fi
+  else
+    warn "$hypr_lua not found; this tool expects Omarchy's Lua config"
+  fi
+
+  if [[ -f $LUA_FILE ]]; then
+    local probe
+    probe="$(sed -nE 's/^omarchy_displays_layout_probe = "([^"]+)"$/\1/p' "$LUA_FILE" | head -1)"
+    if [[ -z $probe ]]; then
+      warn "$LUA_FILE predates the load probe: run \`omarchy-displays persist\`, then \`hyprctl reload\`"
+    elif probe_loaded "$probe"; then
+      ok "Hyprland ran $LUA_FILE on its last reload"
+    else
+      bad "Hyprland did not run $LUA_FILE on its last reload"
+    fi
+  else
+    ok "nothing kept yet: your monitors.lua is in charge"
+  fi
+
+  local errors
+  errors="$(hyprctl configerrors 2>/dev/null | grep -v '^ok$' || true)"
+  if [[ -z $errors ]]; then ok "no Hyprland config errors"; else bad "Hyprland config errors: $errors"; fi
+
+  if [[ -s $PENDING_FILE ]]; then
+    local expires
+    expires="$(jq -r '.expires // 0' "$PENDING_FILE")"
+    if (( expires < $(now_epoch) )); then
+      warn "a pending change expired without reverting: run \`omarchy-displays revert\`"
+    else
+      ok "a change is pending, $(( expires - $(now_epoch) )) s left"
+    fi
+  fi
+  if [[ -f $PENDING_LUA && ! -s $PENDING_FILE ]]; then
+    bad "$PENDING_LUA exists with nothing pending; delete it and \`hyprctl reload\`"
+  fi
+
+  for d in "$STATE_DIR" "$TOGGLES_DIR"; do
+    mkdir -p "$d" 2>/dev/null && [[ -w $d ]] && ok "$d is writable" || bad "$d is not writable"
+  done
+
+  local tool
+  for tool in edid-decode jq socat; do
+    command -v "$tool" >/dev/null 2>&1 && ok "$tool found" || bad "$tool not found"
+  done
+  command -v ddcutil >/dev/null 2>&1 || command -v brightnessctl >/dev/null 2>&1 && ok "brightness tools found" || warn "neither ddcutil nor brightnessctl found: no brightness control"
+  if command -v systemd-run >/dev/null 2>&1 && systemctl --user is-system-running >/dev/null 2>&1; then
+    ok "systemd user manager runs the revert timer"
+  else
+    warn "no systemd user manager: the revert timer falls back to a detached shell"
+  fi
+
+  local internal monitors_lua="$HOME/.config/hypr/monitors.lua"
+  internal="$(jq -r --arg re "$INTERNAL_RE" '[.[] | select(.name | test($re))][0].name // ""' <<<"$live")"
+  if pgrep -f omarchy-hyprland-monitor-watch >/dev/null 2>&1; then
+    if [[ -n $internal ]]; then
+      local configured
+      configured="$(sed -nE 's/^[[:space:]]*local[[:space:]]+omarchy_monitor_scale[[:space:]]*=[[:space:]]*([^[:space:]]+).*/\1/p' "$monitors_lua" 2>/dev/null | head -1)"
+      if [[ $configured =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        warn "monitors.lua sets omarchy_monitor_scale = $configured; Omarchy's clamshell script re-applies that scale to $internal with position auto on lid and monitor events, over the kept layout. Set it to \"auto\" there and choose the scale here."
+      else
+        ok "Omarchy's monitor watcher is running; with scale = \"auto\" in monitors.lua it leaves the kept layout alone"
+      fi
+      [[ -f $INTERNAL_FLAG ]] && ok "$internal is off through Omarchy's internal-monitor-disable toggle" || true
+    else
+      ok "Omarchy's monitor watcher is running; no built-in panel, nothing for it to reconcile"
+    fi
+  fi
+
+  if [[ -f $monitors_lua ]]; then
+    while IFS= read -r line; do
+      [[ -n $line ]] || continue
+      if grep -qE "^[^-]*hl\.monitor\(\{[^}]*output[[:space:]]*=[[:space:]]*\"$line\"" "$monitors_lua"; then
+        warn "monitors.lua has its own rule for $line; the kept layout loads later and wins"
+      fi
+    done < <(intent_json | jq -r '.displays | keys[]')
+  fi
+
+  local dupes
+  dupes="$(jq -r 'group_by(.make + "|" + .model + "|" + (.serial | gsub("^\\s+|\\s+$"; ""))) | map(select(length > 1) | map(.name) | join(" and ")) | .[]' <<<"$live")"
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
+    ok "$line report the same make, model and serial; rules key them by connector, and their EDID hashes tell them apart"
+  done <<<"$dupes"
+
+  # exit, not return: a non-zero return would trip the ERR trap's "aborted"
+  # line, and this exit is the verdict, not an accident.
+  (( status == 0 )) || exit 1
 }
 
 cmd="${1:-}"; shift || true
@@ -499,11 +889,13 @@ case "$cmd" in
   revert) acquire_lock; cmd_revert "$@" ;;
   persist) acquire_lock; cmd_persist ;;
   hdr) acquire_lock; cmd_hdr "$@" ;;
+  recover) acquire_lock; cmd_recover ;;
   brightness) cmd_brightness "$@" ;;
   identify) cmd_identify ;;
   open) cmd_open ;;
   edid) [[ -n ${1:-} ]] || die "edid needs a display name"; edid_for "$1" ;;
   icc) cmd_icc "$@" ;;
+  doctor) cmd_doctor ;;
   -h|--help|help|"") usage ;;
   *) usage >&2; die "unknown command $cmd" ;;
 esac
