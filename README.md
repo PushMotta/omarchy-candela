@@ -132,3 +132,8 @@ bin/               omarchy-displays, omarchy-displays-edid
 test/              all, *-test.sh, model.test.js, fixtures/
 design/            the visual design review (HTML, real theme tokens)
 ```
+
+## Licence
+
+MIT, the same as Omarchy itself, so the code can move upstream without a
+licensing question if it ever earns a place there.
