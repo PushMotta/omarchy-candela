@@ -8,8 +8,8 @@ import qs.Ui
 import "Model.js" as Model
 import "components"
 
-// Headless singleton behind the Displays popup and studio. Owns the state
-// cache (one `omarchy-displays state` call, shared), the hotplug listener,
+// Headless singleton behind the Candela popup and studio. Owns the state
+// cache (one `omarchy-candela state` call, shared), the hotplug listener,
 // the pending-apply countdown, the identify badges, and the plugin's IPC
 // target. Surfaces read `state` and call apply/keep/revert here so there is
 // exactly one process talking to the backend at a time.
@@ -20,13 +20,13 @@ Item {
   property var manifest: null
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
 
-  readonly property string pluginId: manifest && manifest.id ? String(manifest.id) : "pmotta.displays"
+  readonly property string pluginId: manifest && manifest.id ? String(manifest.id) : "io.github.pushmotta.candela"
   readonly property string pluginDir: {
     var u = String(Qt.resolvedUrl("."))
     if (u.indexOf("file://") === 0) u = u.substring(7)
     return u.replace(/\/$/, "")
   }
-  readonly property string cli: pluginDir + "/bin/omarchy-displays"
+  readonly property string cli: pluginDir + "/bin/omarchy-candela"
 
   // ------------------------------------------------------------ state
   property var state: null
@@ -76,7 +76,7 @@ Item {
           root.stateChangedExternally()
           root.maybeRecover()
         } else {
-          root.lastError = "omarchy-displays state returned no data"
+          root.lastError = "omarchy-candela state returned no data"
         }
         if (root.refreshQueued) { root.refreshQueued = false; root.refresh() }
       }
@@ -308,7 +308,7 @@ Item {
   // The backend rewrites pending.json on every apply/keep/revert, including
   // the detached revert timer, so watching it keeps the surfaces truthful.
   FileView {
-    path: Quickshell.env("HOME") + "/.local/state/omarchy/displays/pending.json"
+    path: Quickshell.env("HOME") + "/.local/state/omarchy/candela/pending.json"
     watchChanges: true
     printErrors: false
     onFileChanged: root.scheduleRefresh()
@@ -420,7 +420,7 @@ Item {
       visible: shown
       color: "transparent"
       exclusionMode: ExclusionMode.Ignore
-      WlrLayershell.namespace: "omarchy-displays-pending"
+      WlrLayershell.namespace: "omarchy-candela-pending"
       WlrLayershell.layer: WlrLayer.Overlay
       WlrLayershell.keyboardFocus: ownsKeyboard ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
       anchors { top: true; left: true; right: true }
@@ -541,7 +541,7 @@ Item {
       anchors { top: true; bottom: true; left: true; right: true }
       color: "transparent"
       exclusionMode: ExclusionMode.Ignore
-      WlrLayershell.namespace: "omarchy-displays-identify"
+      WlrLayershell.namespace: "omarchy-candela-identify"
       WlrLayershell.layer: WlrLayer.Overlay
       WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
       mask: Region {}

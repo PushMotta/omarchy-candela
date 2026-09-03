@@ -8,7 +8,7 @@ import qs.Ui
 import "Model.js" as Model
 import "components"
 
-// The Displays studio: arrangement canvas, per-display inspector, and an
+// The Candela studio: arrangement canvas, per-display inspector, and an
 // action bar with the keys printed. Every change is staged in `draft`; Apply
 // sends the whole draft as one timed change, and the countdown bar offers
 // Keep / Revert until the backend's timer fires.
@@ -20,7 +20,7 @@ Item {
   property var service: null
   property string omarchyPath: Quickshell.env("OMARCHY_PATH")
 
-  readonly property string pluginId: manifest && manifest.id ? String(manifest.id) : "pmotta.displays"
+  readonly property string pluginId: manifest && manifest.id ? String(manifest.id) : "io.github.pushmotta.candela"
   property bool opened: false
   property var targetScreen: null
 
@@ -489,7 +489,7 @@ Item {
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore
-    WlrLayershell.namespace: "omarchy-displays-studio"
+    WlrLayershell.namespace: "omarchy-candela-studio"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
 
@@ -532,7 +532,7 @@ Item {
             Text {
               id: titleText
               textFormat: Text.PlainText
-              text: "Displays"
+              text: "Candela"
               color: root.foreground
               font.family: root.fontFamily; font.pixelSize: Style.font.heading; font.bold: true
               anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter

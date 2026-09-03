@@ -1,4 +1,4 @@
-# Displays for Omarchy
+# Candela
 
 Arrange displays, drive them at their real capabilities, and switch colour
 modes (SDR, wide gamut, HDR) with a safe apply and revert. An Omarchy shell
@@ -30,43 +30,43 @@ The studio: arrangement canvas on the left, inspector on the right, keyboard
 hints and the apply bar along the bottom. The gamut plot draws the panel's
 EDID primaries (solid) against BT.2020, P3 and sRGB (dashed).
 
-![The Displays studio, showing two MateView panels arranged side by side with the inspector open on DP-1](docs/studio.png)
+![The Candela studio, showing two MateView panels arranged side by side with the inspector open on DP-1](docs/studio.png)
 
 The bar popup, for what you change often. `SDR · Wide · HDR` is gated by what
 the panel actually reports, and the line under it says what the compositor is
 doing right now rather than what was asked for.
 
-<img src="docs/popup.png" alt="The Displays bar popup, showing brightness, scale, colour mode and the display list" width="330">
+<img src="docs/popup.png" alt="The Candela bar popup, showing brightness, scale, colour mode and the display list" width="330">
 
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/PushMotta/omarchy-displays.git --enable
+omarchy plugin add https://github.com/PushMotta/omarchy-candela.git --enable
 ```
 
-That clones the repo into `~/.config/omarchy/plugins/pmotta.displays`, validates
+That clones the repo into `~/.config/omarchy/plugins/io.github.pushmotta.candela`, validates
 the manifest, and enables the plugin over IPC. Nothing is executed from the
 repo during install, no hook runs, and no sudo is needed. Without `--enable`
 it asks first, so you can read the code before switching it on. To develop
 against a checkout instead, symlink the checkout to that same path and run
 `omarchy-shell shell rescanPlugins`.
 
-Update with `omarchy plugin update pmotta.displays`; it shows the diff before
+Update with `omarchy plugin update io.github.pushmotta.candela`; it shows the diff before
 applying it.
 
 The bar widget lands in the right section. Optional keybindings, in
 `~/.config/hypr/bindings.lua`:
 
 ```lua
-o.bind("SUPER + CTRL + D", "Displays", "omarchy-shell pmotta.displays popup")   -- replaces the built-in Display popup
-o.bind("SUPER + CTRL + SHIFT + D", "Displays studio", "omarchy-shell shell toggle pmotta.displays")
+o.bind("SUPER + CTRL + D", "Candela", "omarchy-shell io.github.pushmotta.candela popup")   -- replaces the built-in Display popup
+o.bind("SUPER + CTRL + SHIFT + D", "Candela studio", "omarchy-shell shell toggle io.github.pushmotta.candela")
 ```
 
 To make **Setup › Monitors** open the studio instead of the config editor, add
 to `~/.config/omarchy/extensions/omarchy-menu.jsonc` (it hot-reloads):
 
 ```jsonc
-"setup.monitors": {"icon":"󰍹","label":"Monitors","action":"omarchy-shell shell toggle pmotta.displays"},
+"setup.monitors": {"icon":"󰍹","label":"Monitors","action":"omarchy-shell shell toggle io.github.pushmotta.candela"},
 ```
 
 Requirements already present on Omarchy: `hyprctl`, `jq`, `edid-decode`
@@ -78,8 +78,8 @@ touches is a transient `systemd --user` timer for its own revert countdown.
 ## Remove
 
 ```bash
-omarchy plugin disable pmotta.displays
-omarchy plugin remove pmotta.displays
+omarchy plugin disable io.github.pushmotta.candela
+omarchy plugin remove io.github.pushmotta.candela
 ```
 
 `remove` deletes the git checkout (or unlinks a symlink). It does not touch
@@ -87,7 +87,7 @@ what the plugin wrote for you, so that your display layout survives a
 reinstall. To go back to a stock machine, also:
 
 ```bash
-rm -rf ~/.local/state/omarchy/displays                           # intent and pending state
+rm -rf ~/.local/state/omarchy/candela                           # intent and pending state
 rm -f  ~/.local/state/omarchy/toggles/hypr/displays-{layout,pending}.lua   # the generated rules
 hyprctl reload                                                   # back to your own monitors.lua
 ```
@@ -139,26 +139,26 @@ change like every other field and needs `a` to apply.
 
 ## Command line
 
-Everything the UI does is a subcommand of `bin/omarchy-displays`. It is not
+Everything the UI does is a subcommand of `bin/omarchy-candela`. It is not
 on your PATH by itself; the popup, the studio and the revert timer call it by
 its full path. To use it from a terminal, link it once:
 
 ```bash
-ln -s ~/.config/omarchy/plugins/pmotta.displays/bin/omarchy-displays ~/.local/bin/
+ln -s ~/.config/omarchy/plugins/io.github.pushmotta.candela/bin/omarchy-candela ~/.local/bin/
 ```
 
 ```
-omarchy-displays state                          # JSON: displays, EDID capabilities, live + kept config, pending
-omarchy-displays hdr on|off|wide [--display DP-2] [--sdr-white 203] [--now]
-omarchy-displays apply [--now] '{"displays":[{"name":"DP-2","scale":2}]}'
-omarchy-displays keep | revert | persist
-omarchy-displays revert --expired --token <t>   # the timer's form; does nothing unless <t> still matches pending
-omarchy-displays brightness DP-2 [+5%|5%-|40%]
-omarchy-displays identify | open
-omarchy-displays edid DP-2
-omarchy-displays icc list
-omarchy-displays recover                        # every display off? switch the built-in (or first) one back on
-omarchy-displays doctor                         # is the layout loaded, does the compositor agree, what could fight it
+omarchy-candela state                          # JSON: displays, EDID capabilities, live + kept config, pending
+omarchy-candela hdr on|off|wide [--display DP-2] [--sdr-white 203] [--now]
+omarchy-candela apply [--now] '{"displays":[{"name":"DP-2","scale":2}]}'
+omarchy-candela keep | revert | persist
+omarchy-candela revert --expired --token <t>   # the timer's form; does nothing unless <t> still matches pending
+omarchy-candela brightness DP-2 [+5%|5%-|40%]
+omarchy-candela identify | open
+omarchy-candela edid DP-2
+omarchy-candela icc list
+omarchy-candela recover                        # every display off? switch the built-in (or first) one back on
+omarchy-candela doctor                         # is the layout loaded, does the compositor agree, what could fight it
 ```
 
 Change JSON accepts, per display: `mode`, `position`, `scale`, `transform`,
@@ -173,12 +173,12 @@ preset is refused while `supports_hdr` is forced off (`-1`).
 
 ## How it persists
 
-- `~/.local/state/omarchy/displays/intent.json` — what you chose, per connector.
-- `~/.local/state/omarchy/displays/pending.json` — an applied-but-not-kept change with its expiry and transaction token.
-- `~/.local/state/omarchy/toggles/hypr/displays-pending.lua` — the pending
+- `~/.local/state/omarchy/candela/intent.json` — what you chose, per connector.
+- `~/.local/state/omarchy/candela/pending.json` — an applied-but-not-kept change with its expiry and transaction token.
+- `~/.local/state/omarchy/toggles/hypr/candela-pending.lua` — the pending
   change in the same form as the layout, loaded after it, for as long as the
   change is pending.
-- `~/.local/state/omarchy/toggles/hypr/displays-layout.lua` — generated from
+- `~/.local/state/omarchy/toggles/hypr/candela-layout.lua` — generated from
   intent plus live geometry. Omarchy loads every file in that directory after
   your own `~/.config/hypr/monitors.lua`, so these rules win, and your file is
   never parsed or edited. Every connected display gets a full rule: mixing an
@@ -245,7 +245,7 @@ Layout:
 manifest.json      kinds: bar-widget (Popup.qml), overlay (Studio.qml), service (Service.qml)
 Model.js           pure logic shared by QML and tests
 components/        ApplyBar, DisplayCanvas, GamutPlot
-bin/               omarchy-displays, omarchy-displays-edid
+bin/               omarchy-candela, omarchy-candela-edid
 test/              all, *-test.sh, fake-hyprctl.sh (a compositor that keeps state), model.test.js, fixtures/
 design/            the visual design review (HTML, real theme tokens)
 ```

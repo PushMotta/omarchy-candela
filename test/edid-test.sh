@@ -3,7 +3,7 @@
 set -euo pipefail
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
-out="$("$ROOT/bin/omarchy-displays-edid" "$FIXTURES/mateview-dp1.edid")"
+out="$("$ROOT/bin/omarchy-candela-edid" "$FIXTURES/mateview-dp1.edid")"
 jq -e . <<<"$out" >/dev/null || fail "edid output is valid JSON" "$out"
 pass "edid output is valid JSON"
 
@@ -30,13 +30,13 @@ pass "all EDID fields parsed"
 
 sandbox="$(make_sandbox)"
 trap 'rm -rf "$sandbox"' EXIT
-byname="$(OMARCHY_DRM_PATH="$sandbox/drm" "$ROOT/bin/omarchy-displays-edid" DP-2)"
+byname="$(OMARCHY_DRM_PATH="$sandbox/drm" "$ROOT/bin/omarchy-candela-edid" DP-2)"
 assert_eq "$(jq -r .connector <<<"$byname")" "DP-2" "lookup by connector name"
-missing="$(OMARCHY_DRM_PATH="$sandbox/drm" "$ROOT/bin/omarchy-displays-edid" HDMI-A-9)"
+missing="$(OMARCHY_DRM_PATH="$sandbox/drm" "$ROOT/bin/omarchy-candela-edid" HDMI-A-9)"
 assert_eq "$(jq -r .available <<<"$missing")" "false" "missing connector reports unavailable"
 pass "connector lookup"
 
-if OMARCHY_DRM_PATH="$sandbox/drm" "$ROOT/bin/omarchy-displays-edid" 'DP-2;rm' 2>/dev/null; then
+if OMARCHY_DRM_PATH="$sandbox/drm" "$ROOT/bin/omarchy-candela-edid" 'DP-2;rm' 2>/dev/null; then
   fail "unsafe connector name rejected"
 fi
 pass "unsafe connector name rejected"

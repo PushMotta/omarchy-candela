@@ -62,11 +62,11 @@ case "$1 $2" in
       echo "fake hyprctl: eval rejected" >&2
       exit 1
     fi
-    if [[ $2 == *"assert(omarchy_displays_layout_probe == "* ]]; then
-      want="$(sed -nE 's/.*omarchy_displays_layout_probe == "([^"]+)".*/\1/p' <<<"$2")"
+    if [[ $2 == *"assert(omarchy_candela_layout_probe == "* ]]; then
+      want="$(sed -nE 's/.*omarchy_candela_layout_probe == "([^"]+)".*/\1/p' <<<"$2")"
       have="$(cat "$dir/probe.txt" 2>/dev/null || true)"
       if [[ -n $want && $want == "$have" ]]; then echo ok; exit 0; fi
-      echo "error: [string ...]: displays-layout.lua did not run"
+      echo "error: [string ...]: candela-layout.lua did not run"
       exit 7
     fi
     apply_rules <<<"$2"
@@ -77,10 +77,10 @@ case "$1 $2" in
     : > "$dir/probe.txt"
     if [[ ${FAKE_HYPRCTL_TOGGLES_NOT_LOADED:-} != 1 ]]; then
       # Sorted like require_all: displays-layout, displays-pending, internal-monitor-*.
-      for f in "$dir/state/displays-layout.lua" "$dir/state/displays-pending.lua" "$dir/state/internal-monitor-disable.lua"; do
+      for f in "$dir/state/candela-layout.lua" "$dir/state/candela-pending.lua" "$dir/state/internal-monitor-disable.lua"; do
         [[ -f $f ]] || continue
         apply_rules < "$f"
-        sed -nE 's/^omarchy_displays_layout_probe = "([^"]+)"$/\1/p' "$f" >> "$dir/probe.txt"
+        sed -nE 's/^omarchy_candela_layout_probe = "([^"]+)"$/\1/p' "$f" >> "$dir/probe.txt"
       done
     fi
     echo ok

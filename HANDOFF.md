@@ -1,4 +1,4 @@
-# Handoff — Displays for Omarchy
+# Handoff — Candela
 
 Written 3 September 2026 at the end of session 1, extended after sessions 2 and 3. Read this first in a new session, then `DESIGN.md` for the why and `README.md` for the how.
 
@@ -19,7 +19,7 @@ warnings after restart:
   screen with the service and closes itself if that screen disappears;
   popups bump `surfacesChanged()` on open/close. Seen live on both
   MateViews, with and without the studio open.
-- **Pending change on disk**: `displays-pending.lua` in the toggles dir,
+- **Pending change on disk**: `candela-pending.lua` in the toggles dir,
   sorted after the layout and before Omarchy's `internal-monitor-*`, so a
   foreign reload (theme change, Omarchy's clamshell script) re-applies the
   preview instead of reverting it. Revert deletes it and reloads.
@@ -28,7 +28,7 @@ warnings after restart:
   not land on is unwound, naming the field. Keep, `apply --now` and revert
   read back too; a revert that does not restore exits 1 so the shell shows
   it.
-- **Load probe**: the layout ends with `omarchy_displays_layout_probe =
+- **Load probe**: the layout ends with `omarchy_candela_layout_probe =
   "<token>"`; keep asserts it through `hyprctl eval` after the reload and
   `doctor` asks too. Verified live on 0.56.2.
 - **Built-in panel through Omarchy's toggle** (DESIGN.md §6.7): off writes
@@ -93,17 +93,17 @@ The plugin exists, is installed on this machine, and works end to end on real ha
 fad17e1 Polish: compact pending strip in the popup, plain numbers in position fields
 5091fd4 Fix expired revert killing its own unit; follow live focus; guard bar reads
 fe952b7 Fix live apply: hyprctl parses a leading Lua comment as a flag
-44d3278 Displays plugin 0.1: backend, popup, studio, service
-06414e0 Design review 01: spec and mockups for Displays
+44d3278 Candela plugin 0.1: backend, popup, studio, service
+06414e0 Design review 01: spec and mockups for Candela
 ```
 
-Pushed to https://github.com/PushMotta/omarchy-displays (MIT); `main` tracks `origin/main`.
+Pushed to https://github.com/PushMotta/omarchy-candela (MIT); `main` tracks `origin/main`.
 
 ### Verified live (with screenshots, on the two Huawei MateViews, NVIDIA 610.57.04, Hyprland 0.56.2, Omarchy 4.0.2)
 
 - Popup renders in the bar with DDC brightness, EDID-gated `SDR · Wide · HDR`, SDR white slider in HDR with the 203 cd/m² mark, display list with focused / HDR tags, Identify, Arrange, and the pending countdown strip under the hero.
 - Studio renders with canvas, panel identity + EDID capability line + gamut plot, signal, geometry (scale, rotation, X/Y, mirror, enabled), colour, Advanced.
-- `omarchy-displays hdr on --display DP-2` puts DP-2 in `XBGR2101010` / `cm=hdr` with `sdr_max_luminance = 203` within a second. `keep` writes a clean layout file; `hyprctl configerrors` is empty. A change left alone reverts through the detached systemd timer (`omarchy-displays-revert.timer`). `hdr off --now` returns to sRGB.
+- `omarchy-candela hdr on --display DP-2` puts DP-2 in `XBGR2101010` / `cm=hdr` with `sdr_max_luminance = 203` within a second. `keep` writes a clean layout file; `hyprctl configerrors` is empty. A change left alone reverts through the detached systemd timer (`omarchy-candela-revert.timer`). `hdr off --now` returns to sRGB.
 - Identify badges appear on each screen. Shell journal clean after every restart.
 - Test suite green: `./test/all` (bash sandbox with fake hyprctl + EDID fixture, node tests for Model.js).
 
@@ -121,7 +121,7 @@ is instant; a real mode switch on NVIDIA may need longer.
 - **Keyboard navigation** in popup and studio. `wtype` sends keys to the focused toplevel, not the layer surface, so it could not be automated. It follows the first-party cursor pattern exactly; needs a real keyboard pass: j/k/h/l/Enter/Esc in the popup, Tab between canvas/inspector/actions, arrows to nudge, `a`/`r`/`i`, `1`–`9`.
 - Mouse dragging on the studio canvas, snapping guides, overlap refusal.
 - Live rotation, mirror, disable/enable, mode and VRR changes through the studio (backend paths are unit-tested; only HDR and scale were exercised live).
-- ICC picker with real profiles (none installed here; `omarchy-displays icc list` returns `[]`).
+- ICC picker with real profiles (none installed here; `omarchy-candela icc list` returns `[]`).
 - Hotplug refresh (socat listener on Hyprland's socket2) and behaviour with one bar per screen when a display is removed.
 - Whether DP-2 visibly showed an HDR badge / picture change from the monitor's side. Only Pedro can see that.
 - **Revert fidelity across every field, live.** Revert is `hyprctl reload` of the
@@ -136,10 +136,24 @@ is instant; a real mode switch on NVIDIA may need longer.
 
 ## How this machine is wired
 
-- Plugin source: this directory. Installed as a symlink `~/.config/omarchy/plugins/pmotta.displays` → here, enabled in the bar's right section (`~/.config/omarchy/shell.json`).
+**Renamed 3 September 2026 (evening): the plugin is Candela.** Id
+`io.github.pushmotta.candela` (permanent marketplace form), name "Candela", CLI
+`omarchy-candela`, repo `PushMotta/omarchy-candela` (GitHub redirects the old
+`omarchy-displays` URL). Everything below was migrated on this machine, with
+`.bak.<epoch>` copies of `shell.json` and the menu override:
+`~/.config/omarchy/plugins/io.github.pushmotta.candela` (symlink → here),
+`~/.local/bin/omarchy-candela`, state in `~/.local/state/omarchy/candela/`,
+layout rule `~/.local/state/omarchy/toggles/hypr/candela-layout.lua`
+(regenerated by `persist`, probe global `omarchy_candela_layout_probe`), pending
+preview `candela-pending.lua`, revert unit `omarchy-candela-revert`, env
+`OMARCHY_CANDELA_*`. Verified after the reload: identical modes, no config
+errors, `doctor` green, both surfaces summon by the new id. The old
+`pmotta.displays` / `omarchy-displays` names exist nowhere any more.
+
+- Plugin source: this directory. Installed as a symlink `~/.config/omarchy/plugins/io.github.pushmotta.candela` → here, enabled in the bar's right section (`~/.config/omarchy/shell.json`).
 - `~/.config/omarchy/extensions/omarchy-menu.jsonc` has a `setup.monitors` override that opens the studio (backup of the original beside it with a `.bak.<epoch>` suffix).
-- Generated state: `~/.local/state/omarchy/displays/{intent.json,pending.json}` and `~/.local/state/omarchy/toggles/hypr/displays-layout.lua`. The layout file currently declares both displays explicitly at their normal geometry (`scale 1.6`, `bitdepth 8`, `cm srgb`). Deleting the layout file and `hyprctl reload` returns the machine to the stock catch-all rule.
-- Super+Ctrl+D still opens Omarchy's built-in Display popup. README has the one-line rebinding to `omarchy-shell pmotta.displays popup`.
+- Generated state: `~/.local/state/omarchy/candela/{intent.json,pending.json}` and `~/.local/state/omarchy/toggles/hypr/candela-layout.lua`. The layout file currently declares both displays explicitly at their normal geometry (`scale 1.6`, `bitdepth 8`, `cm srgb`). Deleting the layout file and `hyprctl reload` returns the machine to the stock catch-all rule.
+- Super+Ctrl+D still opens Omarchy's built-in Display popup. README has the one-line rebinding to `omarchy-shell io.github.pushmotta.candela popup`.
 - Design review artifact (mockups in real theme tokens): https://claude.ai/code/artifact/f95e7efb-ad4f-473b-b663-00fc077cd274 — republish with that `url` to keep the link; source is `design/displays-design-review.html`.
 
 ## Development loop
@@ -149,9 +163,9 @@ is instant; a real mode switch on NVIDIA may need longer.
 omarchy-restart-shell                        # REQUIRED after QML edits: a symlinked plugin is not hot-reloaded,
                                              # and `omarchy-shell shell rescanPlugins` does not replace compiled QML
 journalctl --user -t omarchy-shell --since -2min | grep -iE 'pmotta|TypeError|Cannot'
-omarchy-shell pmotta.displays popup          # toggle the bar popup (opens on Hyprland's live focused screen)
-omarchy-shell shell toggle pmotta.displays   # toggle the studio overlay
-omarchy-shell pmotta.displays state | jq     # what the service holds
+omarchy-shell io.github.pushmotta.candela popup          # toggle the bar popup (opens on Hyprland's live focused screen)
+omarchy-shell shell toggle io.github.pushmotta.candela   # toggle the studio overlay
+omarchy-shell io.github.pushmotta.candela state | jq     # what the service holds
 grim -o DP-2 shot.png                        # screenshot one output; `omarchy capture screenshot` dismisses popups
 hyprctl dispatch 'hl.dsp.focus({ monitor = "DP-2" })'   # keyword-form `focusmonitor` no longer parses on 0.56
 ```
@@ -178,7 +192,7 @@ Live testing flips Pedro's real displays. He asked to be **warned before** anyth
 
 ## Decisions taken (do not re-litigate)
 
-Plugin at first-party quality rather than an upstream PR (upstream issues are closed, ~10 unreviewed display PRs, PR #7340 stalled). Fresh design rather than building on #7340 or the existing display tools. Two surfaces (popup + studio). SDR white default 203 cd/m² clamped to max-average. Wide gamut is a first-class third state. Generated layout file in the toggles dir, never editing monitors.lua. Plugin id `pmotta.displays` / name "Displays" are placeholders; a rename touches the manifest `id`, the `~/.config/omarchy/plugins` symlink name, the `setup.monitors` menu override, and README's commands — the QML fallbacks and the backend's `OMARCHY_DISPLAYS_PLUGIN_ID` default are just that, defaults, not the source of truth. Probe availability still unknown.
+Plugin at first-party quality rather than an upstream PR (upstream issues are closed, ~10 unreviewed display PRs, PR #7340 stalled). Fresh design rather than building on #7340 or the existing display tools. Two surfaces (popup + studio). SDR white default 203 cd/m² clamped to max-average. Wide gamut is a first-class third state. Generated layout file in the toggles dir, never editing monitors.lua. Plugin id `io.github.pushmotta.candela` / name "Displays" are placeholders; a rename touches the manifest `id`, the `~/.config/omarchy/plugins` symlink name, the `setup.monitors` menu override, and README's commands — the QML fallbacks and the backend's `OMARCHY_CANDELA_PLUGIN_ID` default are just that, defaults, not the source of truth. Probe availability still unknown.
 
 ## Next steps, in order
 
@@ -209,7 +223,7 @@ manifest.json             kinds: bar-widget (Popup.qml), overlay (Studio.qml), s
 Popup.qml Studio.qml Service.qml
 components/ApplyBar.qml DisplayCanvas.qml GamutPlot.qml
 Model.js                  shared pure logic (scale cleaning, colour modes, SDR white mapping, snapping)
-bin/omarchy-displays bin/omarchy-displays-edid
+bin/omarchy-candela bin/omarchy-candela-edid
 test/all test/base-test.sh test/fake-hyprctl.sh test/cli-test.sh test/edid-test.sh test/model.test.js
 test/fixtures/            hyprctl-monitors.json (desk), hyprctl-monitors-laptop.json, mateview-dp1.edid
 design/displays-design-review.html

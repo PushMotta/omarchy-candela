@@ -2,17 +2,17 @@
 
 # omarchy:summary=Print a display's EDID capabilities as JSON
 # omarchy:args=<connector|edid-file>
-# omarchy:examples=omarchy-displays-edid DP-2 | omarchy-displays-edid /sys/class/drm/card1-DP-2/edid
+# omarchy:examples=omarchy-candela-edid DP-2 | omarchy-candela-edid /sys/class/drm/card1-DP-2/edid
 
 # Reads the panel's own claims: HDR static metadata (ST 2084, luminances),
 # colorimetry (BT.2020, DCI-P3), bits per primary, chromaticities, physical
 # size. Monitors lie in EDID; the numbers are reported, never trusted blindly.
-# The JSON shape is consumed by `omarchy-displays state` and Model.js.
+# The JSON shape is consumed by `omarchy-candela state` and Model.js.
 
 set -euo pipefail
 
 target="${1:-}"
-[[ -n $target ]] || { echo "Usage: omarchy-displays-edid <connector|edid-file>" >&2; exit 1; }
+[[ -n $target ]] || { echo "Usage: omarchy-candela-edid <connector|edid-file>" >&2; exit 1; }
 
 drm_path="${OMARCHY_DRM_PATH:-/sys/class/drm}"
 
@@ -23,7 +23,7 @@ if [[ -f $target ]]; then
   connector="$(basename "$(dirname "$target")")"
   connector="${connector#card*-}"
 else
-  [[ $target =~ ^[A-Za-z0-9._-]+$ ]] || { echo "omarchy-displays-edid: refusing unsafe connector name" >&2; exit 1; }
+  [[ $target =~ ^[A-Za-z0-9._-]+$ ]] || { echo "omarchy-candela-edid: refusing unsafe connector name" >&2; exit 1; }
   connector="$target"
   for candidate in "$drm_path"/card*-"$target"/edid; do
     [[ -e $candidate ]] || continue

@@ -1,4 +1,4 @@
-# Displays for Omarchy — design specification
+# Candela — design specification
 
 Draft 1 · 3 September 2026 · status: for review before any QML is written.
 
@@ -40,7 +40,7 @@ The bar of quality is not "has the knobs". It is: a colour professional opens it
 
 ## 3. Surfaces
 
-### 3.1 Bar popup — "Displays" (kind: bar-widget)
+### 3.1 Bar popup — "Candela" (kind: bar-widget)
 
 Replaces the built-in Display widget in the bar (user moves it; the built-in stays available). Width 380 logical px, height ≤ 560, same chrome as audio/bluetooth popups.
 
@@ -54,9 +54,9 @@ Sections, top to bottom:
 - **Displays.** One row per display: enabled state, mirror badge, focused dot. Clicking a row selects that display; the power control at its end switches it. Switching off arms and asks for a confirming press, because it blanks a screen the user may be reading; switching on is immediate. Last enabled display cannot be disabled.
 - **Actions.** `Identify` (flashes connector name on each display for 2 s) and `Arrange…` (opens the studio).
 
-### 3.2 Studio overlay — "Displays" (kind: overlay)
+### 3.2 Studio overlay — "Candela" (kind: overlay)
 
-Summoned from Setup › Monitors (replacing the editor action), from the popup's Arrange…, and via `omarchy-displays open`. Centred card ~1100×720 logical px over the shell scrim, `Color.popups` surface tokens, Esc closes.
+Summoned from Setup › Monitors (replacing the editor action), from the popup's Arrange…, and via `omarchy-candela open`. Centred card ~1100×720 logical px over the shell scrim, `Color.popups` surface tokens, Esc closes.
 
 Layout: **canvas** left (~60 %), **inspector** right (~40 %), **action bar** bottom.
 
@@ -100,16 +100,16 @@ overlap: the others have no independent position.
 Everything the UI does is a command, so it is scriptable and bindable:
 
 ```
-omarchy-displays state                  # JSON: displays, capabilities, live and persisted config
-omarchy-displays apply  <json|@file>    # live apply via hyprctl eval, starts revert timer
-omarchy-displays keep                   # confirm pending apply, persist
-omarchy-displays revert                 # re-apply last persisted state
-omarchy-displays revert --expired --token <t>   # the timer's form: a no-op unless <t> still matches pending
-omarchy-displays persist                # write generated Lua from live state
-omarchy-displays identify [connector]
-omarchy-displays hdr <on|off|wide> [--display DP-2] [--sdr-white 203]
-omarchy-displays edid <connector>       # parsed capabilities as JSON
-omarchy-displays icc list
+omarchy-candela state                  # JSON: displays, capabilities, live and persisted config
+omarchy-candela apply  <json|@file>    # live apply via hyprctl eval, starts revert timer
+omarchy-candela keep                   # confirm pending apply, persist
+omarchy-candela revert                 # re-apply last persisted state
+omarchy-candela revert --expired --token <t>   # the timer's form: a no-op unless <t> still matches pending
+omarchy-candela persist                # write generated Lua from live state
+omarchy-candela identify [connector]
+omarchy-candela hdr <on|off|wide> [--display DP-2] [--sdr-white 203]
+omarchy-candela edid <connector>       # parsed capabilities as JSON
+omarchy-candela icc list
 ```
 
 ## 4. Colour model
@@ -171,7 +171,7 @@ Mouse hover moves the same cursor; there is never a second highlight.
 ### 6.1 Plugin layout
 
 ```
-omarchy-displays/                  # git repo; symlinked to ~/.config/omarchy/plugins/pmotta.displays
+omarchy-candela/                  # git repo; symlinked to ~/.config/omarchy/plugins/io.github.pushmotta.candela
   manifest.json                    # kinds: bar-widget, overlay, service
   Popup.qml                        # bar widget + popup
   Studio.qml                       # overlay
@@ -179,13 +179,13 @@ omarchy-displays/                  # git repo; symlinked to ~/.config/omarchy/pl
   Service.qml                      # hotplug listener, state cache, revert-timer watcher
   components/                      # DisplayCanvas.qml, GamutTriangle.qml, NitsSlider.qml, ApplyBar.qml
   Model.js                         # pure logic: scale cleaning, snapping, nits mapping, mode mapping, Lua generation
-  bin/omarchy-displays             # single bash entry with subcommands (house style: bash 5, jq)
-  bin/omarchy-displays-*           # helpers
+  bin/omarchy-candela             # single bash entry with subcommands (house style: bash 5, jq)
+  bin/omarchy-candela-*           # helpers
   test/                            # bash tests for bin, node tests for Model.js (same shape as upstream test/shell.d)
   README.md
 ```
 
-The plugin id is provisional (`pmotta.displays`); rename is one manifest field.
+The plugin id is provisional (`io.github.pushmotta.candela`); rename is one manifest field.
 
 ### 6.2 Backend
 
@@ -193,9 +193,9 @@ Bash, following AGENTS.md style, reading only `hyprctl -j`, `edid-decode`, `ddcu
 
 ### 6.3 Persistence
 
-Generated Lua at `~/.local/state/omarchy/toggles/hypr/displays-layout.lua`, which Omarchy already loads on every reload after the user's own `monitors.lua`. One `hl.monitor` per managed display with all managed fields explicit. Header says it is generated and names the command that owns it. The user's `monitors.lua` is never parsed or edited. The file ends by setting a global to a per-keep probe token; `hyprctl eval` can assert it afterwards, which is the only proof that the toggles directory is still being loaded.
+Generated Lua at `~/.local/state/omarchy/toggles/hypr/candela-layout.lua`, which Omarchy already loads on every reload after the user's own `monitors.lua`. One `hl.monitor` per managed display with all managed fields explicit. Header says it is generated and names the command that owns it. The user's `monitors.lua` is never parsed or edited. The file ends by setting a global to a per-keep probe token; `hyprctl eval` can assert it afterwards, which is the only proof that the toggles directory is still being loaded.
 
-The pending change is written beside it as `displays-pending.lua`, in the same form, for as long as it is pending. Omarchy loads the directory in sorted filename order, so the pending file loads after the layout and before Omarchy's own `internal-monitor-*` toggles. A reload from anywhere else during the window, and Omarchy issues them from its clamshell script and on theme changes, therefore re-applies the preview instead of reverting it. Revert deletes the file and reloads.
+The pending change is written beside it as `candela-pending.lua`, in the same form, for as long as it is pending. Omarchy loads the directory in sorted filename order, so the pending file loads after the layout and before Omarchy's own `internal-monitor-*` toggles. A reload from anywhere else during the window, and Omarchy issues them from its clamshell script and on theme changes, therefore re-applies the preview instead of reverting it. Revert deletes the file and reloads.
 
 A display switched off keeps its live mode, position, scale and rotation in intent at the moment it goes off, so its rule brings it back where it was rather than at "preferred" and 0x0, which is what its live geometry reads once it is off.
 
@@ -242,7 +242,7 @@ So the panel's off state is that toggle: switching the panel off writes the same
 1. Two surfaces, section order as in §3. **Approved.**
 2. SDR white default 203 cd/m² clamped to max-average. **Approved.**
 3. Wide as a first-class third state. **Approved.**
-4. Plugin id `pmotta.displays`, name "Displays". **Kept as placeholders; rename is one manifest field.**
+4. Plugin id `io.github.pushmotta.candela`, name "Candela", repo `omarchy-candela`, CLI `omarchy-candela`. **Chosen 3 Sep 2026 (was the placeholder `pmotta.displays` / "Displays"): the name says light and precision, which is the differentiator, and the id follows the marketplace's permanent `io.github.<user>.<name>` form.**
 5. Generated state file in the toggles directory. **Approved.**
 6. Probe availability: **still unknown**; WS-0 numbers wait on it.
 

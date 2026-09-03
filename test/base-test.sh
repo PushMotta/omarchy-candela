@@ -88,9 +88,9 @@ run_cli() {
   XDG_RUNTIME_DIR="$sandbox/runtime" \
   HYPRLAND_INSTANCE_SIGNATURE="" \
   OMARCHY_DRM_PATH="$sandbox/drm" \
-  OMARCHY_DISPLAYS_STATE_DIR="$sandbox/state" \
-  OMARCHY_DISPLAYS_LUA_FILE="$sandbox/state/displays-layout.lua" \
-  OMARCHY_DISPLAYS_VERIFY_SECONDS="${OMARCHY_DISPLAYS_VERIFY_SECONDS:-0.5}" \
+  OMARCHY_CANDELA_STATE_DIR="$sandbox/state" \
+  OMARCHY_CANDELA_LUA_FILE="$sandbox/state/candela-layout.lua" \
+  OMARCHY_CANDELA_VERIFY_SECONDS="${OMARCHY_CANDELA_VERIFY_SECONDS:-0.5}" \
   HOME="$sandbox" \
-    "$ROOT/bin/omarchy-displays" "$@"
+    "$ROOT/bin/omarchy-candela" "$@"
 }

@@ -1,4 +1,4 @@
-<title>Displays for Omarchy</title>
+<title>Candela</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
   /* ------------------------------------------------------------ page tokens */
@@ -217,7 +217,7 @@
 <div class="wrap">
   <header>
     <div class="eyebrow">Design review 01 · 3 September 2026 · Omarchy shell plugin</div>
-    <h1 style="margin-top:10px">Displays for Omarchy</h1>
+    <h1 style="margin-top:10px">Candela</h1>
     <p class="dek">A displays product for a keyboard-driven desktop: arrange displays, drive them at their real capabilities, and put them into the right colour mode with the compositor telling the truth in physical units. Two surfaces, one backend, zero programmer's art.</p>
     <div class="meta">
       <span><b>Target</b> Omarchy 4.0.2 · Hyprland 0.56.2 (Lua)</span>
@@ -524,8 +524,8 @@
     <div class="eyebrow">Architecture</div>
     <h2>Bash backend, QML front, generated Lua</h2>
     <div class="cols">
-      <div><h3>Backend</h3><p>One command, <code>omarchy-displays</code>, with subcommands: state, apply, keep, revert, persist, identify, hdr, edid, icc. Bash 5 and jq in the house style; reads <code>hyprctl -j</code>, <code>edid-decode</code> and DRM sysfs. JSON in, JSON out, so every UI action is also a keybinding.</p></div>
-      <div><h3>Persistence</h3><p>A generated file at <code>~/.local/state/omarchy/toggles/hypr/displays-layout.lua</code>, which Omarchy already loads after the user's monitors.lua on every reload. One <code>hl.monitor</code> per managed display with every managed field explicit. The user's own file is never parsed or edited.</p></div>
+      <div><h3>Backend</h3><p>One command, <code>omarchy-candela</code>, with subcommands: state, apply, keep, revert, persist, identify, hdr, edid, icc. Bash 5 and jq in the house style; reads <code>hyprctl -j</code>, <code>edid-decode</code> and DRM sysfs. JSON in, JSON out, so every UI action is also a keybinding.</p></div>
+      <div><h3>Persistence</h3><p>A generated file at <code>~/.local/state/omarchy/toggles/hypr/candela-layout.lua</code>, which Omarchy already loads after the user's monitors.lua on every reload. One <code>hl.monitor</code> per managed display with every managed field explicit. The user's own file is never parsed or edited.</p></div>
       <div><h3>Safety</h3><p>Apply saves the previous live state, applies through <code>hyprctl eval</code> for every display in one chunk, and spawns a detached 15 s revert timer. The shell shows the countdown but does not own it, so the revert fires even if the shell dies at 10-bit on a Mesa-rendered laptop.</p></div>
     </div>
   </section>
@@ -549,7 +549,7 @@
       <li><strong>Two surfaces, this section order.</strong> Approve, or move things between popup and studio.</li>
       <li><strong>SDR white default at 203 cd/m²</strong>, clamped to max-average. Agree, or anchor differently for your panels.</li>
       <li><strong>Wide as a first-class third state</strong>, or folded under Advanced.</li>
-      <li><strong>Plugin id and name.</strong> <code>pmotta.displays</code> and "Displays" are placeholders.</li>
+      <li><strong>Plugin id and name.</strong> <code>io.github.pushmotta.candela</code> and "Displays" are placeholders.</li>
       <li><strong>Generated state file</strong> (recommended) versus a managed block inside monitors.lua.</li>
       <li><strong>Probe availability</strong> for validating the SDR-white anchor and EDID luminances on the MateViews.</li>
     </ol>

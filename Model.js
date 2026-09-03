@@ -1,7 +1,7 @@
 // Pure logic shared by the QML surfaces and the node tests. No Qt here.
 //
 // Vocabulary:
-//   display   one entry of `omarchy-displays state` .displays[]
+//   display   one entry of `omarchy-candela state` .displays[]
 //   caps      display.capabilities (parsed EDID)
 //   intent    fields the user chose (display.kept merged with pendingConfig)
 
@@ -199,7 +199,7 @@ function defaultSdrWhite(caps) {
   return clamp(REFERENCE_WHITE, r.min, r.max)
 }
 
-// The change to send to `omarchy-displays apply` for a colour mode switch.
+// The change to send to `omarchy-candela apply` for a colour mode switch.
 function fieldsForMode(mode, caps, intent) {
   var i = intent || {}
   if (mode === "sdr") return { bitdepth: 8, cm: "srgb", sdr_max_luminance: null, sdr_min_luminance: null }

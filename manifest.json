@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "id": "pmotta.displays",
-  "name": "Displays",
+  "id": "io.github.pushmotta.candela",
+  "name": "Candela",
   "version": "0.1.0",
   "author": "Pedro Motta",
   "license": "MIT",
-  "description": "Arrange displays, drive them at their real capabilities, and switch colour modes (SDR, wide gamut, HDR) with a safe apply and revert.",
+  "description": "Displays at their real capabilities: arrangement, HDR and wide gamut gated by the panel's EDID, SDR white in cd/m², and a safe apply that reverts itself.",
   "kinds": [
     "bar-widget",
     "overlay",
@@ -18,7 +18,7 @@
   },
   "keepLoaded": false,
   "barWidget": {
-    "displayName": "Displays",
+    "displayName": "Candela",
     "description": "Brightness, scale, colour mode and HDR per display, with the studio one step away",
     "category": "System",
     "allowMultiple": false,

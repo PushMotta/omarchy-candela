@@ -2,17 +2,17 @@
 
 # omarchy:summary=Configure displays: geometry, signal and colour, with safe apply and revert
 # omarchy:args=<state|apply|keep|revert|persist|hdr|brightness|identify|open|edid|icc|recover|doctor> [...]
-# omarchy:examples=omarchy-displays state | omarchy-displays hdr on --display DP-2 | omarchy-displays apply @layout.json | omarchy-displays keep | omarchy-displays doctor
+# omarchy:examples=omarchy-candela state | omarchy-candela hdr on --display DP-2 | omarchy-candela apply @layout.json | omarchy-candela keep | omarchy-candela doctor
 
-# The backend behind the Displays plugin. Everything the UI does is a
+# The backend behind the Candela plugin. Everything the UI does is a
 # subcommand here, so it is scriptable and bindable.
 #
 # Model:
 #   intent.json          what the user chose through this tool, per connector
 #   pending.json         an applied-but-not-kept intent, with an expiry and a token
-#   displays-layout.lua  generated from intent + live geometry; Omarchy loads it
+#   candela-layout.lua  generated from intent + live geometry; Omarchy loads it
 #                        after the user's monitors.lua on every reload
-#   displays-pending.lua the pending intent in the same form, loaded after the
+#   candela-pending.lua the pending intent in the same form, loaded after the
 #                        layout, so a reload from anywhere (Omarchy's clamshell
 #                        script, a theme change) re-applies the preview instead
 #                        of silently reverting it
@@ -35,28 +35,28 @@
 set -Eeuo pipefail
 # A set -e exit with no message is the worst failure mode for a tool that
 # arms display changes: say where it died. Only fires where errexit would.
-trap 'echo "omarchy-displays: aborted at line $LINENO: $BASH_COMMAND" >&2' ERR
+trap 'echo "omarchy-candela: aborted at line $LINENO: $BASH_COMMAND" >&2' ERR
 
-PLUGIN_ID="${OMARCHY_DISPLAYS_PLUGIN_ID:-pmotta.displays}"
+PLUGIN_ID="${OMARCHY_CANDELA_PLUGIN_ID:-io.github.pushmotta.candela}"
 SELF="$(readlink -f "$0")"
 SELF_DIR="$(dirname "$SELF")"
-EDID_TOOL="$SELF_DIR/omarchy-displays-edid"
+EDID_TOOL="$SELF_DIR/omarchy-candela-edid"
 
 STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
-STATE_DIR="${OMARCHY_DISPLAYS_STATE_DIR:-$STATE_HOME/omarchy/displays}"
+STATE_DIR="${OMARCHY_CANDELA_STATE_DIR:-$STATE_HOME/omarchy/candela}"
 INTENT_FILE="$STATE_DIR/intent.json"
 PENDING_FILE="$STATE_DIR/pending.json"
-LUA_FILE="${OMARCHY_DISPLAYS_LUA_FILE:-$STATE_HOME/omarchy/toggles/hypr/displays-layout.lua}"
+LUA_FILE="${OMARCHY_CANDELA_LUA_FILE:-$STATE_HOME/omarchy/toggles/hypr/candela-layout.lua}"
 # Everything below lives beside the layout: Omarchy loads that directory in
 # sorted filename order, so "displays-layout" < "displays-pending" <
 # "internal-monitor-*" is the precedence, and it is the one we want.
 TOGGLES_DIR="$(dirname "$LUA_FILE")"
-PENDING_LUA="${OMARCHY_DISPLAYS_PENDING_LUA_FILE:-$TOGGLES_DIR/displays-pending.lua}"
+PENDING_LUA="${OMARCHY_CANDELA_PENDING_LUA_FILE:-$TOGGLES_DIR/candela-pending.lua}"
 INTERNAL_FLAG="$TOGGLES_DIR/internal-monitor-disable.lua"   # Omarchy's own toggle, shared
 INTERNAL_SCALE_FILE="$TOGGLES_DIR/internal-monitor-scale"    # read by Omarchy's clamshell script
-REVERT_UNIT="omarchy-displays-revert"
-REVERT_SECONDS="${OMARCHY_DISPLAYS_REVERT_SECONDS:-15}"
-VERIFY_SECONDS="${OMARCHY_DISPLAYS_VERIFY_SECONDS:-3}"
+REVERT_UNIT="omarchy-candela-revert"
+REVERT_SECONDS="${OMARCHY_CANDELA_REVERT_SECONDS:-15}"
+VERIFY_SECONDS="${OMARCHY_CANDELA_VERIFY_SECONDS:-3}"
 INTERNAL_RE='^(eDP|LVDS|DSI)-'
 
 # A transient systemd unit (the revert timer) may lack the compositor's
@@ -74,7 +74,7 @@ fi
 
 usage() {
   cat <<'USAGE'
-Usage: omarchy-displays <command> [args]
+Usage: omarchy-candela <command> [args]
 
   state                          JSON: displays, capabilities, live and kept config, pending apply
   apply [--now] <json|@file|->   Apply a change live; reverts in 15 s unless kept (--now keeps immediately)
@@ -84,7 +84,7 @@ Usage: omarchy-displays <command> [args]
   hdr <on|off|wide> [--display NAME] [--sdr-white NITS] [--now]
   brightness <NAME> [+N%|N%-|N%] Show or set brightness for one display
   identify                       Flash each connector name on its own display
-  open                           Open the Displays studio
+  open                           Open the Candela studio
   edid <NAME>                    Parsed EDID capabilities as JSON
   icc list                       Installed ICC profiles as JSON
   recover                        If every display is off, switch the built-in (or first) one back on
@@ -96,7 +96,7 @@ Change JSON shape (any subset per display):
 USAGE
 }
 
-die() { echo "omarchy-displays: $*" >&2; exit 1; }
+die() { echo "omarchy-candela: $*" >&2; exit 1; }
 
 now_epoch() { date +%s; }
 now_ms() { echo $(( $(date +%s%N) / 1000000 )); }
@@ -288,12 +288,12 @@ generate_lua() {
               | map(. as $k | select($i[$k] != null and ($k != "mirror" or $i[$k] != "") and ($k != "icc" or $i[$k] != "")) | "\($k) = \($i[$k] | lua_val($k))")))
           | "hl.monitor({ " + join(", ") + " })"
         end;
-    [ "-- Generated by \($plugin) (omarchy-displays). Do not edit: it is rewritten on every keep.",
-      "-- Kept \($stamp). Change displays with the Displays panel or `omarchy-displays`.",
+    [ "-- Generated by \($plugin) (omarchy-candela). Do not edit: it is rewritten on every keep.",
+      "-- Kept \($stamp). Change displays with the Candela panel or `omarchy-candela`.",
       "" ]
     + [ $live[] | select((.name // "") != "") | rule(.) | select(. != "") ]
     + (if ($intent.global.cm_auto_hdr != null) then ["", "hl.config({ render = { cm_auto_hdr = \($intent.global.cm_auto_hdr) } })"] else [] end)
-    + (if $probe != "" then ["", "-- Load probe: `omarchy-displays doctor` asks Hyprland whether this value is set.", "omarchy_displays_layout_probe = \($probe | lua_str)"] else [] end)
+    + (if $probe != "" then ["", "-- Load probe: `omarchy-candela doctor` asks Hyprland whether this value is set.", "omarchy_candela_layout_probe = \($probe | lua_str)"] else [] end)
     | join("\n")
   '
 }
@@ -368,7 +368,7 @@ verify_live() {
 # toggles directory is still being loaded.
 probe_loaded() {
   local out
-  out="$(hyprctl eval "assert(omarchy_displays_layout_probe == \"$1\", \"displays-layout.lua did not run\")" 2>&1)" || return 1
+  out="$(hyprctl eval "assert(omarchy_candela_layout_probe == \"$1\", \"candela-layout.lua did not run\")" 2>&1)" || return 1
   [[ $out == ok* ]]
 }
 
@@ -487,7 +487,7 @@ reload_and_check() {
   notify_shell
   [[ -z $errors ]] || die "kept, but Hyprland reports config errors: $errors"
   if [[ -n $probe ]] && ! probe_loaded "$probe"; then
-    die "kept, but Hyprland did not run $LUA_FILE on reload: is require(\"default.hypr.toggles\") still in ~/.config/hypr/hyprland.lua? \`omarchy-displays doctor\` explains."
+    die "kept, but Hyprland did not run $LUA_FILE on reload: is require(\"default.hypr.toggles\") still in ~/.config/hypr/hyprland.lua? \`omarchy-candela doctor\` explains."
   fi
   if ! mismatch="$(verify_live "$intent")"; then
     die "kept, but the compositor did not land on it: $mismatch"
@@ -686,7 +686,7 @@ cmd_revert() {
   # an exit code the shell can show beats a display quietly left changed.
   local mismatch
   if (( had_pending )) && ! mismatch="$(verify_live "$(intent_json)")"; then
-    echo "omarchy-displays: reverted, but the compositor did not return to the kept configuration: $mismatch" >&2
+    echo "omarchy-candela: reverted, but the compositor did not return to the kept configuration: $mismatch" >&2
     exit 1
   fi
 }
@@ -723,7 +723,7 @@ cmd_hdr() {
                sdr_min_luminance: (if ($caps.hdr.minLuminance // 0) > 0 then $caps.hdr.minLuminance else 0.2 end) }
         end ] }')"
   if [[ $mode == "on" ]] && ! jq -e '.supportsHdr == true' <<<"$caps" >/dev/null; then
-    echo "omarchy-displays: $display does not advertise HDR (ST 2084) in its EDID; applying anyway" >&2
+    echo "omarchy-candela: $display does not advertise HDR (ST 2084) in its EDID; applying anyway" >&2
   fi
   cmd_apply "${now[@]}" "$change"
 }
@@ -735,11 +735,11 @@ cmd_brightness() {
 }
 
 cmd_identify() {
-  omarchy-shell "$PLUGIN_ID" identify >/dev/null 2>&1 || die "the Displays plugin is not running"
+  omarchy-shell "$PLUGIN_ID" identify >/dev/null 2>&1 || die "the Candela plugin is not running"
 }
 
 cmd_open() {
-  omarchy-shell shell summon "$PLUGIN_ID" '{}' >/dev/null 2>&1 || die "the Displays plugin is not running"
+  omarchy-shell shell summon "$PLUGIN_ID" '{}' >/dev/null 2>&1 || die "the Candela plugin is not running"
 }
 
 cmd_icc() {
@@ -766,7 +766,7 @@ cmd_recover() {
     return 0
   fi
   rescue="$(jq -r --arg re "$INTERNAL_RE" '([.[] | select(.name | test($re))][0] // .[0]).name' <<<"$live")"
-  omarchy-notification-send "Displays" "Every display was off. Switching $rescue back on." -t 6000 2>/dev/null || true
+  omarchy-notification-send "Candela" "Every display was off. Switching $rescue back on." -t 6000 2>/dev/null || true
   cmd_apply --now "$(jq -nc --arg n "$rescue" '{displays: [{name: $n, enabled: true}]}')" >/dev/null
   echo "recovered $rescue"
 }
@@ -799,9 +799,9 @@ cmd_doctor() {
 
   if [[ -f $LUA_FILE ]]; then
     local probe
-    probe="$(sed -nE 's/^omarchy_displays_layout_probe = "([^"]+)"$/\1/p' "$LUA_FILE" | head -1)"
+    probe="$(sed -nE 's/^omarchy_candela_layout_probe = "([^"]+)"$/\1/p' "$LUA_FILE" | head -1)"
     if [[ -z $probe ]]; then
-      warn "$LUA_FILE predates the load probe: run \`omarchy-displays persist\`, then \`hyprctl reload\`"
+      warn "$LUA_FILE predates the load probe: run \`omarchy-candela persist\`, then \`hyprctl reload\`"
     elif probe_loaded "$probe"; then
       ok "Hyprland ran $LUA_FILE on its last reload"
     else
@@ -819,7 +819,7 @@ cmd_doctor() {
     local expires
     expires="$(jq -r '.expires // 0' "$PENDING_FILE")"
     if (( expires < $(now_epoch) )); then
-      warn "a pending change expired without reverting: run \`omarchy-displays revert\`"
+      warn "a pending change expired without reverting: run \`omarchy-candela revert\`"
     else
       ok "a change is pending, $(( expires - $(now_epoch) )) s left"
     fi

@@ -24,7 +24,7 @@ Panel {
   // shell.json the instant this widget is mounted, so in normal operation
   // this literal is only ever the value before that happens. Keep it in
   // sync with manifest.json's "id" by hand if the plugin is ever renamed.
-  moduleName: "pmotta.displays"
+  moduleName: "io.github.pushmotta.candela"
   manageIpc: false
 
   // The bar can be null for a beat while a bar instance is created or torn
@@ -480,7 +480,7 @@ Panel {
 
           // ---------- Hero ----------
           PanelHero {
-            title: root.display ? Model.displayTitle(root.display) : "Displays"
+            title: root.display ? Model.displayTitle(root.display) : "Candela"
             meta: root.display ? Model.metaLine(root.display) : (root.service ? (root.service.loading ? "READING DISPLAYS" : "NO DISPLAYS") : "SERVICE NOT LOADED")
             foreground: root.fg
             fontFamily: root.fam
