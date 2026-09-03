@@ -68,6 +68,29 @@ and `doctor` green, all seen live on the two MateViews:
   is given.
 - **`preview.png` retaken** from the running studio at the same crop.
 
+**Session 5, later: the fold, the front page, 1.0.0.** `FoldHint` is a
+component now (`components/FoldHint.qml`), used by both surfaces; it maps its
+markers through `mapToItem` because a heading is usually nested inside the
+section it titles. The popup got one for a measured reason: its surface is 596
+logical px in SDR with nothing pending and 809 with a display in HDR and a
+countdown running, against roughly 735 px of room on a 768-tall panel — over
+that line the display list and the Identify/Arrange rows go out of reach, while
+Keep and Revert stay reachable through the service's every-screen strip. It
+reserves no height until the column overflows.
+
+That exposed a bug worth remembering: **testing overflow against the view the
+hint has already shortened is self-fulfilling** — the column then overflows by
+exactly the height of the line reporting it, so once the line appears it never
+leaves. The unreduced height comes in from outside now (`available`).
+
+README: three GIFs under `docs/media/` (gamut morph, countdown, Identify) built
+from timed `grim` frame sequences, since there is no screen recorder on this
+machine and no sudo to install one. `grim -g` takes **logical** coordinates and
+scales by the output's factor; `-s` is slower than cropping at native
+resolution and downscaling in ffmpeg afterwards. The recorder is
+`record.py` in the session scratchpad, not in the repo. Crops are exact to each
+surface's own border so no desktop leaks into the media.
+
 **Tested small, twice.** A temporary headless output
 (`hyprctl output create headless`, then `hl.monitor` through `hyprctl eval`
 — `hyprctl keyword` no longer works on 0.56) at 1366x768 showed the card
@@ -108,15 +131,22 @@ identity block fills the column beneath it.)
 - Expect `review-required`, not `passed`: the baseline records
   `service-management` (systemd-run for the revert timer) and `privilege` (the
   CI workflow's `sudo apt-get`). Neither is a finding.
-- **Two decisions Pedro has not yet made:** whether to bump `version` from
-  `0.1.0` to `1.0.0` before submitting (the card shows it), and whether he
-  submits by hand or tells the assistant to run the command above. Do not open
-  the issue without his word — it goes out under his account.
-- The full readiness rescan (manifest validate, fresh-clone validate, README
-  install+removal, LICENSE, preview.png, baseline patterns, the guide's qmllint,
-  ID collision against all 2,148 listed sources, git hygiene) passed at
-  `907aca1`. Re-run `omarchy plugin validate .` and `./test/all` before sending
-  if HEAD has moved.
+- **Version is 1.0.0** (Pedro's call, session 5). **One decision left:**
+  whether he submits by hand or tells the assistant to run the command above.
+  Do not open the issue without his word — it goes out under his account.
+- The full readiness rescan passed again at `31661a4`: `./test/all`, the CI
+  qmllint form, `omarchy plugin validate .` and `doctor` all green; a fresh
+  clone validates and its tests pass; LICENSE, preview.png, manifest and
+  README present; every README media link resolves in that clone; no network
+  calls, no sudo or pkexec in anything executable; nothing secret in the tree
+  (the only "token" is the revert nonce); repo public; ID checked against the
+  live catalog — 2,186 ids, **no collision**. Re-run before sending if HEAD
+  moves again.
+- Two doc bugs the rescan caught and fixed: the README's removal instructions
+  still named `displays-{layout,pending}.lua` from before the rename, so
+  following them left the generated rules behind; and the submission's
+  privilege note claimed the CI workflow held the only `sudo`, which the
+  research brief's prose also contains.
 
 ### After listing: how updates work
 
