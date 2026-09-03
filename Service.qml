@@ -515,16 +515,31 @@ Item {
   }
 
   // ------------------------------------------------------------ identify
+  //
+  // Two flags, because one cannot both hold the windows open and drive the
+  // animation: `identifying` owns the surfaces, `identifyShown` is what the
+  // badges animate towards. Binding opacity to a flag that is already true
+  // when the window is built starts it at 1 and skips the entrance entirely,
+  // so the badges animate themselves on completion instead.
   property bool identifying: false
+  property bool identifyShown: false
 
   function identify() {
     identifying = true
+    identifyShown = true
     identifyTimer.restart()
   }
 
   Timer {
     id: identifyTimer
-    interval: 2200
+    interval: 2000
+    repeat: false
+    onTriggered: { root.identifyShown = false; identifyHideTimer.restart() }
+  }
+
+  Timer {
+    id: identifyHideTimer
+    interval: 220
     repeat: false
     onTriggered: root.identifying = false
   }
@@ -546,47 +561,98 @@ Item {
       WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
       mask: Region {}
 
-      BorderSurface {
-        anchors.centerIn: parent
-        width: badgeColumn.implicitWidth + Style.space(44)
-        height: badgeColumn.implicitHeight + Style.space(36)
-        color: Color.popups.background
-        radius: Style.cornerRadius
-        borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
-        opacity: root.identifying ? 1 : 0
-        Behavior on opacity { NumberAnimation { duration: 140 } }
+      // One screen lights up at a time, 60 ms apart, so a glance across the
+      // desk reads as a sequence rather than a flash. The accent frame is the
+      // part you see from the far end of the room; the card carries the name.
+      Item {
+        id: overlay
+        anchors.fill: parent
+        opacity: 0
 
-        Column {
-          id: badgeColumn
-          anchors.centerIn: parent
-          spacing: Style.space(4)
+        readonly property int screenIndex: {
+          var list = Quickshell.screens
+          for (var i = 0; i < list.length; i++)
+            if (list[i] && list[i].name === badgeWindow.modelData.name) return i
+          return 0
+        }
 
-          Text {
-            textFormat: Text.PlainText
-            text: badgeWindow.modelData.name
-            color: Color.popups.text
-            font.family: Style.font.family
-            font.pixelSize: Style.font.displayLarge
-            font.bold: true
+        Component.onCompleted: showAnim.restart()
+
+        Connections {
+          target: root
+          function onIdentifyShownChanged() {
+            if (root.identifyShown) showAnim.restart()
+            else { showAnim.stop(); hideAnim.restart() }
           }
+        }
 
-          Text {
-            textFormat: Text.PlainText
-            text: {
-              var d = badgeWindow.display
-              if (!d) return ""
-              var parts = []
-              if (d.model) parts.push(String(d.model).trim())
-              parts.push(d.x + ", " + d.y)
-              parts.push(Model.metaLine(d).split(" · ").slice(0, 1).join(""))
-              var mode = Model.colourMode(d)
-              parts.push(mode === "hdr" ? "HDR" : (mode === "wide" ? "Wide" : "SDR"))
-              return parts.join(" · ")
+        SequentialAnimation {
+          id: showAnim
+          PauseAnimation { duration: overlay.screenIndex * 60 }
+          ParallelAnimation {
+            NumberAnimation { target: overlay; property: "opacity"; to: 1; duration: 160; easing.type: Easing.OutCubic }
+            NumberAnimation { target: badge; property: "scale"; to: 1; duration: 200; easing.type: Easing.OutCubic }
+          }
+        }
+
+        NumberAnimation {
+          id: hideAnim
+          target: overlay
+          property: "opacity"
+          to: 0
+          duration: 180
+          easing.type: Easing.OutCubic
+        }
+
+        BorderSurface {
+          anchors.fill: parent
+          color: "transparent"
+          radius: Style.cornerRadius
+          borderSpec: Border.flat(Color.accent, Math.max(2, Style.space(3)))
+        }
+
+        BorderSurface {
+          id: badge
+          anchors.centerIn: parent
+          width: badgeColumn.implicitWidth + Style.space(44)
+          height: badgeColumn.implicitHeight + Style.space(36)
+          color: Color.popups.background
+          radius: Style.cornerRadius
+          borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
+          scale: 0.96
+
+          Column {
+            id: badgeColumn
+            anchors.centerIn: parent
+            spacing: Style.space(4)
+
+            Text {
+              textFormat: Text.PlainText
+              text: badgeWindow.modelData.name
+              color: Color.popups.text
+              font.family: Style.font.family
+              font.pixelSize: Style.font.displayLarge
+              font.bold: true
             }
-            color: Qt.darker(Color.popups.text, 1.4)
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            font.bold: true
+
+            Text {
+              textFormat: Text.PlainText
+              text: {
+                var d = badgeWindow.display
+                if (!d) return ""
+                var parts = []
+                if (d.model) parts.push(String(d.model).trim())
+                parts.push(d.x + ", " + d.y)
+                parts.push(Model.metaLine(d).split(" · ").slice(0, 1).join(""))
+                var mode = Model.colourMode(d)
+                parts.push(mode === "hdr" ? "HDR" : (mode === "wide" ? "Wide" : "SDR"))
+                return parts.join(" · ")
+              }
+              color: Qt.darker(Color.popups.text, 1.4)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
           }
         }
       }

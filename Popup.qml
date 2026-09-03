@@ -456,6 +456,12 @@ Panel {
     // what the screen has, like the built-in network and bluetooth popups.
     contentHeight: panel.fittedContentHeight(panelColumn.implicitHeight)
 
+    // Entering HDR grows the popup by a whole section, and leaving shrinks it;
+    // easing that at the shell's card timing turns a jump into a movement. The
+    // popup is a Wayland surface, so this resizes it every frame it runs: if a
+    // compositor ever renders that steppy, dropping this Behavior is the fix.
+    Behavior on contentHeight { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent

@@ -24,9 +24,14 @@ BorderSurface {
   signal revert()
   signal hovered(int index, bool isHovered)
 
-  // Narrow hosts (the 380 px popup) drop the progress line and keep the
-  // countdown in words; the studio's action bar has room for both.
+  // Narrow hosts (the 380 px popup) shorten the wording; the countdown rule
+  // itself is drawn on the strip's own bottom edge, so it fits any width.
   readonly property bool compact: width < Style.space(420)
+
+  readonly property real fraction: total > 0 ? Math.max(0, Math.min(1, remaining / total)) : 0
+  // The last few seconds are the ones worth noticing. Nothing moves faster —
+  // only the colour changes, so the strip warns without flapping.
+  readonly property bool urgentSoon: remaining <= 5
 
   implicitHeight: content.implicitHeight + (bare ? Style.spacing.md : Style.spacing.xl) * 2
   radius: Style.cornerRadius
@@ -43,7 +48,7 @@ BorderSurface {
     spacing: Style.spacing.rowPaddingX
 
     Column {
-      width: parent.width - buttons.width - (progress.visible ? progress.width + parent.spacing : 0) - parent.spacing
+      width: parent.width - buttons.width - parent.spacing
       spacing: Style.spacing.xs
       anchors.verticalCenter: parent.verticalCenter
 
@@ -61,33 +66,13 @@ BorderSurface {
       Text {
         textFormat: Text.PlainText
         text: "Reverting in " + root.remaining + " s unless kept."
-        color: Qt.darker(root.foreground, 1.5)
+        color: root.urgentSoon ? Color.urgent : Qt.darker(root.foreground, 1.5)
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         elide: Text.ElideRight
         width: parent.width
-      }
-    }
 
-    Item {
-      id: progress
-      visible: !root.compact
-      width: visible ? Style.space(70) : 0
-      height: Style.space(4)
-      anchors.verticalCenter: parent.verticalCenter
-
-      Rectangle {
-        anchors.fill: parent
-        radius: height / 2
-        color: Style.selectedFillFor(root.foreground, Color.accent)
-      }
-
-      Rectangle {
-        height: parent.height
-        radius: height / 2
-        color: Color.accent
-        width: parent.width * (root.total > 0 ? Math.max(0, Math.min(1, root.remaining / root.total)) : 0)
-        Behavior on width { NumberAnimation { duration: 900; easing.type: Easing.Linear } }
+        Behavior on color { ColorAnimation { duration: 400 } }
       }
     }
 
@@ -118,6 +103,35 @@ BorderSurface {
         onClicked: root.keep()
         onHovered: function(h) { root.hovered(1, h) }
       }
+    }
+  }
+
+  // The countdown reads as part of the strip's own bottom edge rather than as
+  // a widget parked next to the buttons: a rule that drains left to right for
+  // the whole width of whatever is holding it. The backend owns the clock and
+  // reports whole seconds, so the animation carries the eye between ticks.
+  Item {
+    id: countdown
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    anchors.margins: root.borderBottom
+    height: Math.max(1, Style.space(2))
+    visible: root.remaining > 0 || root.fraction > 0
+
+    Rectangle {
+      anchors.fill: parent
+      color: Style.selectedFillFor(root.foreground, Color.accent)
+      opacity: 0.5
+    }
+
+    Rectangle {
+      height: parent.height
+      width: parent.width * root.fraction
+      color: root.urgentSoon ? Color.urgent : Color.accent
+
+      Behavior on width { NumberAnimation { duration: 1000; easing.type: Easing.Linear } }
+      Behavior on color { ColorAnimation { duration: 400 } }
     }
   }
 }

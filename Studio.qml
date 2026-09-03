@@ -484,7 +484,9 @@ Item {
   // ---------------------------------------------------------- window
   PanelWindow {
     id: window
-    visible: root.opened
+    // Stays up while the card fades out, the way the shell's own PopupCard
+    // does, so dismissing is a movement rather than a cut.
+    visible: root.opened || card.opacity > 0
     screen: root.targetScreen
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
@@ -496,6 +498,8 @@ Item {
     Rectangle {
       anchors.fill: parent
       color: root.scrim
+      opacity: root.opened ? 1 : 0
+      Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
       MouseArea { anchors.fill: parent; onClicked: root.requestClose() }
     }
 
@@ -508,6 +512,13 @@ Item {
       radius: Style.cornerRadius
       borderSpec: root.borderSpec
       padding: Style.spacing.panelPadding
+
+      // The shell's card timing (140 ms OutCubic), with the rise kept to 1.5%
+      // so the studio settles into place instead of zooming.
+      opacity: root.opened ? 1 : 0
+      scale: root.opened ? 1 : 0.985
+      Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+      Behavior on scale { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
 
       MouseArea { anchors.fill: parent; onClicked: {} }
 
@@ -563,9 +574,15 @@ Item {
             DisplayCanvas {
               id: canvas
               anchors.left: parent.left
-              anchors.top: parent.top
-              anchors.bottom: parent.bottom
+              anchors.verticalCenter: parent.verticalCenter
               width: Math.round(parent.width * 0.58)
+              // Hug the arrangement instead of filling the column: two wide
+              // displays in a tall box left the layout stranded in a field of
+              // grid. The floor keeps a comfortable drop area under a very
+              // wide layout, and the ceiling is simply the room available.
+              height: Math.round(Math.max(parent.height * 0.42,
+                                          Math.min(parent.height, canvas.preferredHeight)))
+              Behavior on height { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
               rects: root.rects
               selectedName: root.selectedName
               hasCursor: root.focusArea === "canvas"
