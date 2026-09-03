@@ -1,0 +1,40 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install jq, edid-decode and qmllint
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends jq edid-decode qt6-declarative-dev-tools
+
+      # Bash tests run the CLI inside a sandbox with a fake hyprctl and systemd;
+      # node tests cover Model.js. No compositor is needed.
+      - name: Backend and model tests
+        run: ./test/all
+
+      # The shell's qs.* and Quickshell modules are not on the runner, so their
+      # imports resolve to warnings, which qmllint reports with exit 0. Only
+      # genuine errors — syntax, duplicate ids, bad bindings — exit non-zero.
+      - name: QML lint
+        run: |
+          QMLLINT="$(command -v /usr/lib/qt6/bin/qmllint || command -v qmllint6 || command -v qmllint)"
+          "$QMLLINT" --version
+          status=0
+          for f in *.qml components/*.qml; do
+            echo "== $f"
+            "$QMLLINT" "$f" || status=1
+          done
+          exit $status
