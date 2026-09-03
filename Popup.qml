@@ -490,9 +490,37 @@ Panel {
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
 
+      // The popup grows to fit its content and only scrolls when the screen
+      // will not hold it — a laptop panel with a display in HDR and a
+      // countdown running, measured at 809 logical px against about 735 of
+      // room. Then the actions at the bottom go out of reach silently, which
+      // is what this says out loud. It reserves no space until that happens.
+      FoldHint {
+        id: foldHint
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        flick: scrollArea.contentItem
+        content: panelColumn
+        available: keyCatcher.height
+        foreground: root.fg
+        fontFamily: root.fam
+        markers: [
+          { item: brightnessHeader, name: "brightness" },
+          { item: sdrHeader, name: "sdr white" },
+          { item: scaleHeader, name: "scale" },
+          { item: colourHeader, name: "colour" },
+          { item: displaysHeader, name: "displays" },
+          { item: actionsSection, name: "actions" }
+        ]
+      }
+
       ScrollView {
         id: scrollArea
-        anchors.fill: parent
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: foldHint.top
         clip: true
         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
         ScrollBar.vertical.policy: panelColumn.implicitHeight > height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
@@ -797,7 +825,7 @@ Panel {
             width: parent.width
             spacing: Style.spacing.lg
 
-            PanelSectionHeader { text: "DISPLAYS"; foreground: root.fg; fontFamily: root.fam }
+            PanelSectionHeader { id: displaysHeader; text: "DISPLAYS"; foreground: root.fg; fontFamily: root.fam }
 
             Repeater {
               model: root.displays
@@ -815,6 +843,7 @@ Panel {
           PanelSeparator { foreground: root.fg }
 
           Column {
+            id: actionsSection
             width: parent.width
             spacing: Style.spacing.xxs
 

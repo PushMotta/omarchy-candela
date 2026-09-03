@@ -48,71 +48,6 @@ Item {
     readonly property int barSize: Style.bar.sizeHorizontal
   }
 
-  // ---------------------------------------------------------- the fold
-  //
-  // The inspector scrolls, and the shell's AsNeeded scrollbar paints nothing
-  // at rest, so anything past the bottom edge was hidden with nothing to say
-  // it was there. The keyboard already scrolls its cursor into view; this is
-  // for the eye. Naming the sections below beats a bare arrow: "there is more"
-  // is a hint, "colour is down there" is an answer.
-  readonly property var inspectorFlick: inspectorScroll.contentItem
-  readonly property real inspectorEdge:
-    (inspectorFlick && inspectorFlick.contentY !== undefined ? inspectorFlick.contentY : 0) + inspectorScroll.height
-  readonly property bool moreBelow: inspector.implicitHeight - inspectorEdge > 4
-  readonly property var sectionMarkers: [
-    { item: signalHeader, name: "signal" },
-    { item: geometryHeader, name: "geometry" },
-    { item: colourHeader, name: "colour" },
-    { item: advancedSection, name: "advanced" }
-  ]
-  // A section counts as below when its *end* is below the edge, not its
-  // header: on a short card COLOUR's heading sits just above the fold with
-  // its buttons sliced in half, and naming only what starts below the edge
-  // would report "advanced" while the thing you cannot reach is colour.
-  // `slack` keeps a section that is a few pixels short of complete quiet.
-  function sectionEnd(index) {
-    for (var j = index + 1; j < sectionMarkers.length; j++) {
-      var next = sectionMarkers[j].item
-      if (next && next.visible) return next.y
-    }
-    return inspector.implicitHeight
-  }
-
-  readonly property string belowNames: {
-    if (!moreBelow) return ""
-    var out = []
-    var slack = Style.space(24)
-    for (var i = 0; i < sectionMarkers.length; i++) {
-      var m = sectionMarkers[i]
-      if (m.item && m.item.visible && sectionEnd(i) - inspectorEdge > slack) out.push(m.name)
-    }
-    return out.join(" · ")
-  }
-
-  // Clicking the hint takes you to the first section it names.
-  function scrollToFirstBelow() {
-    var flick = inspectorScroll.contentItem
-    if (!flick || flick.contentY === undefined) return
-    var slack = Style.space(24)
-    for (var i = 0; i < sectionMarkers.length; i++) {
-      var item = sectionMarkers[i].item
-      if (!item || !item.visible || sectionEnd(i) - root.inspectorEdge <= slack) continue
-      var limit = Math.max(0, inspector.implicitHeight - inspectorScroll.height)
-      scrollAnim.target = flick
-      // Never upward: the hint is an offer to see what is below.
-      scrollAnim.to = Math.min(limit, Math.max(flick.contentY, item.y - Style.spacing.md))
-      scrollAnim.restart()
-      return
-    }
-  }
-
-  NumberAnimation {
-    id: scrollAnim
-    property: "contentY"
-    duration: 220
-    easing.type: Easing.OutCubic
-  }
-
   // ---------------------------------------------------------- lifecycle
   // Logical pixels and cd/m² are not currency: no thousands separators.
   Component.onCompleted: {
@@ -741,34 +676,22 @@ Item {
               }
             }
 
-            // The line stays whether or not it has anything to say, so the
-            // inspector does not resize itself every time you scroll.
-            Text {
+            FoldHint {
               id: foldHint
               anchors.left: inspectorScroll.left
               anchors.right: inspectorScroll.right
               anchors.bottom: parent.bottom
-              height: Math.round(Style.font.caption * 1.7)
-              verticalAlignment: Text.AlignVCenter
-              textFormat: Text.PlainText
-              // Falls back to "more" when what is below is the tail of a
-              // section already on screen — Advanced expanded, say — which
-              // names nothing but is still hidden.
-              text: !root.moreBelow ? "" : "⌄ " + (root.belowNames === "" ? "more" : root.belowNames)
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              elide: Text.ElideRight
-              opacity: root.moreBelow ? 1 : 0
-              Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
-
-              MouseArea {
-                anchors.fill: parent
-                enabled: root.moreBelow
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.scrollToFirstBelow()
-              }
+              flick: inspectorScroll.contentItem
+              content: inspector
+              available: bodyItem.height
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              markers: [
+                { item: signalHeader, name: "signal" },
+                { item: geometryHeader, name: "geometry" },
+                { item: colourHeader, name: "colour" },
+                { item: advancedSection, name: "advanced" }
+              ]
             }
 
             ScrollView {
