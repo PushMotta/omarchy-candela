@@ -65,12 +65,26 @@ Item {
     { item: colourHeader, name: "colour" },
     { item: advancedSection, name: "advanced" }
   ]
+  // A section counts as below when its *end* is below the edge, not its
+  // header: on a short card COLOUR's heading sits just above the fold with
+  // its buttons sliced in half, and naming only what starts below the edge
+  // would report "advanced" while the thing you cannot reach is colour.
+  // `slack` keeps a section that is a few pixels short of complete quiet.
+  function sectionEnd(index) {
+    for (var j = index + 1; j < sectionMarkers.length; j++) {
+      var next = sectionMarkers[j].item
+      if (next && next.visible) return next.y
+    }
+    return inspector.implicitHeight
+  }
+
   readonly property string belowNames: {
     if (!moreBelow) return ""
     var out = []
+    var slack = Style.space(24)
     for (var i = 0; i < sectionMarkers.length; i++) {
       var m = sectionMarkers[i]
-      if (m.item && m.item.visible && m.item.y > inspectorEdge - 8) out.push(m.name)
+      if (m.item && m.item.visible && sectionEnd(i) - inspectorEdge > slack) out.push(m.name)
     }
     return out.join(" · ")
   }
@@ -79,12 +93,14 @@ Item {
   function scrollToFirstBelow() {
     var flick = inspectorScroll.contentItem
     if (!flick || flick.contentY === undefined) return
+    var slack = Style.space(24)
     for (var i = 0; i < sectionMarkers.length; i++) {
       var item = sectionMarkers[i].item
-      if (!item || !item.visible || item.y <= root.inspectorEdge - 8) continue
+      if (!item || !item.visible || sectionEnd(i) - root.inspectorEdge <= slack) continue
       var limit = Math.max(0, inspector.implicitHeight - inspectorScroll.height)
       scrollAnim.target = flick
-      scrollAnim.to = Math.min(limit, Math.max(0, item.y - Style.spacing.md))
+      // Never upward: the hint is an offer to see what is below.
+      scrollAnim.to = Math.min(limit, Math.max(flick.contentY, item.y - Style.spacing.md))
       scrollAnim.restart()
       return
     }
