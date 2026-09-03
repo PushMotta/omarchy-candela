@@ -39,6 +39,15 @@ Panel {
   readonly property string focusedName: service ? service.focused : ""
   readonly property bool hasPending: service ? service.hasPending : false
 
+  // Any display in HDR, for the bar icon: the state is worth knowing without
+  // opening anything, and so is a countdown running behind a closed popup.
+  readonly property int hdrCount: {
+    var n = 0
+    for (var i = 0; i < displays.length; i++)
+      if (Model.colourMode(displays[i]) === "hdr") n++
+    return n
+  }
+
   // The display the popup drives. Defaults to the focused one on open.
   property string selectedName: ""
   readonly property var display: {
@@ -431,6 +440,13 @@ Panel {
     anchors.fill: parent
     bar: root.bar
     text: root.displays.length > 1 ? "󰍺" : "󰍹"
+    // A change waiting to be kept outranks HDR: one is a question addressed
+    // to you, the other is a state. The kit fades between them in 160 ms.
+    active: root.hasPending || root.hdrCount > 0
+    // The bar exposes foreground and urgent but no accent, so HDR borrows the
+    // palette's own. A theme whose accent is its foreground simply shows no
+    // difference there, which is the theme's call to make.
+    activeColor: root.hasPending ? root.urgentColor : Color.accent
     onPressed: function(b) { root.toggle() }
     onWheelMoved: function(delta) {
       if (!root.brightnessAvailable) return

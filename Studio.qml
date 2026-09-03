@@ -1129,11 +1129,22 @@ Item {
               id: hintText
               visible: !root.hasPending
               textFormat: Text.PlainText
-              text: "j/k rows · h/l adjust · ⇥ canvas ⇄ inspector ⇄ actions · arrows nudge 10 px, ⇧ 100, ⌥ flush beside · 0 origin · 1–9 [ ] select · a apply · r " + (root.draftDirty ? "discard" : "revert") + " · i identify · esc close"
+              // Non-breaking spaces inside each pair: the strip wraps at the
+              // separators, never between a key and what it does.
+              text: ["j/k\u00A0rows", "h/l\u00A0adjust",
+                     "⇥ canvas ⇄ inspector ⇄ actions",
+                     "arrows nudge 10 px, ⇧ 100, ⌥ flush beside",
+                     "0\u00A0origin", "1–9\u00A0[\u00A0]\u00A0select",
+                     "a\u00A0apply", "r\u00A0" + (root.draftDirty ? "discard" : "revert"),
+                     "i\u00A0identify", "esc\u00A0close"].join(" · ")
               color: root.dim
               font.family: root.fontFamily; font.pixelSize: Style.font.caption
               anchors.left: parent.left; anchors.right: actionButtons.left; anchors.rightMargin: Style.space(16)
               anchors.verticalCenter: actionButtons.verticalCenter
+              // Two lines rather than one elided one: a keyboard surface that
+              // hides half its own keys behind an ellipsis teaches nothing.
+              wrapMode: Text.WordWrap
+              maximumLineCount: 2
               elide: Text.ElideRight
             }
 
