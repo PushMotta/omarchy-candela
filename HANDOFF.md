@@ -52,14 +52,27 @@ and `doctor` green, all seen live on the two MateViews:
 - **The bar icon** takes the urgent colour while a change waits and the
   accent while any display is in HDR; the key strip wraps to two lines
   instead of ending in an ellipsis.
+- **The fold.** The inspector scrolls and the shell's `AsNeeded` scrollbar
+  paints nothing at rest, so everything from COLOUR down was hidden with
+  no cue. A line under the inspector now names the sections below and
+  scrolls to the first when clicked ("more" when what is hidden is the
+  tail of a section already on screen), and the panel identity — name,
+  EDID capabilities, gamut plot — moved out of the scroller into the space
+  under the canvas, which brings COLOUR above the fold and puts the void
+  to work. It holds no `InspectorRow`, so the keyboard's row order is
+  untouched; the left column is height-bounded and clipped so a short card
+  cuts it rather than drawing over the action bar.
+- **The plot's axes were anisotropic.** `px` and `py` scaled x and y
+  independently, which stretched the diagram and moved every primary off
+  its true place. One unit for both axes now, centred in whatever box it
+  is given.
 - **`preview.png` retaken** from the running studio at the same crop.
 
-Two judgement calls left deliberately for Pedro: the canvas frame is
-centred rather than sharing a top edge with the inspector (one line in
-`Studio.qml`; the shared baseline is the stronger grid but pools all the
-slack into one corner), and the popup's eased `contentHeight` resizes a
-Wayland surface every frame it runs — if that ever looks steppy, deleting
-that one Behavior is the fix.
+One judgement call left deliberately for Pedro: the popup's eased
+`contentHeight` resizes a Wayland surface every frame it runs — if that
+ever looks steppy, deleting that one Behavior is the fix. (The canvas
+frame's alignment settled itself: it is top-aligned again now that the
+identity block fills the column beneath it.)
 
 ### Marketplace submission — drafted, not sent
 
@@ -235,6 +248,9 @@ is instant; a real mode switch on NVIDIA may need longer.
   whether Hyprland actually resets each one on reload (e.g. `sdrsaturation`) has
   only been seen live for HDR and scale. This is the test that underwrites the
   README's promise.
+- Session 5, the fold: clicking the hint to jump to the first named
+  section, and how the left column behaves on a card short enough to clip
+  it — reasoned through and bounded, never seen small.
 - Session 5 by hand, all of it motion that a screenshot cannot judge: the
   studio's fade in and out, the popup easing its own height when HDR adds the
   SDR white section, the countdown rule between ticks, Identify's stagger
