@@ -37,7 +37,7 @@ doing right now rather than what was asked for.
 ## Install
 
 ```bash
-git clone <this repo> ~/.config/omarchy/plugins/pmotta.displays
+git clone https://github.com/PushMotta/omarchy-displays ~/.config/omarchy/plugins/pmotta.displays
 omarchy-shell shell rescanPlugins
 omarchy plugin enable pmotta.displays
 ```
@@ -92,6 +92,7 @@ omarchy-displays state                          # JSON: displays, EDID capabilit
 omarchy-displays hdr on|off|wide [--display DP-2] [--sdr-white 203] [--now]
 omarchy-displays apply [--now] '{"displays":[{"name":"DP-2","scale":2}]}'
 omarchy-displays keep | revert | persist
+omarchy-displays revert --expired --token <t>   # the timer's form; does nothing unless <t> still matches pending
 omarchy-displays brightness DP-2 [+5%|5%-|40%]
 omarchy-displays identify | open
 omarchy-displays edid DP-2
@@ -103,7 +104,10 @@ Change JSON accepts, per display: `mode`, `position`, `scale`, `transform`,
 `sdrsaturation`, `sdr_min_luminance`, `sdr_max_luminance`, `min_luminance`,
 `max_luminance`, `max_avg_luminance`, `icc`, `supports_hdr`,
 `supports_wide_color`; and `global.cm_auto_hdr`. Everything is validated
-against what `hl.monitor` accepts before anything is written.
+against what `hl.monitor` accepts before anything is written, unknown keys are
+rejected at every level, and two rules hold on the merged result rather than
+just the change: an ICC profile and an HDR preset cannot coexist, and an HDR
+preset is refused while `supports_hdr` is forced off (`-1`).
 
 ## How it persists
 
@@ -116,6 +120,14 @@ against what `hl.monitor` accepts before anything is written.
   explicit position with Hyprland's auto placement moves displays.
 
 `hyprctl reload` restores the kept configuration; that is the revert primitive.
+
+`apply` is ordered so that a change is never live without a revert already
+armed: it takes a lock, writes the pending file with a transaction token, arms
+the timer bound to that token, and only then applies through `hyprctl eval`.
+If Hyprland rejects any part of the chunk, apply unwinds on the spot and reports
+the rejection. A timer whose token no longer matches the pending file does
+nothing, so a stale one can never revert a newer change. `keep` and `apply --now`
+validate the written Lua the same way, with a reload and `hyprctl configerrors`.
 
 ## Colour model
 

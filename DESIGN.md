@@ -86,7 +86,7 @@ overlap: the others have no independent position.
 4. **Colour.** Mode `SDR · Wide · HDR`; SDR white slider (cd/m²); SDR saturation; SDR transfer `Default · Gamma 2.2 · sRGB`; ICC profile picker (searchable, lists `~/.local/share/icc`, `~/.color/icc`, `/usr/share/color/icc`). Caption when an ICC is set: "ICC forces the sRGB transfer and replaces the colour preset. HDR is unavailable while a profile is loaded."
 5. **Advanced** (collapsed). Preset override (`auto · srgb · dcip3 · dp3 · adobe · wide · edid · hdr · hdredid`), luminance overrides min / max / average (blank = from EDID, shows the EDID value as placeholder), capability overrides `supports_hdr` / `supports_wide_color` (`Auto · Force on · Force off`), `sdrbrightness` multiplier, and the global switch "Auto HDR for fullscreen content" (`render:cm_auto_hdr`).
 
-**Action bar.** `Identify`, `Revert` (to persisted), `Apply`. After Apply of a risky change the bar becomes: `Keep these settings? · Reverting in 15 s · [Keep] [Revert]`. Keyboard hints in caption size at the far left: `j/k move · h/l adjust · ⇥ canvas/inspector · ↵ apply · esc close`.
+**Action bar.** `Identify`, `Revert` (to persisted), `Apply`. After Apply of a risky change the bar becomes: `Keep these settings? · Reverting in 15 s · [Keep] [Revert]`. While that strip is up the bar has exactly two keyboard targets, Revert and Keep, with the cursor on Keep; ↵ acts on the highlighted one, `r` and Esc revert. The normal three-target mapping returns when the strip goes. Keyboard hints in caption size at the far left: `j/k move · h/l adjust · ⇥ canvas/inspector · ↵ apply · esc close`.
 
 ### 3.3 Small surfaces
 
@@ -103,6 +103,7 @@ omarchy-displays state                  # JSON: displays, capabilities, live and
 omarchy-displays apply  <json|@file>    # live apply via hyprctl eval, starts revert timer
 omarchy-displays keep                   # confirm pending apply, persist
 omarchy-displays revert                 # re-apply last persisted state
+omarchy-displays revert --expired --token <t>   # the timer's form: a no-op unless <t> still matches pending
 omarchy-displays persist                # write generated Lua from live state
 omarchy-displays identify [connector]
 omarchy-displays hdr <on|off|wide> [--display DP-2] [--sdr-white 203]
@@ -132,7 +133,7 @@ Hyprland's `cm_sdr_eotf` default is gamma 2.2 since 0.55. The per-display `sdr_e
 
 ### 4.4 ICC
 
-Mutually exclusive with HDR in practice: Hyprland forces the sRGB EOTF and overrides the preset when `icc` is set. The UI disables the HDR option while an ICC is loaded and says why.
+Mutually exclusive with HDR in practice: Hyprland forces the sRGB EOTF and overrides the preset when `icc` is set. The UI disables the HDR option while an ICC is loaded and says why, and the backend enforces the same rule: `merge_intent` rejects a merged display carrying both a profile and an HDR preset, so the CLI cannot produce the state either. The picker is gated the other way round too — while a draft is in HDR, the ICC row asks for HDR to be cleared first.
 
 ### 4.5 Auto HDR
 
@@ -141,6 +142,8 @@ Mutually exclusive with HDR in practice: Hyprland forces the sRGB EOTF and overr
 ### 4.6 Capabilities and overrides
 
 Capabilities come from `edid-decode` on `/sys/class/drm/<card>-<connector>/edid`: HDR static metadata block, colorimetry block, bits per primary, desired luminances, chromaticities. Monitors lie; Hyprland's native `supports_hdr` / `supports_wide_color` (−1 / 0 / 1) are the override channel and are exposed in Advanced.
+
+The overrides feed the mode selector, not just Hyprland: `offeredModes(caps, intent)` treats `supports_hdr = 1` as HDR-capable whatever the EDID says and `-1` as not (`0`, the default, trusts the EDID), and the backend rejects an HDR preset on a display whose HDR capability is forced off. Forcing a capability off while the draft sits in that mode moves the draft to the best mode still offered, so a draft never carries a state that cannot be applied.
 
 ## 5. Interaction model
 
@@ -194,7 +197,11 @@ Primary key: connector name. Stored alongside: make, model, serial, EDID hash. W
 
 ### 6.5 Safety
 
-`apply` writes the previous live state to a pending file, applies, and spawns a detached timer (`systemd-run --user` or a nohup'd script) that reverts after 15 s unless `keep` removes the pending file. The shell shows the countdown but does not own it, so a shell crash (#9804 class) still reverts. Brightness and SDR white apply immediately with no countdown.
+`apply` takes a lock on the state directory, writes the pending file with a transaction token, arms a detached timer bound to that token (`systemd-run --user`, or a detached shell where there is no user manager), and only then applies live through `hyprctl eval`. The order is the guarantee: a change is never live without a revert already armed. If Hyprland rejects any part of the chunk — it is one chunk with one rule per display, so a rejection on the third display would otherwise leave the first two changed — apply unwinds on the spot (timer stopped, pending dropped, `hyprctl reload`) and reports the rejection.
+
+The timer runs `revert --expired --token <token>`. A token that no longer matches the pending file marks a stale timer and does nothing, so the fallback timer, which cannot be cancelled, can never revert a newer change. `keep` and `apply --now` commit intent, regenerate the Lua, reload and check `hyprctl configerrors` through one shared path, so the persisted file is validated the same way whichever door it came in by. Every mutating command holds the lock, and every state write goes through a private temp file and an atomic rename.
+
+The shell shows the countdown but does not own it, so a shell crash (#9804 class) still reverts. Brightness and SDR white apply immediately with no countdown.
 
 ### 6.6 Hotplug
 

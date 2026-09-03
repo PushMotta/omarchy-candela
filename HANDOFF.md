@@ -4,6 +4,32 @@ Written 3 September 2026 at the end of session 1. Read this first in a new sessi
 
 ## Where things stand
 
+### Session 2 (3 September 2026, afternoon) — hardening pass
+
+A Codex review of the v0.1 tree was verified claim by claim (all six
+high-priority findings held) and implemented, plus two findings of our own:
+
+- **Backend is transactional** (`76b8977`): pending.json with a token and the
+  timer are armed *before* `hyprctl eval`; a rejection unwinds; a stale timer
+  (`revert --expired --token`) is a no-op; flock + mktemp; `apply --now`
+  validates its Lua like keep; unknown top-level JSON keys rejected; ICC+HDR
+  and forced-off+HDR rejected on the merged display. 19 CLI tests.
+- **Service** (`a149070`): exit codes instead of stderr; FIFO apply queue that
+  merges same-flag changes instead of dropping them.
+- **Surfaces** (`fd78909`): `offeredModes(caps, intent)` honours ICC and the
+  capability overrides; scale sends `effective`; pending-mode Enter maps to
+  Revert/Keep; brightness reads keyed by connector and available before the
+  popup's first open.
+- **CI** (`463b208`): `./test/all` + Qt6 qmllint on every push.
+
+Gotcha 11: Hyprland's `supports_hdr` / `supports_wide_color` are **-1 off, 0
+auto (default), 1 on** — wiki table and `CLuaConfigInt(0, -1, 1)`. A contract
+written the other way round briefly inverted the studio's Force on/off
+controls; the original code was right. Gotcha 12: `/usr/bin/qmllint` here is
+Qt5; the real one is `/usr/lib/qt6/bin/qmllint` (exit 0 on warnings, non-zero
+on errors). Gotcha 13: bar widgets are handed `bar`, `moduleName`, `settings`
+— never `manifest` — so Popup.qml's id stays a literal.
+
 The plugin exists, is installed on this machine, and works end to end on real hardware. Five commits on `main` in this directory (`git log --oneline`):
 
 ```
@@ -14,7 +40,7 @@ fe952b7 Fix live apply: hyprctl parses a leading Lua comment as a flag
 06414e0 Design review 01: spec and mockups for Displays
 ```
 
-Nothing is pushed anywhere; there is no remote yet.
+Pushed to https://github.com/PushMotta/omarchy-displays (MIT); `main` tracks `origin/main`.
 
 ### Verified live (with screenshots, on the two Huawei MateViews, NVIDIA 610.57.04, Hyprland 0.56.2, Omarchy 4.0.2)
 
@@ -32,6 +58,15 @@ Nothing is pushed anywhere; there is no remote yet.
 - ICC picker with real profiles (none installed here; `omarchy-displays icc list` returns `[]`).
 - Hotplug refresh (socat listener on Hyprland's socket2) and behaviour with one bar per screen when a display is removed.
 - Whether DP-2 visibly showed an HDR badge / picture change from the monitor's side. Only Pedro can see that.
+- **Revert fidelity across every field, live.** Revert is `hyprctl reload` of the
+  generated Lua; the structural test proves every accepted key is emitted, but
+  whether Hyprland actually resets each one on reload (e.g. `sdrsaturation`) has
+  only been seen live for HDR and scale. This is the test that underwrites the
+  README's promise.
+- Session 2 UI changes by hand: pending-mode Enter on Keep/Revert, the ICC row
+  disabled while in HDR, an override forcing a draft out of HDR, the popup
+  brightness wheel on a fresh shell, and the queued-apply merge under a burst
+  of different fields.
 
 ## How this machine is wired
 
@@ -72,18 +107,24 @@ Live testing flips Pedro's real displays. He asked to be **warned before** anyth
 
 ## Decisions taken (do not re-litigate)
 
-Plugin at first-party quality rather than an upstream PR (upstream issues are closed, ~10 unreviewed display PRs, PR #7340 stalled). Fresh design rather than building on #7340 or hyprmoncfg. Two surfaces (popup + studio). SDR white default 203 cd/m² clamped to max-average. Wide gamut is a first-class third state. Generated layout file in the toggles dir, never editing monitors.lua. Plugin id `pmotta.displays` / name "Displays" are placeholders, one manifest field to rename. Probe availability still unknown.
+Plugin at first-party quality rather than an upstream PR (upstream issues are closed, ~10 unreviewed display PRs, PR #7340 stalled). Fresh design rather than building on #7340 or hyprmoncfg. Two surfaces (popup + studio). SDR white default 203 cd/m² clamped to max-average. Wide gamut is a first-class third state. Generated layout file in the toggles dir, never editing monitors.lua. Plugin id `pmotta.displays` / name "Displays" are placeholders; a rename touches the manifest `id`, the `~/.config/omarchy/plugins` symlink name, the `setup.monitors` menu override, and README's commands — the QML fallbacks and the backend's `OMARCHY_DISPLAYS_PLUGIN_ID` default are just that, defaults, not the source of truth. Probe availability still unknown.
 
 ## Next steps, in order
 
-1. **Pedro's hands-on pass** of popup and studio with a real keyboard and mouse; collect anything that feels off. Programmer's art is not allowed: expect design notes.
-2. **Live exercise of the remaining studio paths**: rotation, mirror, disable/enable, mode/VRR, with the same warn-then-flip protocol; fix what breaks.
-3. **Keyboard polish** likely needed after (1): Enter on dropdown rows, Esc while a number field has focus, cursor visibility when the inspector scrolls.
-4. **Rename** the plugin id/name if Pedro wants something else; one manifest field plus the menu override and README.
-5. **Profiles (v2)**: saved layouts keyed by EDID hash set with connector fallback, applied on hotplug/lid. The state JSON already carries `capabilities.hash`.
-6. **HDR test patterns (v2)** rendered by the shell for probe measurement, feeding WS-0 in the brief.
-7. **Screenshots under HDR** (brief WS-1 Tier 1) as a separate track once the probe exists.
-8. Consider a `Popup` chip strip → the studio's "1–9 select" parity, and a bar-icon state (glyph variant) when any display is in HDR.
+1. **Live revert-fidelity test** with the warn-then-flip protocol: apply a change
+   touching every field group, let it expire, confirm `hyprctl monitors -j` matches
+   the kept state field by field. Fix `generate_lua` for anything reload does not
+   reset.
+2. **Pedro's hands-on pass** of popup and studio with a real keyboard and mouse,
+   including the session 2 list above; collect anything that feels off.
+   Programmer's art is not allowed: expect design notes.
+3. **Live exercise of the remaining studio paths**: rotation, mirror, disable/enable, mode/VRR, with the same warn-then-flip protocol; fix what breaks.
+4. **Keyboard polish** likely needed after (2): Enter on dropdown rows, Esc while a number field has focus, cursor visibility when the inspector scrolls.
+5. **Rename** the plugin id/name if Pedro wants something else: manifest id, the symlink directory, the menu override, README, and the literal in Popup.qml.
+6. **Profiles (v2)**: saved layouts keyed by EDID hash set with connector fallback, applied on hotplug/lid. The state JSON already carries `capabilities.hash`.
+7. **HDR test patterns (v2)** rendered by the shell for probe measurement, feeding WS-0 in the brief.
+8. **Screenshots under HDR** (brief WS-1 Tier 1) as a separate track once the probe exists.
+9. Consider a `Popup` chip strip → the studio's "1–9 select" parity, and a bar-icon state (glyph variant) when any display is in HDR.
 
 ## Files
 
