@@ -30,7 +30,7 @@ Item {
   // ------------------------------------------------------------ state
   property var state: null
   property bool loading: false
-  property bool busy: applyProc.running || keepProc.running || revertProc.running
+  property bool busy: applyProc.running || keepProc.running || revertProc.running || applyQueue.length > 0
   property string lastError: ""
   readonly property var displays: state && Array.isArray(state.displays) ? state.displays : []
   readonly property string focused: state ? String(state.focused || "") : ""
@@ -106,15 +106,64 @@ Item {
 
   // ------------------------------------------------------------ actions
   //
-  // apply() chains: while an apply runs, the newest change waits and runs
-  // next (the backend merges onto pending, so intermediate ones can drop).
-  property var queuedApply: null
+  // apply() queues a FIFO of {change, immediately} requests behind whichever
+  // one is currently running. A request queued behind one with the same
+  // immediately flag merges into it (later field wins per display, per key;
+  // null is a real value here too — it tells the backend to clear that
+  // field, so it must overlay rather than be treated as absent) instead of
+  // just replacing it, so unrelated fields queued mid-run (scale, then
+  // rotation, then position) all reach the backend instead of only the
+  // last one. A --now request never merges with a pending one: they always
+  // run as separate, ordered process calls.
+  property var applyQueue: []
 
   function apply(change, immediately) {
+    var queue = applyQueue.slice()
+    var tail = queue.length ? queue[queue.length - 1] : null
+    if (tail && tail.immediately === immediately)
+      queue[queue.length - 1] = { change: mergeApplyChange(tail.change, change), immediately: immediately }
+    else
+      queue.push({ change: change, immediately: immediately })
+    applyQueue = queue
+    if (!applyProc.running) runNextApply()
+  }
+
+  // Overlay `incoming` onto `base` (both are apply() change objects: an
+  // optional `displays` array of {name, ...fields} and an optional `global`
+  // object). Matches displays by name, appending ones `base` didn't have.
+  function mergeApplyChange(base, incoming) {
+    var displays = (base.displays || []).map(function(d) {
+      var copy = {}
+      for (var k in d) copy[k] = d[k]
+      return copy
+    })
+    var byName = {}
+    for (var i = 0; i < displays.length; i++) byName[displays[i].name] = displays[i]
+    var incomingDisplays = incoming.displays || []
+    for (var j = 0; j < incomingDisplays.length; j++) {
+      var nd = incomingDisplays[j]
+      var existing = byName[nd.name]
+      if (!existing) { existing = { name: nd.name }; displays.push(existing); byName[nd.name] = existing }
+      for (var k2 in nd) existing[k2] = nd[k2]
+    }
+    var merged = { displays: displays }
+    if (base.global || incoming.global) {
+      var g = {}
+      for (var gk in base.global) g[gk] = base.global[gk]
+      for (var gk2 in incoming.global) g[gk2] = incoming.global[gk2]
+      merged.global = g
+    }
+    return merged
+  }
+
+  function runNextApply() {
+    if (!applyQueue.length) return
+    var queue = applyQueue.slice()
+    var next = queue.shift()
+    applyQueue = queue
     var args = [root.cli, "apply"]
-    if (immediately) args.push("--now")
-    args.push(JSON.stringify(change))
-    if (applyProc.running) { queuedApply = args; return }
+    if (next.immediately) args.push("--now")
+    args.push(JSON.stringify(next.change))
     applyProc.command = args
     applyProc.running = true
   }
@@ -154,16 +203,28 @@ Item {
   }
   property var brightnessQueued: null
 
+  // All three below: success is the exit code, not "did it write to
+  // stderr" — the backend can warn on stderr and still exit 0 (e.g. an
+  // EDID that doesn't advertise HDR), and die() can exit non-zero with
+  // useful stdout already flushed. exited() and the stdio collectors'
+  // streamFinished have no guaranteed order (see wifiqr/Panel.qml's
+  // pwProc upstream for the same caveat), so the exit code is stashed in
+  // onExited and only read once onRunningChanged fires — running is held
+  // true until both collectors (waitForEnd: true) have finished, so by
+  // then the exit code and the text are both settled.
   Process {
     id: applyProc
+    property int lastExitCode: -1
     stdout: StdioCollector { id: applyOut; waitForEnd: true }
     stderr: StdioCollector { id: applyErr; waitForEnd: true }
+    onExited: function(exitCode) { applyProc.lastExitCode = exitCode }
     onRunningChanged: {
       if (running) return
-      var err = String(applyErr.text || "").trim()
-      root.lastError = err
-      root.actionFinished("apply", err === "", err !== "" ? err : String(applyOut.text || "").trim())
-      if (root.queuedApply) { var next = root.queuedApply; root.queuedApply = null; applyProc.command = next; applyProc.running = true; return }
+      var ok = applyProc.lastExitCode === 0
+      var out = ok ? String(applyOut.text || "").trim() : String(applyErr.text || "").trim()
+      if (!ok) root.lastError = out
+      root.actionFinished("apply", ok, out)
+      if (root.applyQueue.length) { root.runNextApply(); return }
       root.refresh()
     }
   }
@@ -171,13 +232,16 @@ Item {
   Process {
     id: keepProc
     command: [root.cli, "keep"]
-    stdout: StdioCollector { waitForEnd: true }
+    property int lastExitCode: -1
+    stdout: StdioCollector { id: keepOut; waitForEnd: true }
     stderr: StdioCollector { id: keepErr; waitForEnd: true }
+    onExited: function(exitCode) { keepProc.lastExitCode = exitCode }
     onRunningChanged: {
       if (running) return
-      var err = String(keepErr.text || "").trim()
-      root.lastError = err
-      root.actionFinished("keep", err === "", err)
+      var ok = keepProc.lastExitCode === 0
+      var out = ok ? String(keepOut.text || "").trim() : String(keepErr.text || "").trim()
+      if (!ok) root.lastError = out
+      root.actionFinished("keep", ok, out)
       root.refresh()
     }
   }
@@ -185,10 +249,16 @@ Item {
   Process {
     id: revertProc
     command: [root.cli, "revert"]
-    stdout: StdioCollector { waitForEnd: true }
+    property int lastExitCode: -1
+    stdout: StdioCollector { id: revertOut; waitForEnd: true }
+    stderr: StdioCollector { id: revertErr; waitForEnd: true }
+    onExited: function(exitCode) { revertProc.lastExitCode = exitCode }
     onRunningChanged: {
       if (running) return
-      root.actionFinished("revert", true, "")
+      var ok = revertProc.lastExitCode === 0
+      var out = ok ? String(revertOut.text || "").trim() : String(revertErr.text || "").trim()
+      if (!ok) root.lastError = out
+      root.actionFinished("revert", ok, out)
       root.refresh()
     }
   }
