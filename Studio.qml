@@ -48,6 +48,55 @@ Item {
     readonly property int barSize: Style.bar.sizeHorizontal
   }
 
+  // ---------------------------------------------------------- the fold
+  //
+  // The inspector scrolls, and the shell's AsNeeded scrollbar paints nothing
+  // at rest, so anything past the bottom edge was hidden with nothing to say
+  // it was there. The keyboard already scrolls its cursor into view; this is
+  // for the eye. Naming the sections below beats a bare arrow: "there is more"
+  // is a hint, "colour is down there" is an answer.
+  readonly property var inspectorFlick: inspectorScroll.contentItem
+  readonly property real inspectorEdge:
+    (inspectorFlick && inspectorFlick.contentY !== undefined ? inspectorFlick.contentY : 0) + inspectorScroll.height
+  readonly property bool moreBelow: inspector.implicitHeight - inspectorEdge > 4
+  readonly property var sectionMarkers: [
+    { item: signalHeader, name: "signal" },
+    { item: geometryHeader, name: "geometry" },
+    { item: colourHeader, name: "colour" },
+    { item: advancedSection, name: "advanced" }
+  ]
+  readonly property string belowNames: {
+    if (!moreBelow) return ""
+    var out = []
+    for (var i = 0; i < sectionMarkers.length; i++) {
+      var m = sectionMarkers[i]
+      if (m.item && m.item.visible && m.item.y > inspectorEdge - 8) out.push(m.name)
+    }
+    return out.join(" · ")
+  }
+
+  // Clicking the hint takes you to the first section it names.
+  function scrollToFirstBelow() {
+    var flick = inspectorScroll.contentItem
+    if (!flick || flick.contentY === undefined) return
+    for (var i = 0; i < sectionMarkers.length; i++) {
+      var item = sectionMarkers[i].item
+      if (!item || !item.visible || item.y <= root.inspectorEdge - 8) continue
+      var limit = Math.max(0, inspector.implicitHeight - inspectorScroll.height)
+      scrollAnim.target = flick
+      scrollAnim.to = Math.min(limit, Math.max(0, item.y - Style.spacing.md))
+      scrollAnim.restart()
+      return
+    }
+  }
+
+  NumberAnimation {
+    id: scrollAnim
+    property: "contentY"
+    duration: 220
+    easing.type: Easing.OutCubic
+  }
+
   // ---------------------------------------------------------- lifecycle
   // Logical pixels and cd/m² are not currency: no thousands separators.
   Component.onCompleted: {
@@ -568,17 +617,17 @@ Item {
 
           // ---------- body ----------
           Item {
+            id: bodyItem
             width: parent.width
             height: parent.height - y - actionsArea.height - parent.spacing
 
             DisplayCanvas {
               id: canvas
               anchors.left: parent.left
-              // Centred rather than top-aligned. Sharing a top edge with the
-              // inspector is the stronger grid, but with a layout as wide as
-              // two side-by-side displays it pools every spare pixel into one
-              // hole in the corner; split above and below it reads as air.
-              anchors.verticalCenter: parent.verticalCenter
+              // Top-aligned: the canvas and the inspector start on the same
+              // line, and what used to be a void underneath now carries the
+              // panel's identity, so nothing is stranded.
+              anchors.top: parent.top
               width: Math.round(parent.width * 0.58)
               // Hug the arrangement instead of filling the column: two wide
               // displays in a tall box left the layout stranded in a field of
@@ -598,13 +647,121 @@ Item {
               onMoved: function(name, x, y) { root.moveDisplay(name, x, y) }
             }
 
+            // ----- panel identity, under the canvas
+            //
+            // This is what the display *is* rather than what you can do to
+            // it, so it belongs beside the picture of the desk and not at the
+            // top of a column of controls, where it pushed the colour
+            // controls — the point of the tool — off the bottom of the card.
+            // It holds no InspectorRow, so the keyboard's row order is
+            // untouched by living here.
+            Column {
+              id: panelInfo
+              anchors.left: parent.left
+              anchors.top: canvas.bottom
+              anchors.topMargin: Style.spacing.panelGap
+              anchors.right: canvas.right
+              // Bounded and clipped: on a card short enough that the canvas
+              // and the plot cannot both have what they want, this gets cut
+              // rather than drawn over the action bar.
+              height: Math.max(0, bodyItem.height - panelInfo.y)
+              clip: true
+              spacing: Style.spacing.md
+
+              Column {
+                id: identityColumn
+                width: parent.width
+                spacing: Style.spacing.xs
+                Text {
+                  textFormat: Text.PlainText
+                  text: root.display ? root.display.name + " · " + String(root.display.description || root.display.model || "").trim() : "No display"
+                  color: root.foreground
+                  font.family: root.fontFamily; font.pixelSize: Style.font.title; font.bold: true
+                  elide: Text.ElideRight; width: parent.width
+                }
+                Text {
+                  textFormat: Text.PlainText
+                  text: root.display ? Model.panelLine(root.display) : ""
+                  color: root.dim
+                  font.family: root.fontFamily; font.pixelSize: Style.font.caption
+                  wrapMode: Text.WordWrap; width: parent.width
+                }
+              }
+
+              Row {
+                id: capRow
+                width: parent.width
+                spacing: Style.spacing.xxl
+                visible: root.caps.available === true
+                // Top-aligned, not centred against the plot: centring left a
+                // hole between the panel's name and what it can do.
+                Column {
+                  width: parent.width - gamut.width - parent.spacing
+                  spacing: Style.spacing.xs
+                  Text { textFormat: Text.PlainText; text: Model.capabilityLine(root.caps); color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true; elide: Text.ElideRight; width: parent.width }
+                  Text { textFormat: Text.PlainText; text: Model.luminanceLine(root.caps); visible: text !== ""; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; elide: Text.ElideRight; width: parent.width }
+                  Text { textFormat: Text.PlainText; text: root.caps.primaries ? "Primaries (EDID) " + Model.primariesLine(root.caps) : ""; visible: text !== ""; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width }
+                  Text { textFormat: Text.PlainText; text: "filled: in use · outline: panel · dashed: BT.2020, P3, sRGB"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width }
+                }
+                // Room to be an instrument here, which it never had wedged
+                // beside the identity text at the top of the inspector.
+                GamutPlot {
+                  id: gamut
+                  // Takes the height the column has left, and a width in the
+                  // diagram's own 0.8:0.9 proportion so the plot is all
+                  // diagram and no padding.
+                  height: Math.round(Math.max(Style.space(120),
+                                              Math.min(Style.space(360),
+                                                       bodyItem.height - panelInfo.y - capRow.y)))
+                  width: Math.round(height * 0.8 / 0.9)
+                  primaries: root.caps.primaries || null
+                  // Draft-aware, so the triangle grows the moment Wide or
+                  // HDR is chosen rather than waiting for the apply.
+                  mode: root.display ? root.colourOf(root.display) : "sdr"
+                  foreground: root.foreground
+                  accent: root.accent
+                  surface: root.background
+                }
+              }
+            }
+
+            // The line stays whether or not it has anything to say, so the
+            // inspector does not resize itself every time you scroll.
+            Text {
+              id: foldHint
+              anchors.left: inspectorScroll.left
+              anchors.right: inspectorScroll.right
+              anchors.bottom: parent.bottom
+              height: Math.round(Style.font.caption * 1.7)
+              verticalAlignment: Text.AlignVCenter
+              textFormat: Text.PlainText
+              // Falls back to "more" when what is below is the tail of a
+              // section already on screen — Advanced expanded, say — which
+              // names nothing but is still hidden.
+              text: !root.moreBelow ? "" : "⌄ " + (root.belowNames === "" ? "more" : root.belowNames)
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              elide: Text.ElideRight
+              opacity: root.moreBelow ? 1 : 0
+              Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+
+              MouseArea {
+                anchors.fill: parent
+                enabled: root.moreBelow
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.scrollToFirstBelow()
+              }
+            }
+
             ScrollView {
               id: inspectorScroll
               anchors.left: canvas.right
               anchors.leftMargin: Style.spacing.panelGap
               anchors.right: parent.right
               anchors.top: parent.top
-              anchors.bottom: parent.bottom
+              anchors.bottom: foldHint.top
               clip: true
               ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
               ScrollBar.vertical.policy: inspector.implicitHeight > height ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
@@ -614,54 +771,8 @@ Item {
                 width: inspectorScroll.availableWidth
                 spacing: Style.spacing.xl
 
-                // ----- panel identity
-                Column {
-                  width: parent.width
-                  spacing: Style.spacing.xs
-                  Text {
-                    textFormat: Text.PlainText
-                    text: root.display ? root.display.name + " · " + String(root.display.description || root.display.model || "").trim() : "No display"
-                    color: root.foreground
-                    font.family: root.fontFamily; font.pixelSize: Style.font.title; font.bold: true
-                    elide: Text.ElideRight; width: parent.width
-                  }
-                  Text {
-                    textFormat: Text.PlainText
-                    text: root.display ? Model.panelLine(root.display) : ""
-                    color: root.dim
-                    font.family: root.fontFamily; font.pixelSize: Style.font.caption
-                    wrapMode: Text.WordWrap; width: parent.width
-                  }
-                }
-
-                Row {
-                  width: parent.width
-                  spacing: Style.spacing.xxl
-                  visible: root.caps.available === true
-                  Column {
-                    width: parent.width - gamut.width - parent.spacing
-                    spacing: Style.spacing.xs
-                    anchors.verticalCenter: parent.verticalCenter
-                    Text { textFormat: Text.PlainText; text: Model.capabilityLine(root.caps); color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true; elide: Text.ElideRight; width: parent.width }
-                    Text { textFormat: Text.PlainText; text: Model.luminanceLine(root.caps); visible: text !== ""; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; elide: Text.ElideRight; width: parent.width }
-                    Text { textFormat: Text.PlainText; text: root.caps.primaries ? "Primaries (EDID) " + Model.primariesLine(root.caps) : ""; visible: text !== ""; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width }
-                    Text { textFormat: Text.PlainText; text: "filled: in use · outline: panel · dashed: BT.2020, P3, sRGB"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width }
-                  }
-                  GamutPlot {
-                    id: gamut
-                    primaries: root.caps.primaries || null
-                    // Draft-aware, so the triangle grows the moment Wide or
-                    // HDR is chosen rather than waiting for the apply.
-                    mode: root.display ? root.colourOf(root.display) : "sdr"
-                    foreground: root.foreground
-                    accent: root.accent
-                    surface: root.background
-                  }
-                }
-
                 // ----- signal
-                PanelSeparator { foreground: root.foreground }
-                PanelSectionHeader { text: "SIGNAL"; foreground: root.foreground; fontFamily: root.fontFamily }
+                PanelSectionHeader { id: signalHeader; text: "SIGNAL"; foreground: root.foreground; fontFamily: root.fontFamily }
 
                 InspectorRow {
                   rowId: "mode"
@@ -696,7 +807,7 @@ Item {
 
                 // ----- geometry
                 PanelSeparator { foreground: root.foreground }
-                PanelSectionHeader { text: "GEOMETRY"; foreground: root.foreground; fontFamily: root.fontFamily }
+                PanelSectionHeader { id: geometryHeader; text: "GEOMETRY"; foreground: root.foreground; fontFamily: root.fontFamily }
 
                 InspectorRow {
                   rowId: "scale"
@@ -812,7 +923,7 @@ Item {
 
                 // ----- colour
                 PanelSeparator { visible: root.caps.available === true; foreground: root.foreground }
-                PanelSectionHeader { visible: root.caps.available === true; text: "COLOUR"; foreground: root.foreground; fontFamily: root.fontFamily }
+                PanelSectionHeader { id: colourHeader; visible: root.caps.available === true; text: "COLOUR"; foreground: root.foreground; fontFamily: root.fontFamily }
 
                 InspectorRow {
                   rowId: "colour"
@@ -920,6 +1031,7 @@ Item {
                 PanelSeparator { visible: root.caps.available === true; foreground: root.foreground }
 
                 InspectorRow {
+                  id: advancedSection
                   rowId: "advanced"
                   visible: root.caps.available === true
                   Item {

@@ -72,8 +72,16 @@ Item {
       [0.7334,0.2666],[0.7340,0.2660],[0.7344,0.2656],[0.7346,0.2654],[0.7347,0.2653]
     ]
 
-    function px(v) { return 6 + v * (width - 12) / 0.8 }
-    function py(v) { return height - 6 - v * (height - 12) / 0.9 }
+    // One scale for both axes, centred in whatever box it is given. x and y
+    // in CIE 1931 are the same kind of quantity: stretching one against the
+    // other moves every primary off its true place and makes the diagram a
+    // decoration. The caller can size this freely and the geometry holds.
+    readonly property real unit: Math.max(1, Math.min((width - 12) / 0.8, (height - 12) / 0.9))
+    readonly property real insetX: (width - 0.8 * unit) / 2
+    readonly property real insetY: (height - 0.9 * unit) / 2
+
+    function px(v) { return insetX + v * unit }
+    function py(v) { return height - insetY - v * unit }
 
     function lerpPoint(a, b, t) {
       return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
