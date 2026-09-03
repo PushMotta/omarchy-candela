@@ -19,7 +19,10 @@
 # intent, regenerates the Lua, and reloads. `revert` (or the timer) drops
 # pending and reloads, which restores the last kept configuration.
 
-set -euo pipefail
+set -Eeuo pipefail
+# A set -e exit with no message is the worst failure mode for a tool that
+# arms display changes: say where it died. Only fires where errexit would.
+trap 'echo "omarchy-displays: aborted at line $LINENO: $BASH_COMMAND" >&2' ERR
 
 PLUGIN_ID="${OMARCHY_DISPLAYS_PLUGIN_ID:-pmotta.displays}"
 SELF="$(readlink -f "$0")"

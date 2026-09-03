@@ -2,6 +2,10 @@
 
 # Shared helpers for the bash tests. Source this file.
 
+# Name the site of a silent set -e death in the sourcing test file.
+set -E
+trap 'echo "  ABORT ${BASH_SOURCE[0]}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
+
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 FIXTURES="$ROOT/test/fixtures"
 
