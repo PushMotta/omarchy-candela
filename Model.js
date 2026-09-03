@@ -24,6 +24,25 @@ function round2(v) {
   return Math.round(v * 100) / 100
 }
 
+// Scales live on Hyprland's 1/120 grid, and 1/120 is not representable in
+// two decimals: 4/3 is 1.33333, and 1.33 is a scale Hyprland corrects with a
+// warning. Five decimals keep every grid step distinct; labels round for
+// people, values never do.
+function round5(v) {
+  return Math.round(v * 100000) / 100000
+}
+
+function formatScale(v) {
+  var n = num(v, 1)
+  var s = n.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")
+  return s === "" ? "1" : s
+}
+
+// hyprctl reports scale to two decimals, so equality is a tolerance, not ===.
+function sameScale(a, b) {
+  return Math.abs(num(a, NaN) - num(b, NaN)) < 0.006
+}
+
 // ---------------------------------------------------------------- scale
 
 function gcd(a, b) {
@@ -40,7 +59,7 @@ function cleanScale(scale, width, height) {
   var units = Math.round(requested * 120)
   if (units > divisor) units = divisor
   while (divisor % units !== 0) units++
-  return round2(units / 120)
+  return round5(units / 120)
 }
 
 // Preset list with duplicates (presets that collapse to one clean scale)
@@ -62,8 +81,7 @@ function availableScales(width, height, presets) {
 }
 
 function scaleIndex(scales, currentScale) {
-  var current = round2(num(currentScale, NaN))
-  for (var i = 0; i < scales.length; i++) if (scales[i].effective === current) return i
+  for (var i = 0; i < scales.length; i++) if (sameScale(scales[i].effective, currentScale)) return i
   return -1
 }
 
@@ -283,7 +301,7 @@ function panelLine(display) {
 function metaLine(display) {
   var d = display || {}
   if (!(d.width > 0)) return "DISABLED"
-  var parts = [d.width + "×" + d.height, Math.round(num(d.refreshRate, 0)) + " Hz", round2(num(d.scale, 1)) + "×"]
+  var parts = [d.width + "×" + d.height, Math.round(num(d.refreshRate, 0)) + " Hz", formatScale(d.scale) + "×"]
   var mode = colourMode(d)
   parts.push(mode === "hdr" ? "HDR" : (mode === "wide" ? "WIDE" : "SDR"))
   if (d.mirrorOf && d.mirrorOf !== "none") parts.push("MIRROR OF " + d.mirrorOf)
@@ -394,6 +412,82 @@ function layoutCaption(rects) {
   return rects.map(function (r) { return r.name + " at " + r.x + ", " + r.y }).join(" · ")
 }
 
+// When a mode, scale or rotation changes a display's logical size, the
+// displays that sat flush against (or beyond) its old right and bottom edges
+// move by the difference, so a flush layout stays flush and a deliberate gap
+// stays the same gap. `rects` already carries the new size; `oldSize` is
+// what it was. Returns the moves, not a new layout: the studio stages each
+// one as a draft position like any other edit.
+function reflowAfterResize(rects, name, oldSize) {
+  var resized = null
+  for (var i = 0; i < rects.length; i++) if (rects[i].name === name) resized = rects[i]
+  if (!resized || resized.disabled || resized.mirrorOf) return []
+  var dx = resized.width - oldSize.width
+  var dy = resized.height - oldSize.height
+  if (dx === 0 && dy === 0) return []
+  var oldRight = resized.x + oldSize.width
+  var oldBottom = resized.y + oldSize.height
+  var moves = []
+  arrangeable(rects).forEach(function (r) {
+    if (r.name === name) return
+    var x = r.x, y = r.y
+    if (dx !== 0 && r.x >= oldRight) x += dx
+    if (dy !== 0 && r.y >= oldBottom) y += dy
+    if (x !== r.x || y !== r.y) moves.push({ name: r.name, x: x, y: y })
+  })
+  return moves
+}
+
+// A pointer drop on top of another display is not a request for an overlap:
+// it is a release that missed by a little. Move the dropped rect to the
+// nearest position flush against an edge of the display it landed on (or of
+// any other) where it overlaps nothing. Returns null when the drop is clean
+// or when no clear edge exists; typed positions never come through here, so
+// exact coordinates stay exact.
+function placeOutsideOverlaps(rect, others) {
+  var targets = arrangeable(others).filter(function (o) { return o.name !== rect.name })
+  function clear(x, y) {
+    var probe = { name: rect.name, x: x, y: y, width: rect.width, height: rect.height }
+    for (var i = 0; i < targets.length; i++) if (overlaps(probe, targets[i])) return false
+    return true
+  }
+  if (clear(rect.x, rect.y)) return null
+  var best = null
+  targets.forEach(function (o) {
+    [[o.x - rect.width, rect.y], [o.x + o.width, rect.y], [rect.x, o.y - rect.height], [rect.x, o.y + o.height]].forEach(function (c) {
+      if (!clear(c[0], c[1])) return
+      var d = (c[0] - rect.x) * (c[0] - rect.x) + (c[1] - rect.y) * (c[1] - rect.y)
+      if (best === null || d < best.d) best = { x: c[0], y: c[1], d: d }
+    })
+  })
+  return best === null ? null : { x: best.x, y: best.y }
+}
+
+// Alt+arrow: put the selected display flush against the nearest other
+// display on the given side, centred along the other axis. Nearest is by
+// centre distance, so the anchor is the display the user is looking at.
+function snapBeside(rects, name, direction) {
+  var me = null
+  for (var i = 0; i < rects.length; i++) if (rects[i].name === name) me = rects[i]
+  if (!me || me.disabled || me.mirrorOf) return null
+  var cx = me.x + me.width / 2, cy = me.y + me.height / 2
+  var anchor = null, bestD = Infinity
+  arrangeable(rects).forEach(function (o) {
+    if (o.name === name) return
+    var ox = o.x + o.width / 2, oy = o.y + o.height / 2
+    var d = (ox - cx) * (ox - cx) + (oy - cy) * (oy - cy)
+    if (d < bestD) { bestD = d; anchor = o }
+  })
+  if (!anchor) return null
+  var centreX = anchor.x + Math.trunc((anchor.width - me.width) / 2)
+  var centreY = anchor.y + Math.trunc((anchor.height - me.height) / 2)
+  if (direction === "left") return { x: anchor.x - me.width, y: centreY }
+  if (direction === "right") return { x: anchor.x + anchor.width, y: centreY }
+  if (direction === "up") return { x: centreX, y: anchor.y - me.height }
+  if (direction === "down") return { x: centreX, y: anchor.y + anchor.height }
+  return null
+}
+
 // ---------------------------------------------------------------- brightness
 
 function brightnessName(percent) {
@@ -419,7 +513,7 @@ function parseState(raw) {
 if (typeof module !== "undefined") {
   module.exports = {
     REFERENCE_WHITE: REFERENCE_WHITE, SDR_WHITE_FLOOR: SDR_WHITE_FLOOR, SCALE_PRESETS: SCALE_PRESETS,
-    cleanScale: cleanScale, availableScales: availableScales, scaleIndex: scaleIndex,
+    cleanScale: cleanScale, availableScales: availableScales, scaleIndex: scaleIndex, formatScale: formatScale, sameScale: sameScale, round5: round5,
     bitdepthFromFormat: bitdepthFromFormat, formatMode: formatMode, parseMode: parseMode, modeOptions: modeOptions, currentModeValue: currentModeValue,
     effectiveIntent: effectiveIntent, colourMode: colourMode, offeredModes: offeredModes, hdrUnavailableReason: hdrUnavailableReason, sdrWhiteRange: sdrWhiteRange, defaultSdrWhite: defaultSdrWhite,
     fieldsForMode: fieldsForMode, sdrWhiteToSlider: sdrWhiteToSlider, sliderToSdrWhite: sliderToSdrWhite,
@@ -427,6 +521,7 @@ if (typeof module !== "undefined") {
     displayTitle: displayTitle, panelLine: panelLine, metaLine: metaLine,
     logicalSize: logicalSize, rectOf: rectOf, overlaps: overlaps, boundsOf: boundsOf, snapRect: snapRect, anyOverlap: anyOverlap, layoutCaption: layoutCaption,
     arrangeable: arrangeable, snapTargets: snapTargets, withRect: withRect, dragPosition: dragPosition,
+    reflowAfterResize: reflowAfterResize, placeOutsideOverlaps: placeOutsideOverlaps, snapBeside: snapBeside,
     brightnessName: brightnessName, parseState: parseState, clamp: clamp, round2: round2
   }
 }

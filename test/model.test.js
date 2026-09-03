@@ -23,10 +23,36 @@ function display(overrides) {
 test("clean scale follows Hyprland's 1/120 rule", () => {
   assert.equal(M.cleanScale(1.6, 3840, 2560), 1.6)
   assert.equal(M.cleanScale(1.25, 3840, 2560), 1.25)
-  assert.equal(M.cleanScale(1.3, 3840, 2560), 1.33)
+  // 1.3 is not on the grid for this panel; the nearest step above it is 4/3,
+  // which must keep its 1/120 precision. 1.33 would be corrected by Hyprland
+  // with a warning, because 3840/1.33 is not a whole number of pixels.
+  assert.equal(M.cleanScale(1.3, 3840, 2560), 1.33333)
+  assert.equal(M.cleanScale(4 / 3, 2880, 1800), 1.33333)
+  for (const [s, w, h] of [[1.3, 3840, 2560], [4 / 3, 2880, 1800], [1.5, 2560, 1440], [1.75, 2560, 1600]]) {
+    const e = M.cleanScale(s, w, h)
+    const units = Math.round(e * 120)
+    assert.equal(Math.abs(e - units / 120) < 1e-5, true, `${e} sits on the 1/120 grid`)
+    assert.equal((w * 120) % units, 0, `${w} divides at ${e}`)
+    assert.equal((h * 120) % units, 0, `${h} divides at ${e}`)
+  }
   const scales = M.availableScales(3840, 2560)
   assert.deepEqual(scales.map(s => s.label), ["1", "1.25", "1.6", "2", "3", "4"])
   assert.equal(M.scaleIndex(scales, 1.6), 2)
+  // hyprctl reports two decimals: 1.33 must still find the 1.33333 entry.
+  const grid = [{ label: "4/3", effective: 1.33333 }]
+  assert.equal(M.scaleIndex(grid, 1.33), 0)
+  assert.equal(M.sameScale(1.33333, 1.33), true)
+  assert.equal(M.sameScale(1.6, 1.5), false)
+})
+
+test("scale labels round for people, values keep the grid", () => {
+  assert.equal(M.formatScale(1.33333), "1.33")
+  assert.equal(M.formatScale(1.6), "1.6")
+  assert.equal(M.formatScale(1.25), "1.25")
+  assert.equal(M.formatScale(2), "2")
+  assert.equal(M.formatScale(3.2), "3.2")
+  assert.equal(M.formatScale(undefined), "1")
+  assert.equal(M.round5(4 / 3), 1.33333)
 })
 
 test("bit depth is derived from the framebuffer format", () => {
@@ -229,4 +255,49 @@ test("a drag follows the pointer and not its own last position", () => {
   assert.equal(free.x, 3300)
   assert.deepEqual(free.guides.map(g => g.axis), ["y"])
   assert.equal(free.y, 0)
+})
+
+test("resizing a display carries its flush neighbours along", () => {
+  const rects = monitors.map(m => M.rectOf(m))          // DP-1 0..2400, DP-2 at 2400
+  // DP-1 goes from scale 1.6 (2400 wide) to 2 (1920 wide): DP-2 slides left.
+  const resized = M.withRect(rects, "DP-1", 0, 0).map(r => r.name === "DP-1" ? Object.assign({}, r, { width: 1920, height: 1280 }) : r)
+  assert.deepEqual(M.reflowAfterResize(resized, "DP-1", { width: 2400, height: 1600 }), [{ name: "DP-2", x: 1920, y: 0 }])
+  // A display to the left of the old right edge does not move.
+  const leftOf = [Object.assign({}, rects[1], { x: 0 }), Object.assign({}, rects[0], { x: 2400, width: 1920, height: 1280 })]
+  assert.deepEqual(M.reflowAfterResize(leftOf, "DP-1", { width: 2400, height: 1600 }), [])
+  // A gap is preserved, not closed: a neighbour 100 px away stays 100 px away.
+  const gapped = resized.map(r => r.name === "DP-2" ? Object.assign({}, r, { x: 2500 }) : r)
+  assert.deepEqual(M.reflowAfterResize(gapped, "DP-1", { width: 2400, height: 1600 }), [{ name: "DP-2", x: 2020, y: 0 }])
+  // Same size: nothing to do. Off or mirrored neighbours have no position to move.
+  assert.deepEqual(M.reflowAfterResize(rects, "DP-1", { width: 2400, height: 1600 }), [])
+  const off = resized.map(r => r.name === "DP-2" ? Object.assign({}, r, { disabled: true }) : r)
+  assert.deepEqual(M.reflowAfterResize(off, "DP-1", { width: 2400, height: 1600 }), [])
+})
+
+test("a drop on top of another display lands on its nearest clear edge", () => {
+  const rects = monitors.map(m => M.rectOf(m))
+  // Dropped 300 px into DP-1 from the right: the nearest clear spot is flush right of DP-1.
+  const dropped = Object.assign({}, rects[1], { x: 2100, y: 0 })
+  assert.deepEqual(M.placeOutsideOverlaps(dropped, rects), { x: 2400, y: 0 })
+  // Dropped mostly below DP-1: it goes under it, keeping its x.
+  const under = Object.assign({}, rects[1], { x: 300, y: 1400 })
+  assert.deepEqual(M.placeOutsideOverlaps(under, rects), { x: 300, y: 1600 })
+  // A clean drop is left exactly where it is.
+  assert.equal(M.placeOutsideOverlaps(Object.assign({}, rects[1], { x: 2600, y: 200 }), rects), null)
+  // Landing on an off display is not an overlap.
+  const off = [Object.assign({}, rects[0], { disabled: true }), rects[1]]
+  assert.equal(M.placeOutsideOverlaps(Object.assign({}, rects[1], { x: 100, y: 0 }), off), null)
+})
+
+test("snap beside puts a display flush against its nearest neighbour, centred", () => {
+  const rects = monitors.map(m => M.rectOf(m))
+  const small = [rects[0], { name: "DP-2", x: 5000, y: 3000, width: 1200, height: 800 }]
+  assert.deepEqual(M.snapBeside(small, "DP-2", "right"), { x: 2400, y: 400 })
+  assert.deepEqual(M.snapBeside(small, "DP-2", "left"), { x: -1200, y: 400 })
+  assert.deepEqual(M.snapBeside(small, "DP-2", "up"), { x: 600, y: -800 })
+  assert.deepEqual(M.snapBeside(small, "DP-2", "down"), { x: 600, y: 1600 })
+  assert.equal(M.snapBeside(small, "DP-2", "sideways"), null)
+  assert.equal(M.snapBeside([rects[0]], "DP-1", "right"), null, "nothing to snap beside")
+  const off = [Object.assign({}, rects[0], { disabled: true }), small[1]]
+  assert.equal(M.snapBeside(off, "DP-2", "right"), null, "an off display is not an anchor")
 })
