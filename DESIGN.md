@@ -27,7 +27,7 @@ Test results (see §9): 10-bit on DP-2 did **not** crash this shell. Mixing an e
 
 Omarchy has a *brightness* panel. It needs a *displays* product: the place where a display is arranged, driven at its real capabilities, and put into the right colour mode with the compositor telling the truth about what it is doing, in physical units, with a way back if it goes wrong.
 
-The bar of quality is not "has the knobs" (hyprmoncfg has the knobs). It is: a colour professional opens it, sees their panel described correctly in cd/m² and chromaticities, flips to HDR with one control that maps to the right five Hyprland fields, and never has to open a config file. And a laptop user sees only brightness, scale and rotation, and nothing else gets in their way.
+The bar of quality is not "has the knobs". It is: a colour professional opens it, sees their panel described correctly in cd/m² and chromaticities, flips to HDR with one control that maps to the right five Hyprland fields, and never has to open a config file. And a laptop user sees only brightness, scale and rotation, and nothing else gets in their way.
 
 ## 2. Principles
 
@@ -92,6 +92,7 @@ overlap: the others have no independent position.
 
 - **Identify overlay.** A layer-shell badge per display: connector in display-large, model beneath, 2 s.
 - **Apply/revert countdown** is the same component in both the popup (compact) and the studio.
+- **Pending strip.** While a change is pending, the service owns a Keep/Revert card at the top of every screen that is not already showing one in the popup or the studio. It exists so the decision is never stranded: the change can take away the very screen it was made from, and a change from the CLI has no surface at all. When no surface is open, the strip on the focused screen has the keyboard with the studio's keys (↵ on the highlighted button, esc reverts, h/l choose); the others are pointer-only. The strip is the plain countdown component on a popup-toned card, without a second frame.
 - **OSD** reuse for brightness and SDR white from keys.
 
 ### 3.4 CLI
@@ -154,11 +155,16 @@ The overrides feed the mode selector, not just Hyprland: `offeredModes(caps, int
 | Shift + arrows | — | nudge 100 px |
 | Tab | switch bar panel | canvas ⇄ inspector |
 | 1–9 | select display | select display |
+| [ / ] | — | previous / next display |
+| ⌥ + arrows | — | on canvas: flush against the nearest display on that side, centred |
+| 0 | — | on canvas: move to the origin |
 | Enter | activate row | activate row / Apply when in action bar |
 | a / r / i | — | Apply / Revert / Identify |
 | Esc | close | cancel pending countdown, then close |
 
 Mouse hover moves the same cursor; there is never a second highlight.
+
+*Canvas edits that resolve themselves.* A pointer drop on top of another display is a release that missed by a little, not a request for an overlap: it lands flush against the nearest clear edge. Typed positions and keyboard nudges stay exact and may overlap, which paints urgent and disables Apply as before. A mode, scale or rotation change moves the displays that sat flush against, or beyond, the display's old right and bottom edges by the difference, so a flush layout stays flush and a deliberate gap stays the same gap.
 
 ## 6. Architecture
 
@@ -187,7 +193,11 @@ Bash, following AGENTS.md style, reading only `hyprctl -j`, `edid-decode`, `ddcu
 
 ### 6.3 Persistence
 
-Generated Lua at `~/.local/state/omarchy/toggles/hypr/displays-layout.lua`, which Omarchy already loads on every reload after the user's own `monitors.lua`. One `hl.monitor` per managed display with all managed fields explicit. Header says it is generated and names the command that owns it. The user's `monitors.lua` is never parsed or edited.
+Generated Lua at `~/.local/state/omarchy/toggles/hypr/displays-layout.lua`, which Omarchy already loads on every reload after the user's own `monitors.lua`. One `hl.monitor` per managed display with all managed fields explicit. Header says it is generated and names the command that owns it. The user's `monitors.lua` is never parsed or edited. The file ends by setting a global to a per-keep probe token; `hyprctl eval` can assert it afterwards, which is the only proof that the toggles directory is still being loaded.
+
+The pending change is written beside it as `displays-pending.lua`, in the same form, for as long as it is pending. Omarchy loads the directory in sorted filename order, so the pending file loads after the layout and before Omarchy's own `internal-monitor-*` toggles. A reload from anywhere else during the window, and Omarchy issues them from its clamshell script and on theme changes, therefore re-applies the preview instead of reverting it. Revert deletes the file and reloads.
+
+A display switched off keeps its live mode, position, scale and rotation in intent at the moment it goes off, so its rule brings it back where it was rather than at "preferred" and 0x0, which is what its live geometry reads once it is off.
 
 Alternative considered: a managed block inside `monitors.lua` with a Lua-aware writer (PR #7340 does this well). Rejected for v1: touching the user's file is the thing that produced #6673-class bugs, and generation is testable byte for byte.
 
@@ -201,11 +211,21 @@ Primary key: connector name. Stored alongside: make, model, serial, EDID hash. W
 
 The timer runs `revert --expired --token <token>`. A token that no longer matches the pending file marks a stale timer and does nothing, so the fallback timer, which cannot be cancelled, can never revert a newer change. `keep` and `apply --now` commit intent, regenerate the Lua, reload and check `hyprctl configerrors` through one shared path, so the persisted file is validated the same way whichever door it came in by. Every mutating command holds the lock, and every state write goes through a private temp file and an atomic rename.
 
+After the chunk is accepted, apply reads the compositor back for up to three seconds, comparing every field the intent names against what hyprctl reports (position and mode are skipped on a mirror, cm only for presets Hyprland echoes verbatim, scale to hyprctl's two decimals), and unwinds a change Hyprland accepted but did not land on, naming the field. `keep` and `apply --now` do the same after their reload, after `hyprctl configerrors` and after asserting the layout probe; a revert that does not restore the kept state exits non-zero and says why.
+
+The backend refuses a change that would leave no display enabled, so the CLI is not a way round the popup's rule. Should every display ever be off anyway, most likely a kept layout with one display off booted without the other attached, the service runs `recover`, which switches the built-in panel, or the first display, back on. One attempt per dark spell, so a rescue the compositor refuses cannot loop.
+
 The shell shows the countdown but does not own it, so a shell crash (#9804 class) still reverts. Brightness and SDR white apply immediately with no countdown.
 
 ### 6.6 Hotplug
 
 Service listens on Hyprland's socket2 for `monitoradded` / `monitorremoved` and refreshes state. Automatic profile switching is v2.
+
+### 6.7 The built-in panel
+
+Omarchy already manages a laptop's built-in panel: its clamshell script runs on lid switches and on every monitor event (with retries at 1, 3 and 7 s and a 2 s poll while docked), and when the panel should be on it re-enables it with `hyprctl eval` at `position = "auto"` and a scale read from `monitors.lua`, from its own `internal-monitor-scale` state file, or 2. It never reads our layout, so a plain `disabled = true` rule of ours would be undone within seconds, and a numeric scale in `monitors.lua` would fight ours on every lid event. The only off state it respects is its own `internal-monitor-disable.lua` toggle, which its boot-time recovery unit also clears when no external display is connected.
+
+So the panel's off state is that toggle: switching the panel off writes the same file Omarchy's own command writes, switching it on removes it, a pending change records what the file looked like before and revert puts it back, and intent never stores `enabled` for the panel. The kept scale is written to `internal-monitor-scale` on every keep. With the stock `monitors.lua` (scale `"auto"`) the script defers to the compositor's value once the panel is up, which after our reload is ours; `doctor` warns when the file sets a number. The watcher is never stopped: Omarchy's recovery depends on it, and the toggles-directory design coexists with it.
 
 ## 7. Scope
 
@@ -215,7 +235,7 @@ Service listens on Hyprland's socket2 for `monitoradded` / `monitorremoved` and 
 | SDR / Wide / HDR mapping, SDR white, saturation, EOTF, ICC, luminance and capability overrides | HDR test patterns (WS-0 charts) rendered by the shell for probe measurement |
 | Mode, VRR, scale, rotation, position with snapping, mirror, enable | Workspace-to-display planner |
 | Identify, apply/revert countdown, CLI | Colour-correct screenshots under HDR (separate track, WS-1) |
-| Hotplug refresh | Chromium / Electron HDR guidance |
+| Hotplug refresh, every-screen pending strip, readback, load probe, `doctor`, `recover` | Chromium / Electron HDR guidance |
 
 ## 8. Decisions (approved 3 Sep 2026)
 
@@ -226,7 +246,7 @@ Service listens on Hyprland's socket2 for `monitoradded` / `monitorremoved` and 
 5. Generated state file in the toggles directory. **Approved.**
 6. Probe availability: **still unknown**; WS-0 numbers wait on it.
 
-Earlier framing decisions: build as a plugin at first-party quality rather than an upstream PR first; start clean rather than on PR #7340; aim well past hyprmoncfg on design.
+Earlier framing decisions: build as a plugin at first-party quality rather than an upstream PR first; start clean rather than on PR #7340; aim well past the existing display tools on design.
 
 ## 9. Findings from live tests (3 Sep 2026)
 
@@ -237,7 +257,15 @@ Earlier framing decisions: build as a plugin at first-party quality rather than 
 - **SDR white defaults to 80 cd/m² in HDR.** `sdrMaxLuminance` stayed at Hyprland's default of 80 after the flip. That is the "washed out desktop" complaint in one number: the tool must write `sdr_max_luminance` (203 by default, §4.2) on every HDR entry.
 - **`hyprctl monitors -j` does not expose the negotiated HDR metadata** (min / max / max-average luminance sent to the panel), only the `sdr*` fields. The Panel section must derive those from EDID plus the config we wrote, and say so.
 
+Session 3 (3 Sep 2026, evening):
+
+- **A global set by a toggles file is visible to `hyprctl eval` after a reload.** The layout probe works on 0.56.2: `doctor` reports the file ran. `eval` prints only `ok` or an error, never a return value, so the probe is an `assert`.
+- **The two MateViews' EDIDs differ** (manufacture week 28 against 25 of 2021) although Hyprland reports a blank serial for both and the numeric serial in the base block is identical. The EDID hash is a usable identity on this desk; make, model and serial are not.
+- **Omarchy's clamshell script evals the built-in panel at `position = "auto"`** and never reads our layout (§6.7). Omarchy reloads Hyprland from that script, from its modeless-recovery loop and on theme changes, which is why the pending change is on disk (§6.3).
+- **Toggles load in sorted filename order** (`find | sort` in `require_all.lua`): `displays-layout` < `displays-pending` < `internal-monitor-*`.
+- **The every-screen strip and keep with the studio open were seen live** (screenshots of both screens, no shell warnings); the built-in panel paths, `recover` at boot and the strip's keyboard are covered by the sandbox only.
+
 ## 10. Prior art, read but not copied
 
 - **PR #7340**: good ideas worth crediting — EDID-gated HDR switch, SDR white capped at sustained luminance, overlap tidy before rotation, Lua-aware writer. Different decisions here: three-state colour mode instead of a switch, generated file instead of editing monitors.lua, revert timer outside the shell.
-- **hyprmoncfg**: complete knob coverage, profiles, workspace planner. Missing: physical units, EDID truth, safety countdown, shell-native cursor model. Its expanded editor is the reference for what a v2 profile browser must exceed.
+- **Omarchy's own monitor scripts** (`omarchy-hyprland-monitor-clamshell`, `-internal`, `-watch`, `omarchy-hw-recover-internal-monitor`): the built-in panel's owner on every Omarchy machine. Read for §6.7; coexisted with, never replaced.

@@ -16,7 +16,11 @@ Two surfaces, one backend:
   capability overrides, auto-HDR).
 
 Every risky change is applied live and **reverts itself in 15 seconds unless
-kept**. The timer runs outside the shell, so a shell crash still reverts.
+kept**. The timer runs outside the shell, so a shell crash still reverts. The
+compositor is read back after every apply, so a change Hyprland accepted but
+did not land on is undone rather than shown as pending. A Keep/Revert strip
+sits on every screen while a change is pending, so the decision is never
+stranded on a display the change just switched off.
 
 The design and the reasoning behind it live in [DESIGN.md](DESIGN.md).
 
@@ -83,10 +87,14 @@ what the plugin wrote for you, so that your display layout survives a
 reinstall. To go back to a stock machine, also:
 
 ```bash
-rm -rf ~/.local/state/omarchy/displays                         # intent and pending state
-rm -f  ~/.local/state/omarchy/toggles/hypr/displays-layout.lua # the generated layout rule
-hyprctl reload                                                 # back to your own monitors.lua
+rm -rf ~/.local/state/omarchy/displays                           # intent and pending state
+rm -f  ~/.local/state/omarchy/toggles/hypr/displays-{layout,pending}.lua   # the generated rules
+hyprctl reload                                                   # back to your own monitors.lua
 ```
+
+`internal-monitor-disable.lua` and `internal-monitor-scale` in that directory
+are Omarchy's own files; this plugin writes them on Omarchy's behalf and
+Omarchy's tools keep understanding them after it is gone.
 
 and drop the optional `setup.monitors` override and keybindings above if you
 added them. No file outside those paths is ever written.
@@ -99,11 +107,27 @@ added them. No file outside those paths is ever written.
 | h / l, ← / → | adjust slider, walk pills | adjust the current row; on the canvas nudge 10 px (⇧ 100) |
 | Tab | switch bar panel | canvas ⇄ inspector ⇄ actions |
 | 1–9 | — | select display |
+| [ / ] | — | previous / next display |
+| ⌥ + arrows | — | on the canvas: flush against the nearest display on that side, centred |
+| 0 | — | on the canvas: move to the origin |
 | Enter | select the display under the cursor; on the display already selected, its power | activate row / open dropdown / focus a number field |
 | a / r / i | — | Apply / Revert or Discard / Identify |
 | Esc | close | cancel a pending countdown, then close |
 
 Mouse hover moves the same cursor; there is never a second highlight.
+
+While a change is pending, a Keep/Revert strip sits at the top of every screen
+that is not already showing one in the popup or the studio. When neither is
+open, the strip on the focused screen has the keyboard: ↵ acts on the
+highlighted button (Keep by default), esc reverts, h/l choose. The strip
+belongs to the service rather than to a window, so it survives the change
+taking away the screen it was made from, and it appears for changes made from
+the command line too.
+
+On the canvas, a display dropped on top of another lands flush against the
+nearest clear edge instead of overlapping. Changing a display's mode, scale or
+rotation moves the displays that sat flush against its old right or bottom
+edge by the difference, so a flush layout stays flush.
 
 Clicking a display in the popup's list selects it. Switching one **off** is the
 one action that will not happen on a single press: the power control at the end
@@ -127,6 +151,8 @@ omarchy-displays brightness DP-2 [+5%|5%-|40%]
 omarchy-displays identify | open
 omarchy-displays edid DP-2
 omarchy-displays icc list
+omarchy-displays recover                        # every display off? switch the built-in (or first) one back on
+omarchy-displays doctor                         # is the layout loaded, does the compositor agree, what could fight it
 ```
 
 Change JSON accepts, per display: `mode`, `position`, `scale`, `transform`,
@@ -142,7 +168,10 @@ preset is refused while `supports_hdr` is forced off (`-1`).
 ## How it persists
 
 - `~/.local/state/omarchy/displays/intent.json` — what you chose, per connector.
-- `~/.local/state/omarchy/displays/pending.json` — an applied-but-not-kept change with its expiry.
+- `~/.local/state/omarchy/displays/pending.json` — an applied-but-not-kept change with its expiry and transaction token.
+- `~/.local/state/omarchy/toggles/hypr/displays-pending.lua` — the pending
+  change in the same form as the layout, loaded after it, for as long as the
+  change is pending.
 - `~/.local/state/omarchy/toggles/hypr/displays-layout.lua` — generated from
   intent plus live geometry. Omarchy loads every file in that directory after
   your own `~/.config/hypr/monitors.lua`, so these rules win, and your file is
@@ -150,14 +179,40 @@ preset is refused while `supports_hdr` is forced off (`-1`).
   explicit position with Hyprland's auto placement moves displays.
 
 `hyprctl reload` restores the kept configuration; that is the revert primitive.
+Because the pending change is on disk too, loaded after the layout, a reload
+from anywhere else during the window (a theme change, Omarchy's clamshell
+script reacting to a lid or monitor event) re-applies the preview instead of
+silently undoing it. Revert deletes that file and reloads.
 
 `apply` is ordered so that a change is never live without a revert already
 armed: it takes a lock, writes the pending file with a transaction token, arms
 the timer bound to that token, and only then applies through `hyprctl eval`.
 If Hyprland rejects any part of the chunk, apply unwinds on the spot and reports
 the rejection. A timer whose token no longer matches the pending file does
-nothing, so a stale one can never revert a newer change. `keep` and `apply --now`
-validate the written Lua the same way, with a reload and `hyprctl configerrors`.
+nothing, so a stale one can never revert a newer change. After the chunk is
+accepted, apply reads the compositor back for up to three seconds and undoes
+a change Hyprland did not land on, naming the field. `keep` and `apply --now`
+reload, check `hyprctl configerrors`, ask Hyprland whether the layout file
+actually ran (the file sets a global for exactly this question; `doctor` asks
+it too), and read the displays back once more.
+
+A display that is switched off keeps its mode, position and scale in intent,
+so it comes back where it was. Should every display ever be off, for instance
+a kept layout with one display off booted without the other attached, the
+service runs `recover`, which switches the built-in panel, or the first
+display, back on.
+
+## The built-in panel
+
+A laptop's built-in panel is switched off through Omarchy's own toggle, the
+`internal-monitor-disable.lua` file that its clamshell script honours and its
+recovery service clears at boot when nothing else is connected, never through
+a rule of ours: that script would re-enable a plainly disabled panel within
+seconds of any lid or monitor event. Reverting a change that touched the panel
+puts the toggle back as it was. The panel's kept scale is also written to
+`internal-monitor-scale`, which the same script reads when it brings the
+panel back. With the stock `monitors.lua` (scale `"auto"`) the two never
+disagree; `doctor` warns when yours sets a number there.
 
 ## Colour model
 
@@ -173,7 +228,7 @@ HDR desktops look washed out. This tool always writes it on HDR entry.
 ## Development
 
 ```bash
-./test/all               # bash tests (sandboxed fake hyprctl + EDID fixture) and node tests for Model.js
+./test/all               # bash tests (sandboxed fake compositor + EDID fixture) and node tests for Model.js
 omarchy-restart-shell    # after editing QML; a symlinked plugin is not hot-reloaded
 journalctl --user -t omarchy-shell -f   # QML warnings and errors
 ```
@@ -185,7 +240,7 @@ manifest.json      kinds: bar-widget (Popup.qml), overlay (Studio.qml), service 
 Model.js           pure logic shared by QML and tests
 components/        ApplyBar, DisplayCanvas, GamutPlot
 bin/               omarchy-displays, omarchy-displays-edid
-test/              all, *-test.sh, model.test.js, fixtures/
+test/              all, *-test.sh, fake-hyprctl.sh (a compositor that keeps state), model.test.js, fixtures/
 design/            the visual design review (HTML, real theme tokens)
 ```
 
