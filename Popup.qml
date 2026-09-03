@@ -19,6 +19,12 @@ Panel {
   moduleName: "pmotta.displays"
   manageIpc: false
 
+  // The bar can be null for a beat while a bar instance is created or torn
+  // down on a monitor change; every colour and font read goes through these.
+  readonly property color fg: bar ? bar.foreground : Color.foreground
+  readonly property color urgentColor: bar ? bar.urgent : Color.urgent
+  readonly property string fam: bar ? bar.fontFamily : Style.font.family
+
   readonly property var service: bar && bar.shell ? bar.shell.serviceFor(root.moduleName) : null
   readonly property var state: service ? service.state : null
   readonly property var displays: service ? service.displays : []
@@ -61,6 +67,8 @@ Panel {
 
   readonly property var visibleSections: {
     var list = []
+    // Visual order: the pending strip sits under the hero, so it comes first.
+    if (hasPending) list.push("pending")
     if (displays.length > 1) list.push("chips")
     if (brightnessAvailable) list.push("brightness")
     if (colourMode === "hdr") list.push("sdrwhite")
@@ -68,7 +76,6 @@ Panel {
     if (caps.available && display && display.enabled) list.push("colour")
     if (displays.length > 1) list.push("displays")
     list.push("actions")
-    if (hasPending) list.push("pending")
     return list
   }
 
@@ -304,7 +311,11 @@ Panel {
   onOpenedChanged: {
     if (opened) {
       if (service) service.refresh()
-      if (!selectedName || indexOfDisplay(selectedName) < 0) selectedName = focusedName || (displays.length ? displays[0].name : "")
+      // Follow the live focus on every open: the popup drives the display the
+      // user is looking at, and the bar instance it opened from sits there.
+      var live = service ? service.liveFocused : focusedName
+      if (indexOfDisplay(live) >= 0) selectedName = live
+      else if (!selectedName || indexOfDisplay(selectedName) < 0) selectedName = focusedName || (displays.length ? displays[0].name : "")
       readBrightness()
       focusSection = visibleSections.length ? visibleSections[0] : "actions"
       selectedIndex = sectionFirstIndex(focusSection)
@@ -374,17 +385,33 @@ Panel {
           PanelHero {
             title: root.display ? Model.displayTitle(root.display) : "Displays"
             meta: root.display ? Model.metaLine(root.display) : (root.service ? (root.service.loading ? "READING DISPLAYS" : "NO DISPLAYS") : "SERVICE NOT LOADED")
-            foreground: root.bar.foreground
-            fontFamily: root.bar.fontFamily
+            foreground: root.fg
+            fontFamily: root.fam
             iconComponent: Component {
               Text {
                 textFormat: Text.PlainText
                 text: root.displays.length > 1 ? "󰍺" : "󰍹"
-                color: root.bar.foreground
-                font.family: root.bar.fontFamily
+                color: root.fg
+                font.family: root.fam
                 font.pixelSize: Style.font.display
               }
             }
+          }
+
+          // ---------- Pending apply (under the hero so it is never clipped) ----------
+          PanelSeparator { visible: root.hasPending; foreground: root.fg }
+
+          ApplyBar {
+            visible: root.hasPending
+            width: parent.width
+            remaining: root.service ? root.service.pendingRemaining : 0
+            total: root.service ? root.service.revertSeconds : 15
+            foreground: root.fg
+            fontFamily: root.fam
+            cursorIndex: root.cursorActive && root.focusSection === "pending" ? root.selectedIndex : -1
+            onKeep: root.service.keep()
+            onRevert: root.service.revert()
+            onHovered: function(index, h) { if (h) root.hoverInto("pending", index) }
           }
 
           // ---------- Display chips ----------
@@ -399,8 +426,8 @@ Panel {
                 text: modelData.name
                 fontSize: Style.font.caption
                 bordered: true
-                foreground: root.bar.foreground
-                fontFamily: root.bar.fontFamily
+                foreground: root.fg
+                fontFamily: root.fam
                 horizontalPadding: Style.spacing.lg
                 verticalPadding: Style.spacing.sm
                 active: modelData.name === root.selectedName
@@ -412,7 +439,7 @@ Panel {
           }
 
           // ---------- Brightness ----------
-          PanelSeparator { visible: root.brightnessAvailable; foreground: root.bar.foreground }
+          PanelSeparator { visible: root.brightnessAvailable; foreground: root.fg }
 
           Column {
             visible: root.brightnessAvailable
@@ -422,13 +449,13 @@ Panel {
             Item {
               width: parent.width
               implicitHeight: Math.max(brightnessHeader.implicitHeight, brightnessValue.implicitHeight)
-              PanelSectionHeader { id: brightnessHeader; text: "BRIGHTNESS"; foreground: root.bar.foreground; fontFamily: root.bar.fontFamily; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter }
+              PanelSectionHeader { id: brightnessHeader; text: "BRIGHTNESS"; foreground: root.fg; fontFamily: root.fam; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter }
               Text {
                 id: brightnessValue
                 textFormat: Text.PlainText
                 text: Math.round(brightnessSlider.dragging ? brightnessSlider.liveValue : root.brightnessPercent) + "%"
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily; font.pixelSize: Style.font.caption; font.bold: true
+                color: Qt.darker(root.fg, 1.4)
+                font.family: root.fam; font.pixelSize: Style.font.caption; font.bold: true
                 anchors.right: parent.right; anchors.rightMargin: Style.space(6); anchors.verticalCenter: parent.verticalCenter
               }
             }
@@ -439,7 +466,7 @@ Panel {
               height: brightnessSlider.implicitHeight + Style.spacing.controlGap
               hasCursor: root.cursorActive && root.focusSection === "brightness"
               onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(brightnessRow)
-              foreground: root.bar.foreground
+              foreground: root.fg
               outline: true
               PanelSlider {
                 id: brightnessSlider
@@ -455,7 +482,7 @@ Panel {
           }
 
           // ---------- SDR white (HDR only) ----------
-          PanelSeparator { visible: root.colourMode === "hdr"; foreground: root.bar.foreground }
+          PanelSeparator { visible: root.colourMode === "hdr"; foreground: root.fg }
 
           Column {
             visible: root.colourMode === "hdr"
@@ -465,13 +492,13 @@ Panel {
             Item {
               width: parent.width
               implicitHeight: Math.max(sdrHeader.implicitHeight, sdrValue.implicitHeight)
-              PanelSectionHeader { id: sdrHeader; text: "SDR WHITE"; foreground: root.bar.foreground; fontFamily: root.bar.fontFamily; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter }
+              PanelSectionHeader { id: sdrHeader; text: "SDR WHITE"; foreground: root.fg; fontFamily: root.fam; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter }
               Text {
                 id: sdrValue
                 textFormat: Text.PlainText
                 text: (sdrSlider.dragging ? Model.sliderToSdrWhite(sdrSlider.liveValue / 100, root.sdrRange) : (root.sdrPreview >= 0 ? root.sdrPreview : root.sdrWhite)) + " cd/m²"
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily; font.pixelSize: Style.font.caption; font.bold: true
+                color: Qt.darker(root.fg, 1.4)
+                font.family: root.fam; font.pixelSize: Style.font.caption; font.bold: true
                 anchors.right: parent.right; anchors.rightMargin: Style.space(6); anchors.verticalCenter: parent.verticalCenter
               }
             }
@@ -482,7 +509,7 @@ Panel {
               height: sdrSlider.implicitHeight + Style.spacing.controlGap
               hasCursor: root.cursorActive && root.focusSection === "sdrwhite"
               onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(sdrRow)
-              foreground: root.bar.foreground
+              foreground: root.fg
               outline: true
 
               PanelSlider {
@@ -511,8 +538,8 @@ Panel {
             Text {
               textFormat: Text.PlainText
               text: root.sdrRange.min + " → " + root.sdrRange.max + " cd/m². Marked: " + Model.REFERENCE_WHITE + ", the BT.2408 reference white."
-              color: Qt.darker(root.bar.foreground, 1.5)
-              font.family: root.bar.fontFamily; font.pixelSize: Style.font.caption
+              color: Qt.darker(root.fg, 1.5)
+              font.family: root.fam; font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
               width: parent.width - Style.space(12)
               x: Style.space(6)
@@ -520,7 +547,7 @@ Panel {
           }
 
           // ---------- Scale ----------
-          PanelSeparator { visible: root.display && root.display.enabled; foreground: root.bar.foreground }
+          PanelSeparator { visible: root.display && root.display.enabled; foreground: root.fg }
 
           Column {
             visible: root.display && root.display.enabled
@@ -530,14 +557,14 @@ Panel {
             Item {
               width: parent.width
               implicitHeight: Math.max(scaleHeader.implicitHeight, scaleTarget.implicitHeight)
-              PanelSectionHeader { id: scaleHeader; text: "SCALE"; foreground: root.bar.foreground; fontFamily: root.bar.fontFamily; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter }
+              PanelSectionHeader { id: scaleHeader; text: "SCALE"; foreground: root.fg; fontFamily: root.fam; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter }
               Text {
                 id: scaleTarget
                 textFormat: Text.PlainText
                 text: root.display ? root.display.name : ""
                 visible: root.displays.length > 1
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily; font.pixelSize: Style.font.caption; font.bold: true
+                color: Qt.darker(root.fg, 1.4)
+                font.family: root.fam; font.pixelSize: Style.font.caption; font.bold: true
                 anchors.right: parent.right; anchors.rightMargin: Style.space(6); anchors.verticalCenter: parent.verticalCenter
               }
             }
@@ -556,8 +583,8 @@ Panel {
                   width: scaleGrid.cellWidth
                   text: modelData.effective + "x"
                   fontSize: Style.font.caption
-                  foreground: root.bar.foreground
-                  fontFamily: root.bar.fontFamily
+                  foreground: root.fg
+                  fontFamily: root.fam
                   horizontalPadding: Style.spacing.sm
                   verticalPadding: Style.spacing.controlPaddingY
                   bordered: true
@@ -571,7 +598,7 @@ Panel {
           }
 
           // ---------- Colour ----------
-          PanelSeparator { visible: root.caps.available === true && root.display && root.display.enabled; foreground: root.bar.foreground }
+          PanelSeparator { visible: root.caps.available === true && root.display && root.display.enabled; foreground: root.fg }
 
           Column {
             visible: root.caps.available === true && root.display && root.display.enabled
@@ -581,13 +608,13 @@ Panel {
             Item {
               width: parent.width
               implicitHeight: Math.max(colourHeader.implicitHeight, colourCaps.implicitHeight)
-              PanelSectionHeader { id: colourHeader; text: "COLOUR"; foreground: root.bar.foreground; fontFamily: root.bar.fontFamily; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter }
+              PanelSectionHeader { id: colourHeader; text: "COLOUR"; foreground: root.fg; fontFamily: root.fam; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter }
               Text {
                 id: colourCaps
                 textFormat: Text.PlainText
                 text: "EDID: " + Model.capabilityLine(root.caps)
-                color: Qt.darker(root.bar.foreground, 1.4)
-                font.family: root.bar.fontFamily; font.pixelSize: Style.font.caption; font.bold: true
+                color: Qt.darker(root.fg, 1.4)
+                font.family: root.fam; font.pixelSize: Style.font.caption; font.bold: true
                 elide: Text.ElideLeft
                 width: Math.min(implicitWidth, parent.width - colourHeader.implicitWidth - Style.space(16))
                 anchors.right: parent.right; anchors.rightMargin: Style.space(6); anchors.verticalCenter: parent.verticalCenter
@@ -608,8 +635,8 @@ Panel {
                   width: colourGrid.cellWidth
                   text: modelData === "sdr" ? "SDR" : (modelData === "wide" ? "Wide" : "HDR")
                   fontSize: Style.font.body
-                  foreground: root.bar.foreground
-                  fontFamily: root.bar.fontFamily
+                  foreground: root.fg
+                  fontFamily: root.fam
                   bordered: true
                   active: root.colourMode === modelData
                   hasCursor: root.cursorActive && root.focusSection === "colour" && root.selectedIndex === index
@@ -622,22 +649,22 @@ Panel {
             Text {
               textFormat: Text.PlainText
               text: root.display ? "Output " + Model.outputCaption(root.display) : ""
-              color: Qt.darker(root.bar.foreground, 1.5)
-              font.family: root.bar.fontFamily; font.pixelSize: Style.font.caption
+              color: Qt.darker(root.fg, 1.5)
+              font.family: root.fam; font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
               width: parent.width
             }
           }
 
           // ---------- Displays ----------
-          PanelSeparator { visible: root.displays.length > 1; foreground: root.bar.foreground }
+          PanelSeparator { visible: root.displays.length > 1; foreground: root.fg }
 
           Column {
             visible: root.displays.length > 1
             width: parent.width
             spacing: Style.spacing.lg
 
-            PanelSectionHeader { text: "DISPLAYS"; foreground: root.bar.foreground; fontFamily: root.bar.fontFamily }
+            PanelSectionHeader { text: "DISPLAYS"; foreground: root.fg; fontFamily: root.fam }
 
             Repeater {
               model: root.displays
@@ -652,7 +679,7 @@ Panel {
           }
 
           // ---------- Actions ----------
-          PanelSeparator { foreground: root.bar.foreground }
+          PanelSeparator { foreground: root.fg }
 
           Column {
             width: parent.width
@@ -662,28 +689,12 @@ Panel {
             ActionRow { width: panelColumn.width; rowIndex: 1; icon: "󰕮"; label: "Arrange…"; onActivated: root.openStudio() }
           }
 
-          // ---------- Pending apply ----------
-          PanelSeparator { visible: root.hasPending; foreground: root.bar.foreground }
-
-          ApplyBar {
-            visible: root.hasPending
-            width: parent.width
-            remaining: root.service ? root.service.pendingRemaining : 0
-            total: root.service ? root.service.revertSeconds : 15
-            foreground: root.bar.foreground
-            fontFamily: root.bar.fontFamily
-            cursorIndex: root.cursorActive && root.focusSection === "pending" ? root.selectedIndex : -1
-            onKeep: root.service.keep()
-            onRevert: root.service.revert()
-            onHovered: function(index, h) { if (h) root.hoverInto("pending", index) }
-          }
-
           Text {
             visible: root.service && root.service.lastError !== ""
             textFormat: Text.PlainText
             text: root.service ? root.service.lastError : ""
-            color: root.bar.urgent
-            font.family: root.bar.fontFamily; font.pixelSize: Style.font.caption
+            color: root.urgentColor
+            font.family: root.fam; font.pixelSize: Style.font.caption
             wrapMode: Text.WordWrap
             width: parent.width
           }
@@ -704,7 +715,7 @@ Panel {
     hasCursor: root.cursorActive && root.focusSection === "displays" && root.selectedIndex === rowIndex
     onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(row)
     current: display && display.name === root.selectedName
-    foreground: root.bar.foreground
+    foreground: root.fg
     implicitHeight: inner.implicitHeight + Style.spacing.xl
     opacity: canToggle ? 1.0 : 0.45
 
@@ -716,8 +727,8 @@ Panel {
 
       Text {
         text: "󰍹"
-        color: root.bar.foreground
-        font.family: root.bar.fontFamily; font.pixelSize: Style.font.title
+        color: root.fg
+        font.family: root.fam; font.pixelSize: Style.font.title
         width: Style.space(22); horizontalAlignment: Text.AlignHCenter
         anchors.verticalCenter: parent.verticalCenter
       }
@@ -730,8 +741,8 @@ Panel {
         Text {
           textFormat: Text.PlainText
           text: Model.displayTitle(row.display)
-          color: root.bar.foreground
-          font.family: root.bar.fontFamily; font.pixelSize: Style.font.body
+          color: root.fg
+          font.family: root.fam; font.pixelSize: Style.font.body
           elide: Text.ElideRight
           anchors.verticalCenter: parent.verticalCenter
         }
@@ -744,8 +755,8 @@ Panel {
       Text {
         textFormat: Text.PlainText
         text: row.display.enabled ? "󰄬" : ""
-        color: root.bar.foreground
-        font.family: root.bar.fontFamily; font.pixelSize: Style.font.subtitle
+        color: root.fg
+        font.family: root.fam; font.pixelSize: Style.font.subtitle
         width: Style.space(16); horizontalAlignment: Text.AlignRight
         anchors.verticalCenter: parent.verticalCenter
       }
@@ -771,14 +782,14 @@ Panel {
     anchors.verticalCenter: parent ? parent.verticalCenter : undefined
     color: "transparent"
     radius: Style.cornerRadius
-    borderSpec: Border.controlSpec("normal", root.bar.foreground, Color.accent)
+    borderSpec: Border.controlSpec("normal", root.fg, Color.accent)
     Text {
       id: tagText
       anchors.centerIn: parent
       textFormat: Text.PlainText
       text: parent.text
-      color: Qt.darker(root.bar.foreground, 1.4)
-      font.family: root.bar.fontFamily; font.pixelSize: Style.font.caption; font.bold: true
+      color: Qt.darker(root.fg, 1.4)
+      font.family: root.fam; font.pixelSize: Style.font.caption; font.bold: true
     }
   }
 
@@ -791,7 +802,7 @@ Panel {
 
     hasCursor: root.cursorActive && root.focusSection === "actions" && root.selectedIndex === rowIndex
     onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(action)
-    foreground: root.bar.foreground
+    foreground: root.fg
     implicitHeight: actionInner.implicitHeight + Style.spacing.xl
 
     Row {
@@ -799,9 +810,9 @@ Panel {
       anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
       anchors.leftMargin: Style.space(6); anchors.rightMargin: Style.space(6)
       spacing: Style.space(8)
-      Text { text: action.icon; color: root.bar.foreground; font.family: root.bar.fontFamily; font.pixelSize: Style.font.title; width: Style.space(22); horizontalAlignment: Text.AlignHCenter; anchors.verticalCenter: parent.verticalCenter }
-      Text { textFormat: Text.PlainText; text: action.label; color: root.bar.foreground; font.family: root.bar.fontFamily; font.pixelSize: Style.font.body; width: parent.width - Style.space(22) - Style.space(16) - Style.space(16); elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter }
-      Text { text: "›"; color: Qt.darker(root.bar.foreground, 1.4); font.family: root.bar.fontFamily; font.pixelSize: Style.font.subtitle; width: Style.space(16); horizontalAlignment: Text.AlignRight; anchors.verticalCenter: parent.verticalCenter }
+      Text { text: action.icon; color: root.fg; font.family: root.fam; font.pixelSize: Style.font.title; width: Style.space(22); horizontalAlignment: Text.AlignHCenter; anchors.verticalCenter: parent.verticalCenter }
+      Text { textFormat: Text.PlainText; text: action.label; color: root.fg; font.family: root.fam; font.pixelSize: Style.font.body; width: parent.width - Style.space(22) - Style.space(16) - Style.space(16); elide: Text.ElideRight; anchors.verticalCenter: parent.verticalCenter }
+      Text { text: "›"; color: Qt.darker(root.fg, 1.4); font.family: root.fam; font.pixelSize: Style.font.subtitle; width: Style.space(16); horizontalAlignment: Text.AlignRight; anchors.verticalCenter: parent.verticalCenter }
     }
 
     MouseArea {

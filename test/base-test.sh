@@ -57,8 +57,9 @@ EOF
 #!/bin/bash
 echo "\$*" >> "$dir/systemd-run.log"
 EOF
-  cat > "$dir/bin/systemctl" <<'EOF'
+  cat > "$dir/bin/systemctl" <<EOF
 #!/bin/bash
+echo "\$*" >> "$dir/systemctl.log"
 exit 0
 EOF
   cat > "$dir/bin/omarchy-notification-send" <<'EOF'

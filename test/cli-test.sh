@@ -64,6 +64,19 @@ assert_eq "$out" "reverted" "revert reports"
 assert_eq "$(jq -r '.displays["DP-1"].scale // "none"' "$sandbox/state/intent.json")" "none" "reverted change not in intent"
 pass "revert"
 
+# ---- the timer's own revert must not stop its own service before cleaning up
+run_cli "$sandbox" apply '{"displays":[{"name":"DP-1","scale":2}]}' >/dev/null
+: > "$sandbox/systemctl.log"
+out="$(run_cli "$sandbox" revert --expired)"
+assert_eq "$out" "reverted" "expired revert reports"
+[[ ! -e $sandbox/state/pending.json ]] || fail "expired revert clears pending"
+assert_not_contains "$(cat "$sandbox/systemctl.log")" "stop" "expired revert does not stop its own unit"
+run_cli "$sandbox" apply '{"displays":[{"name":"DP-1","scale":2}]}' >/dev/null
+: > "$sandbox/systemctl.log"
+run_cli "$sandbox" revert >/dev/null
+assert_contains "$(cat "$sandbox/systemctl.log")" "stop omarchy-displays-revert.timer" "interactive revert cancels the timer"
+pass "expired revert survives its own timer unit"
+
 # ---- apply --now persists immediately
 out="$(run_cli "$sandbox" apply --now '{"displays":[{"name":"DP-2","sdr_max_luminance":203}]}')"
 assert_eq "$out" "kept" "apply --now keeps"

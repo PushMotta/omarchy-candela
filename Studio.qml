@@ -50,7 +50,7 @@ Item {
 
   // ---------------------------------------------------------- lifecycle
   function open(payloadJson) {
-    var wanted = service ? service.focused : ""
+    var wanted = service ? service.liveFocused : ""
     var chosen = null
     for (var i = 0; i < Quickshell.screens.length; i++) if (Quickshell.screens[i].name === wanted) chosen = Quickshell.screens[i]
     targetScreen = chosen || (Quickshell.screens.length ? Quickshell.screens[0] : null)

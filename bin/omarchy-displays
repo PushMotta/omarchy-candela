@@ -34,6 +34,14 @@ LUA_FILE="${OMARCHY_DISPLAYS_LUA_FILE:-$STATE_HOME/omarchy/toggles/hypr/displays
 REVERT_UNIT="omarchy-displays-revert"
 REVERT_SECONDS="${OMARCHY_DISPLAYS_REVERT_SECONDS:-15}"
 
+# A transient systemd unit (the revert timer) may lack the compositor's
+# instance signature; recover it from the newest instance runtime dir, the
+# same way omarchy-restart-shell does.
+if [[ -z ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
+  hypr_dir=$(find "${XDG_RUNTIME_DIR:-/run/user/$UID}/hypr" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n 1 | cut -d' ' -f2-)
+  [[ -n $hypr_dir ]] && export HYPRLAND_INSTANCE_SIGNATURE=${hypr_dir##*/}
+fi
+
 usage() {
   cat <<'USAGE'
 Usage: omarchy-displays <command> [args]
@@ -314,7 +322,10 @@ cmd_keep() {
 cmd_revert() {
   local expired=0
   [[ ${1:-} == "--expired" ]] && expired=1
-  stop_timer
+  # When the timer itself runs this, stopping the transient service would
+  # SIGTERM this very process before the pending file is removed. The timer
+  # has already elapsed, so only an interactive revert needs to cancel it.
+  (( expired )) || stop_timer
   local had_pending=0
   [[ -s $PENDING_FILE ]] && had_pending=1
   rm -f "$PENDING_FILE"

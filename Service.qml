@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
+import Quickshell.Hyprland
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
@@ -33,6 +34,9 @@ Item {
   property string lastError: ""
   readonly property var displays: state && Array.isArray(state.displays) ? state.displays : []
   readonly property string focused: state ? String(state.focused || "") : ""
+  // Hyprland's live focus, for choosing a screen right now; `focused` above
+  // lags by one state refresh.
+  readonly property string liveFocused: Hyprland.focusedMonitor && Hyprland.focusedMonitor.name ? String(Hyprland.focusedMonitor.name) : focused
   readonly property var pending: state && state.pending ? state.pending : null
   readonly property bool hasPending: pending !== null
   readonly property int revertSeconds: state && state.revertSeconds ? Number(state.revertSeconds) : 15
@@ -261,7 +265,7 @@ Item {
     for (var i = 0; i < popups.length; i++) {
       var p = popups[i]
       if (p.opened) { p.close(); return true }
-      if (p.screenName === root.focused) target = p
+      if (p.screenName === root.liveFocused) target = p
     }
     (target || popups[0]).open()
     return true

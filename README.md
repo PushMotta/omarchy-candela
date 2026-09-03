@@ -36,6 +36,13 @@ o.bind("SUPER + CTRL + D", "Displays", "omarchy-shell pmotta.displays popup")   
 o.bind("SUPER + CTRL + SHIFT + D", "Displays studio", "omarchy-shell shell toggle pmotta.displays")
 ```
 
+To make **Setup › Monitors** open the studio instead of the config editor, add
+to `~/.config/omarchy/extensions/omarchy-menu.jsonc` (it hot-reloads):
+
+```jsonc
+"setup.monitors": {"icon":"󰍹","label":"Monitors","action":"omarchy-shell shell toggle pmotta.displays"},
+```
+
 Requirements already present on Omarchy: `hyprctl`, `jq`, `edid-decode`
 (v4l-utils), `ddcutil`/`brightnessctl` through `omarchy-brightness-display`,
 `socat`, `systemd-run`.
