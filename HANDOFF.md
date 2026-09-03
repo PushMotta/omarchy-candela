@@ -68,6 +68,27 @@ and `doctor` green, all seen live on the two MateViews:
   is given.
 - **`preview.png` retaken** from the running studio at the same crop.
 
+**Tested small, twice.** A temporary headless output
+(`hyprctl output create headless`, then `hl.monitor` through `hyprctl eval`
+— `hyprctl keyword` no longer works on 0.56) at 1366x768 showed the card
+sizing itself correctly with nothing overlapping; the studio always selects
+the *focused* display, though, and a headless output has no EDID, so that
+run could not exercise the colour section. Pinning the card's own size to
+1366x768 while DP-1 stayed selected did: the layout holds, the left column
+fits, the plot shrinks into what is left — and the fold comes back, with
+COLOUR sliced in half. That is what the hint is for, and it was wrong until
+it counted a section's end rather than its header.
+
+Where this lands for real laptops: the card caps at 1120x880 logical, so
+any screen at or above ~1140x900 logical gets exactly the card on this
+desk — 1920x1080 at scale 1, 2880x1800 at 2, 1512x982, all identical. Only
+768-tall panels at scale 1 shrink it, and there COLOUR falls below the fold
+and the hint names it. Untested: the popup on a short screen. Its content
+measured ~611 logical px here in SDR with nothing pending; HDR adds the SDR
+white section and a countdown adds the strip, which would put it over a
+768-tall screen's ~738 px and make it scroll, with no cue of its own. The
+fold hint is a studio component today; the popup would need its own.
+
 One judgement call left deliberately for Pedro: the popup's eased
 `contentHeight` resizes a Wayland surface every frame it runs — if that
 ever looks steppy, deleting that one Behavior is the fix. (The canvas
@@ -249,8 +270,7 @@ is instant; a real mode switch on NVIDIA may need longer.
   only been seen live for HDR and scale. This is the test that underwrites the
   README's promise.
 - Session 5, the fold: clicking the hint to jump to the first named
-  section, and how the left column behaves on a card short enough to clip
-  it — reasoned through and bounded, never seen small.
+  section (needs a pointer; the logic is tested only by reading it).
 - Session 5 by hand, all of it motion that a screenshot cannot judge: the
   studio's fade in and out, the popup easing its own height when HDR adds the
   SDR white section, the countdown rule between ticks, Identify's stagger
