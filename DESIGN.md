@@ -42,7 +42,7 @@ The bar of quality is not "has the knobs". It is: a colour professional opens it
 
 ### 3.1 Bar popup — "Candela" (kind: bar-widget)
 
-Replaces the built-in Display widget in the bar (user moves it; the built-in stays available). Width 380 logical px, height ≤ 560, same chrome as audio/bluetooth popups.
+Replaces the built-in Display widget in the bar (user moves it; the built-in stays available). Width 380 logical px, height follows the content up to what the screen allows (SDR white in HDR and the pending strip both add rows, and a scrollbar is not a substitute for room), same chrome as audio/bluetooth popups.
 
 Sections, top to bottom:
 

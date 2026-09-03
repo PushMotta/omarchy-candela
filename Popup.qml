@@ -451,7 +451,10 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(380))
-    contentHeight: panel.fittedContentHeight(panelColumn.implicitHeight, Style.space(620))
+    // No cap of our own: the popup grows with its content (SDR white appears in
+    // HDR, the pending strip while a change waits) and the helper bounds it by
+    // what the screen has, like the built-in network and bluetooth popups.
+    contentHeight: panel.fittedContentHeight(panelColumn.implicitHeight)
 
     PanelKeyCatcher {
       id: keyCatcher
