@@ -6,6 +6,7 @@ import Quickshell.Hyprland
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
+import "components"
 
 // Headless singleton behind the Displays popup and studio. Owns the state
 // cache (one `omarchy-displays state` call, shared), the hotplug listener,
@@ -73,6 +74,7 @@ Item {
           root.now = Math.floor(Date.now() / 1000)
           root.lastError = ""
           root.stateChangedExternally()
+          root.maybeRecover()
         } else {
           root.lastError = "omarchy-displays state returned no data"
         }
@@ -313,6 +315,177 @@ Item {
     onLoadFailed: root.scheduleRefresh()
   }
 
+  // ------------------------------------------------------------ recovery
+  //
+  // Every display off means nowhere to draw a Keep button and, straight after
+  // boot, a black screen: a kept layout that switches a display off is
+  // unconditional, so booting it without the other display attached leaves
+  // nothing lit. The backend switches the built-in (or first) display back
+  // on; this only notices. One attempt per dark spell, so a rescue the
+  // compositor refuses cannot loop.
+  property bool recoverAttempted: false
+
+  function maybeRecover() {
+    if (!displays.length) return
+    for (var i = 0; i < displays.length; i++) if (displays[i].enabled) { recoverAttempted = false; return }
+    if (recoverAttempted || recoverProc.running) return
+    recoverAttempted = true
+    recoverProc.running = true
+  }
+
+  Process {
+    id: recoverProc
+    command: [root.cli, "recover"]
+    stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: if (String(text).trim() !== "") root.lastError = String(text).trim()
+    }
+    onRunningChanged: if (!running) root.refresh()
+  }
+
+  // ------------------------------------------------------------ surfaces
+  //
+  // Which screens already show a Keep/Revert control of their own: the
+  // studio (one window, on the screen it opened on) and any open popup (one
+  // per bar). The every-screen strip below stays off those screens, and only
+  // takes the keyboard while none of them is open. Surfaces bump the epoch
+  // whenever they open or close; reading it inside these is what makes the
+  // bindings re-run.
+  property string studioScreen: ""
+  property int surfaceEpoch: 0
+
+  function surfacesChanged() { surfaceEpoch++ }
+
+  function screenHasSurface(name) {
+    if (surfaceEpoch < 0) return false
+    if (studioScreen !== "" && studioScreen === name) return true
+    for (var i = 0; i < popups.length; i++) if (popups[i].opened && popups[i].screenName === name) return true
+    return false
+  }
+
+  readonly property bool anySurfaceOpen: {
+    if (surfaceEpoch < 0) return false
+    if (studioScreen !== "") return true
+    for (var i = 0; i < popups.length; i++) if (popups[i].opened) return true
+    return false
+  }
+
+  // The strip that gets the keyboard: the one on the focused screen, else the
+  // first screen that has one.
+  readonly property string keyboardScreen: {
+    if (surfaceEpoch < 0) return ""
+    var names = []
+    for (var i = 0; i < Quickshell.screens.length; i++) {
+      var n = String(Quickshell.screens[i].name)
+      if (!screenHasSurface(n)) names.push(n)
+    }
+    if (names.indexOf(liveFocused) !== -1) return liveFocused
+    return names.length ? names[0] : ""
+  }
+
+  // ------------------------------------------------------------ pending strip
+  //
+  // A Keep/Revert control on every screen while a change is pending, except
+  // the screens whose studio or popup already shows one. It is owned here,
+  // not by a surface, so it survives the surface losing its screen to the
+  // very change it applied, and it exists at all for a change made from the
+  // command line. While no surface is open the strip on the focused screen
+  // has the keyboard: ↵ acts on the highlighted button (Keep by default),
+  // esc reverts, h/l move between the two. Same keys as the studio's bar.
+  property int stripCursor: 1
+  onHasPendingChanged: if (hasPending) stripCursor = 1
+
+  function handleStripKey(event) {
+    var k = event.key
+    if (k === Qt.Key_Return || k === Qt.Key_Enter || k === Qt.Key_Space) { if (stripCursor === 0) revert(); else keep(); return true }
+    if (k === Qt.Key_Y) { keep(); return true }
+    if (k === Qt.Key_Escape || k === Qt.Key_N || k === Qt.Key_R) { revert(); return true }
+    if (k === Qt.Key_H || k === Qt.Key_Left) { stripCursor = 0; return true }
+    if (k === Qt.Key_L || k === Qt.Key_Right) { stripCursor = 1; return true }
+    return false
+  }
+
+  Variants {
+    model: root.hasPending ? Quickshell.screens : []
+
+    PanelWindow {
+      id: stripWindow
+      required property var modelData
+      readonly property string screenName: modelData ? String(modelData.name) : ""
+      readonly property bool shown: root.hasPending && !root.screenHasSurface(screenName)
+      readonly property bool ownsKeyboard: shown && !root.anySurfaceOpen && root.keyboardScreen === screenName
+
+      screen: modelData
+      visible: shown
+      color: "transparent"
+      exclusionMode: ExclusionMode.Ignore
+      WlrLayershell.namespace: "omarchy-displays-pending"
+      WlrLayershell.layer: WlrLayer.Overlay
+      WlrLayershell.keyboardFocus: ownsKeyboard ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
+      anchors { top: true; left: true; right: true }
+      margins.top: Style.bar.sizeHorizontal + Style.gapsOut * 2
+      implicitHeight: stripCard.implicitHeight + Style.gapsOut * 2
+      // Only the card takes input; the rest of the band lets clicks through.
+      mask: Region { item: stripCard }
+
+      onOwnsKeyboardChanged: if (ownsKeyboard) Qt.callLater(function() { stripKeys.forceActiveFocus() })
+
+      BorderSurface {
+        id: stripCard
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.top: parent.top
+        width: Math.min(Style.space(600), stripWindow.width - Style.gapsOut * 4)
+        implicitHeight: stripColumn.implicitHeight + contentTopInset + contentBottomInset
+        color: Color.popups.background
+        radius: Style.cornerRadius
+        borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Math.max(1, Style.space(2)))
+        padding: Style.spacing.panelPadding
+
+        FocusScope {
+          id: stripKeys
+          anchors.fill: parent
+          anchors.topMargin: stripCard.contentTopInset
+          anchors.rightMargin: stripCard.contentRightInset
+          anchors.bottomMargin: stripCard.contentBottomInset
+          anchors.leftMargin: stripCard.contentLeftInset
+          focus: stripWindow.ownsKeyboard
+          Keys.onPressed: function(event) { if (root.handleStripKey(event)) event.accepted = true }
+
+          Column {
+            id: stripColumn
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            spacing: Style.spacing.xs
+
+            ApplyBar {
+              width: parent.width
+              bare: true
+              remaining: root.pendingRemaining
+              total: root.revertSeconds
+              foreground: Color.popups.text
+              fontFamily: Style.font.family
+              cursorIndex: stripWindow.ownsKeyboard ? root.stripCursor : -1
+              onKeep: root.keep()
+              onRevert: root.revert()
+              onHovered: function(index, h) { if (h) root.stripCursor = index }
+            }
+
+            Text {
+              visible: stripWindow.ownsKeyboard
+              textFormat: Text.PlainText
+              text: "↵ keep · esc revert · h/l choose"
+              color: Qt.darker(Color.popups.text, 1.4)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+          }
+        }
+      }
+    }
+  }
+
   // ------------------------------------------------------------ popups
   //
   // One Popup instance lives in every bar (one bar per screen). They register
@@ -427,6 +600,7 @@ Item {
     function refresh(): void { root.refresh() }
     function identify(): void { root.identify() }
     function state(): string { return root.state ? JSON.stringify(root.state) : "{}" }
+    function recover(): void { root.recoverAttempted = false; root.maybeRecover() }
     function keep(): void { root.keep() }
     function revert(): void { root.revert() }
     function open(): void { if (root.shell) root.shell.summon(root.pluginId, "{}") }

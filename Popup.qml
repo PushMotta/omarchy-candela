@@ -400,6 +400,9 @@ Panel {
   Component.onDestruction: if (service) service.unregisterPopup(root)
 
   onOpenedChanged: {
+    // The service keeps a Keep/Revert strip off any screen whose popup is
+    // open, and takes the keyboard for it only while none is.
+    if (service) service.surfacesChanged()
     if (opened) {
       if (service) service.refresh()
       // Follow the live focus on every open: the popup drives the display the
@@ -675,7 +678,7 @@ Panel {
                   required property var modelData
                   required property int index
                   width: scaleGrid.cellWidth
-                  text: modelData.effective + "x"
+                  text: Model.formatScale(modelData.effective) + "x"
                   fontSize: Style.font.caption
                   foreground: root.fg
                   fontFamily: root.fam

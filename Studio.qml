@@ -69,10 +69,35 @@ Item {
     if (!selectedName || !displayByName(selectedName)) selectedName = wanted || (displays.length ? displays[0].name : "")
     opened = true
     iccProc.running = true
+    // Tell the service which screen shows a Keep/Revert of its own, so the
+    // every-screen strip stays off it and hands over if this screen goes.
+    if (service) { service.studioScreen = targetScreen ? String(targetScreen.name) : ""; service.surfacesChanged() }
     Qt.callLater(function() { keyScope.forceActiveFocus() })
   }
 
-  function close() { opened = false }
+  function close() { opened = false; releaseScreen() }
+
+  function releaseScreen() {
+    if (!service) return
+    var mine = targetScreen ? String(targetScreen.name) : ""
+    if (service.studioScreen === mine) { service.studioScreen = ""; service.surfacesChanged() }
+  }
+
+  Component.onDestruction: releaseScreen()
+
+  // The change this studio applied can take its own screen away (switching it
+  // off, or a mode the panel cannot show). A window whose screen has gone is
+  // no place for the only Keep button: close, and the service's strip on the
+  // surviving screens takes over the countdown.
+  Connections {
+    target: Quickshell
+    function onScreensChanged() {
+      if (!root.opened || !root.targetScreen) return
+      var mine = String(root.targetScreen.name)
+      for (var i = 0; i < Quickshell.screens.length; i++) if (String(Quickshell.screens[i].name) === mine) return
+      root.requestClose()
+    }
+  }
   function requestClose() {
     if (shell && typeof shell.hide === "function") shell.hide(pluginId)
     else close()
@@ -98,6 +123,19 @@ Item {
     if (!next[name]) next[name] = {}
     next[name][key] = value
     draft = next
+  }
+
+  // A new mode, scale or rotation changes the display's logical size. The
+  // neighbours that sat flush against (or beyond) its old right and bottom
+  // edges follow the edge, so a flush layout stays flush instead of opening
+  // a gap or an overlap the user then has to drag closed.
+  function setSizeField(d, key, value) {
+    var before = null
+    for (var i = 0; i < rects.length; i++) if (rects[i].name === d.name) before = rects[i]
+    setField(d.name, key, value)
+    if (!before) return
+    var moves = Model.reflowAfterResize(rects, d.name, { width: before.width, height: before.height })
+    for (var m = 0; m < moves.length; m++) moveDisplay(moves[m].name, moves[m].x, moves[m].y)
   }
 
   function setGlobal(key, value) {
@@ -191,7 +229,7 @@ Item {
       var mode = Model.parseMode(modeOf(d))
       if (mode && mode.width > 0) size = Model.logicalSize({ width: mode.width, height: mode.height }, scaleOf(d), transformOf(d))
       out.push({ name: d.name, x: pos.x, y: pos.y, width: size.width, height: size.height,
-                 model: String(d.model || "").trim(), mode: modeOf(d).replace("@", " @ ") + " Hz", scale: Model.round2(scaleOf(d)),
+                 model: String(d.model || "").trim(), mode: modeOf(d).replace("@", " @ ") + " Hz", scale: Model.formatScale(scaleOf(d)),
                  hdr: colourOf(d) === "hdr", disabled: !enabledOf(d), mirrorOf: mirrorOf(d), focused: d.focused === true })
     }
     return out
@@ -269,16 +307,16 @@ Item {
     switch (currentRow) {
       case "mode": {
         var opts = Model.modeOptions(d).map(function(o) { return o.value })
-        if (opts.length) setField(d.name, "mode", cycle(opts, modeOf(d), delta)); break
+        if (opts.length) setSizeField(d, "mode", cycle(opts, modeOf(d), delta)); break
       }
       case "vrr": setField(d.name, "vrr", cycle([0, 1, 2], vrrOf(d), delta)); break
       case "scale": {
         var scales = Model.availableScales(d.width, d.height)
         var i = Model.scaleIndex(scales, scaleOf(d)); if (i < 0) i = 0
         var n = Math.max(0, Math.min(scales.length - 1, i + delta))
-        setField(d.name, "scale", scales[n].effective); break
+        setSizeField(d, "scale", scales[n].effective); break
       }
-      case "rotation": setField(d.name, "transform", cycle([0, 1, 2, 3], transformOf(d), delta)); break
+      case "rotation": setSizeField(d, "transform", cycle([0, 1, 2, 3], transformOf(d), delta)); break
       case "posx": { var p = positionOf(d); moveDisplay(d.name, p.x + delta * step, p.y); break }
       case "posy": { var q = positionOf(d); moveDisplay(d.name, q.x, q.y + delta * step); break }
       case "mirror": {
@@ -343,6 +381,12 @@ Item {
     if (displays[i]) selectedName = displays[i].name
   }
 
+  function selectRelative(delta) {
+    if (!displays.length) return
+    var idx = displays.map(function(x) { return x.name }).indexOf(selectedName)
+    selectDisplayIndex((idx + delta + displays.length) % displays.length)
+  }
+
   readonly property bool anyPopupOpen: modeDropdown.popupOpen || iccDropdown.popupOpen
   readonly property bool textEditing: keyScope.activeFocus === false && (posXField.field.activeFocus || posYField.field.activeFocus || minLumField.field.activeFocus || maxLumField.field.activeFocus || avgLumField.field.activeFocus)
 
@@ -350,6 +394,7 @@ Item {
     if (anyPopupOpen) return false
     var k = event.key
     var shift = (event.modifiers & Qt.ShiftModifier) !== 0
+    var alt = (event.modifiers & Qt.AltModifier) !== 0
     if (k === Qt.Key_Escape) {
       if (textEditing) { keyScope.forceActiveFocus(); return true }
       if (hasPending) { service.revert(); return true }
@@ -363,6 +408,8 @@ Item {
       return true
     }
     if (k >= Qt.Key_1 && k <= Qt.Key_9) { selectDisplayIndex(k - Qt.Key_1); return true }
+    if (k === Qt.Key_BracketLeft) { selectRelative(-1); return true }
+    if (k === Qt.Key_BracketRight) { selectRelative(1); return true }
     if (k === Qt.Key_A) { applyDraft(); return true }
     if (k === Qt.Key_R) { revertOrDiscard(); return true }
     if (k === Qt.Key_I) { if (service) service.identify(); return true }
@@ -385,6 +432,14 @@ Item {
     var left = k === Qt.Key_H || k === Qt.Key_Left
     var right = k === Qt.Key_L || k === Qt.Key_Right
     if (focusArea === "canvas") {
+      // ⌥ + arrow: flush against the nearest display on that side, centred.
+      // 0: the origin, where Hyprland's own auto placement starts.
+      if (alt && (left || right || up || down)) {
+        var beside = Model.snapBeside(rects, selectedName, left ? "left" : (right ? "right" : (up ? "up" : "down")))
+        if (beside) moveDisplay(selectedName, beside.x, beside.y)
+        return true
+      }
+      if (k === Qt.Key_0) { if (display) moveDisplay(display.name, 0, 0); return true }
       if (k === Qt.Key_J && !shift) { selectDisplayIndex((displays.map(function(x) { return x.name }).indexOf(selectedName) + 1) % Math.max(1, displays.length)); return true }
       if (k === Qt.Key_K && !shift) { selectDisplayIndex((displays.map(function(x) { return x.name }).indexOf(selectedName) - 1 + displays.length) % Math.max(1, displays.length)); return true }
       var step = shift ? 100 : 10
@@ -588,7 +643,7 @@ Item {
                     value: root.display ? root.modeOf(root.display) : ""
                     foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily
                     hasCursor: root.focusArea === "inspector" && root.currentRow === "mode"
-                    onChanged: function(v) { if (root.display) root.setField(root.display.name, "mode", v) }
+                    onChanged: function(v) { if (root.display) root.setSizeField(root.display, "mode", v) }
                     onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "mode" } }
                   }
                 }
@@ -630,13 +685,13 @@ Item {
                         Button {
                           required property var modelData
                           width: scaleGrid.cellWidth
-                          text: modelData.effective + "x"
+                          text: Model.formatScale(modelData.effective) + "x"
                           fontSize: Style.font.caption
                           foreground: root.foreground; fontFamily: root.fontFamily
                           horizontalPadding: Style.spacing.sm; verticalPadding: Style.spacing.controlPaddingY
                           bordered: true
-                          active: root.display ? Model.round2(root.scaleOf(root.display)) === modelData.effective : false
-                          onClicked: if (root.display) root.setField(root.display.name, "scale", modelData.effective)
+                          active: root.display ? Model.sameScale(root.scaleOf(root.display), modelData.effective) : false
+                          onClicked: if (root.display) root.setSizeField(root.display, "scale", modelData.effective)
                           onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "scale" } }
                         }
                       }
@@ -654,7 +709,7 @@ Item {
                       value: root.display ? String(root.transformOf(root.display)) : "0"
                       foreground: root.foreground; background: root.background; accent: root.accent; fontFamily: root.fontFamily
                       focusable: false
-                      onChanged: function(v) { if (root.display) root.setField(root.display.name, "transform", Number(v)) }
+                      onChanged: function(v) { if (root.display) root.setSizeField(root.display, "transform", Number(v)) }
                       onHovered: function(i, h) { if (h) { root.focusArea = "inspector"; root.currentRow = "rotation" } }
                     }
                   }
@@ -1048,7 +1103,7 @@ Item {
               id: hintText
               visible: !root.hasPending
               textFormat: Text.PlainText
-              text: "j/k rows · h/l adjust · ⇥ canvas ⇄ inspector ⇄ actions · arrows nudge 10 px, ⇧ 100 · 1–9 select · a apply · r " + (root.draftDirty ? "discard" : "revert") + " · i identify · esc close"
+              text: "j/k rows · h/l adjust · ⇥ canvas ⇄ inspector ⇄ actions · arrows nudge 10 px, ⇧ 100, ⌥ flush beside · 0 origin · 1–9 [ ] select · a apply · r " + (root.draftDirty ? "discard" : "revert") + " · i identify · esc close"
               color: root.dim
               font.family: root.fontFamily; font.pixelSize: Style.font.caption
               anchors.left: parent.left; anchors.right: actionButtons.left; anchors.rightMargin: Style.space(16)

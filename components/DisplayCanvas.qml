@@ -290,6 +290,11 @@ Item {
           if (block.disp.name !== dragName) { root.draggingName = ""; root.guides = []; return }
           var lx = Math.round(root.dragLogX)
           var ly = Math.round(root.dragLogY)
+          // A release over another display missed by a little; land it flush
+          // against the nearest clear edge instead of leaving an overlap that
+          // only greys out Apply. Keyboard nudges stay exact and may overlap.
+          var placed = Model.placeOutsideOverlaps({ name: block.disp.name, x: lx, y: ly, width: block.disp.width, height: block.disp.height }, root.rects)
+          if (placed) { lx = placed.x; ly = placed.y }
           // Commit before dropping the drag flag, so the block's position
           // binding already reads the new value and nothing animates backwards.
           if (lx !== block.disp.x || ly !== block.disp.y) root.moved(block.disp.name, lx, ly)

@@ -15,6 +15,10 @@ BorderSurface {
 
   // Panel-cursor index: 0 = Revert, 1 = Keep, -1 = none.
   property int cursorIndex: -1
+  // Inside a popup or the studio the strip draws its own frame and fill. On a
+  // floating card of its own (the service's every-screen strip) the card is
+  // the frame, and a second one inside it reads as clutter.
+  property bool bare: false
 
   signal keep()
   signal revert()
@@ -24,18 +28,18 @@ BorderSurface {
   // countdown in words; the studio's action bar has room for both.
   readonly property bool compact: width < Style.space(420)
 
-  implicitHeight: content.implicitHeight + Style.spacing.xl * 2
+  implicitHeight: content.implicitHeight + (bare ? Style.spacing.md : Style.spacing.xl) * 2
   radius: Style.cornerRadius
-  color: Style.hoverFillFor(foreground, Color.accent)
-  borderSpec: Border.controlSpec("hover-cursor", foreground, Color.accent)
+  color: bare ? "transparent" : Style.hoverFillFor(foreground, Color.accent)
+  borderSpec: bare ? Border.none() : Border.controlSpec("hover-cursor", foreground, Color.accent)
 
   Row {
     id: content
     anchors.left: parent.left
     anchors.right: parent.right
     anchors.verticalCenter: parent.verticalCenter
-    anchors.leftMargin: Style.spacing.rowPaddingX
-    anchors.rightMargin: Style.spacing.rowPaddingX
+    anchors.leftMargin: root.bare ? 0 : Style.spacing.rowPaddingX
+    anchors.rightMargin: root.bare ? 0 : Style.spacing.rowPaddingX
     spacing: Style.spacing.rowPaddingX
 
     Column {
