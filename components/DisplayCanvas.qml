@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell
 import qs.Commons
 import qs.Ui
 import "../Model.js" as Model
@@ -25,6 +26,29 @@ Item {
   // a click that selects a display also nudges it by a pixel or two.
   property int dragStartThreshold: 4
 
+  // The desktop's own wallpaper, dimmed, inside every block. A display
+  // arranger whose blocks show what is actually on those displays stops being
+  // a diagram and starts being a picture of the desk. Omarchy keeps the
+  // current one on a symlink it rewrites on every theme change.
+  readonly property string wallpaperPath: "file://" + Quickshell.env("HOME") + "/.local/state/omarchy/current/background"
+  property url wallpaperSource: ""
+  property real wallpaperOpacity: 0.28
+
+  // The symlink's target changes but its path does not, so a bound source
+  // would never reload. Clearing it first is what makes the next assignment a
+  // change, and `cache: false` is what makes that assignment reach the disk.
+  function loadWallpaper() {
+    root.wallpaperSource = ""
+    Qt.callLater(function() { root.wallpaperSource = root.wallpaperPath })
+  }
+
+  Component.onCompleted: root.loadWallpaper()
+
+  Connections {
+    target: Color
+    function onBackgroundChanged() { root.loadWallpaper() }
+  }
+
   signal selected(string name)
   signal moved(string name, int x, int y)
 
@@ -40,6 +64,17 @@ Item {
     var fy = (root.height - root.padding * 2) / b.height
     return Math.max(0.01, Math.min(fx, fy, 0.25))
   }
+  // What height this canvas would need to hold the layout at the width it has,
+  // so the frame can hug the arrangement instead of stranding it in the middle
+  // of a tall empty box. Deliberately independent of `factor`, which reads
+  // `height` back: routing it through the factor would bind height to height.
+  readonly property real preferredHeight: {
+    var b = root.bounds
+    if (b.width <= 0 || b.height <= 0) return 0
+    var inner = Math.max(1, root.width - root.padding * 2)
+    return inner * (b.height / b.width) + root.padding * 2
+  }
+
   readonly property real originX: root.padding + ((root.width - root.padding * 2) - root.bounds.width * root.factor) / 2 - root.bounds.x * root.factor
   readonly property real originY: root.padding + ((root.height - root.padding * 2) - root.bounds.height * root.factor) / 2 - root.bounds.y * root.factor
 
@@ -111,6 +146,7 @@ Item {
       var startX = (root.originX % step), startY = (root.originY % step)
       for (var x = startX; x < width; x += step)
         for (var y = startY; y < height; y += step) ctx.fillRect(Math.round(x), Math.round(y), 1, 1)
+
     }
     Connections {
       target: root
@@ -133,7 +169,11 @@ Item {
       readonly property var guide: root.guides[index] !== undefined ? root.guides[index] : null
       visible: guide !== null
       color: root.accent
-      opacity: 0.6
+      // Delegates are created and destroyed as guides come and go, so the
+      // fade lives on creation rather than on a binding.
+      opacity: 0
+      Component.onCompleted: opacity = 0.6
+      Behavior on opacity { NumberAnimation { duration: 90; easing.type: Easing.OutCubic } }
       x: guide && guide.axis === "x" ? Math.round(root.toPixelX(guide.at)) : 0
       y: guide && guide.axis === "y" ? Math.round(root.toPixelY(guide.at)) : 0
       width: guide && guide.axis === "x" ? 1 : root.width
@@ -176,6 +216,30 @@ Item {
       Behavior on y { enabled: !block.isDragging; NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
       Behavior on width { enabled: !block.isDragging; NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
       Behavior on height { enabled: !block.isDragging; NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+      Behavior on color { ColorAnimation { duration: 120 } }
+      Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+
+      // The picture on that screen, inset so a themed corner radius never
+      // clips it and the block still reads as a panel with a bezel rather
+      // than as a thumbnail. A display that is off shows no picture.
+      Item {
+        anchors.fill: parent
+        anchors.margins: Math.max(2, Math.round(Math.min(block.width, block.height) * 0.045))
+        clip: true
+        visible: !block.disp.disabled && wall.status === Image.Ready
+
+        Image {
+          id: wall
+          anchors.fill: parent
+          source: root.wallpaperSource
+          cache: false
+          asynchronous: true
+          mipmap: true
+          fillMode: Image.PreserveAspectCrop
+          sourceSize.width: 640
+          opacity: root.wallpaperOpacity
+        }
+      }
 
       Column {
         anchors.left: parent.left
@@ -304,6 +368,20 @@ Item {
         onCanceled: { armed = false; dragName = ""; root.draggingName = ""; root.guides = [] }
       }
     }
+  }
+
+  // Datum mark at logical 0, 0. Two displays at 0,0 and 2400,0 say nothing
+  // about which way the coordinates run until you can see where zero is. It
+  // draws over the blocks because a display usually sits on the origin, and a
+  // mark hidden underneath one tells nobody anything.
+  Item {
+    z: 3
+    x: Math.round(root.toPixelX(0))
+    y: Math.round(root.toPixelY(0))
+    visible: x > -12 && x < root.width + 12 && y > -12 && y < root.height + 12
+
+    Rectangle { x: -5; y: 0; width: 11; height: 1; color: Util.alpha(root.foreground, 0.5) }
+    Rectangle { x: 0; y: -5; width: 1; height: 11; color: Util.alpha(root.foreground, 0.5) }
   }
 
   Text {
