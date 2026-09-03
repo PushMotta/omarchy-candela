@@ -63,7 +63,7 @@ Not committed as a push: commits are local on `main`.
 
 ### Session 2 (3 September 2026, afternoon) — hardening pass
 
-A Codex review of the v0.1 tree was verified claim by claim (all six
+An external review of the v0.1 tree was verified claim by claim (all six
 high-priority findings held) and implemented, plus two findings of our own:
 
 - **Backend is transactional** (`76b8977`): pending.json with a token and the
