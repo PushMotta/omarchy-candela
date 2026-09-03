@@ -83,7 +83,11 @@ hint has already shortened is self-fulfilling** — the column then overflows by
 exactly the height of the line reporting it, so once the line appears it never
 leaves. The unreduced height comes in from outside now (`available`).
 
-README: three GIFs under `docs/media/` (gamut morph, countdown, Identify) built
+README: four GIFs under `docs/media/` (gamut morph, countdown, Identify, and a
+six-theme flip-book — Miasma, Nord, Catppuccin Latte, Gruvbox, Rose Pine,
+Everforest, captured one still per theme with `omarchy theme set` and
+reassembled with per-frame palettes; the studio survives a theme change and
+re-themes in place, wallpaper included) built
 from timed `grim` frame sequences, since there is no screen recorder on this
 machine and no sudo to install one. `grim -g` takes **logical** coordinates and
 scales by the output's factor; `-s` is slower than cropping at native

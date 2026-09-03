@@ -43,6 +43,18 @@ doing right now rather than what was asked for.
 
 <img src="docs/media/popup.png" alt="The Candela bar popup, showing brightness, scale, colour mode and the display list" width="330">
 
+### It follows your theme
+
+Every colour, spacing value, font size and corner radius comes from the theme
+tokens the shell already publishes — there is not one hardcoded colour in the
+plugin. Switch themes and both surfaces switch with them, wallpaper in the
+canvas blocks included, light themes as well as dark.
+
+![The Candela studio in six Omarchy themes — Miasma, Nord, Catppuccin Latte, Gruvbox, Rose Pine and Everforest — each re-themed in full, wallpaper included](docs/media/themes.gif)
+
+The one thing that does not follow the theme is the chromaticity fill in the
+gamut plot. Those colours are the measurement, not the decoration.
+
 ### The gamut you are actually using
 
 The plot is a CIE 1931 chromaticity diagram: the spectral locus for context,
