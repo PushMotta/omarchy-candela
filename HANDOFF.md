@@ -1,6 +1,65 @@
 # Handoff — Candela
 
-Written 3 September 2026 at the end of session 1, extended after sessions 2 and 3. Read this first in a new session, then `DESIGN.md` for the why and `README.md` for the how.
+Written 3 September 2026 at the end of session 1, extended after sessions 2, 3 and 4. Read **Start here** below first, then `DESIGN.md` for the why and `README.md` for the how. The sections after it are the history, kept because the gotchas and decisions in them still apply.
+
+## Start here (state on 3 September 2026, late evening)
+
+**The plugin is Candela.** Id `io.github.pushmotta.candela`, CLI
+`omarchy-candela`, repo https://github.com/PushMotta/omarchy-candela (public,
+MIT; the old `omarchy-displays` URL redirects). `main` = `origin/main`, tree
+clean, CI green (`.github/workflows/test.yml`: `./test/all` + a parse-only QML
+lint). The live install on this machine is migrated to the new names and was
+verified after the rename with a reload, `doctor`, disable/enable, summon/hide
+and a no-op apply through expiry. Nothing is pending on the displays.
+
+**Pedro has declared the features done for now.** The next act is the
+marketplace listing.
+
+### Marketplace submission — drafted, not sent
+
+- Route (verified against the manual, plugins.omarchy.org and the marketplace
+  repo): open ONE issue on `omacom/omarchy-plugin-marketplace` with the
+  `submit-plugin.yml` template. Bots validate the exact HEAD commit and run a
+  static Security Baseline; a maintainer applies `approved-and-verified`.
+- The body is ready in **`docs/marketplace-submission.md`** (six headings in
+  the required order; category Hardware; tags hyprland, quickshell, system;
+  maintainer notes pre-empting the two review capabilities). Send it with:
+  `gh issue create --repo omacom/omarchy-plugin-marketplace --title "[Plugin]: Candela" --body-file docs/marketplace-submission.md`
+- Expect `review-required`, not `passed`: the baseline records
+  `service-management` (systemd-run for the revert timer) and `privilege` (the
+  CI workflow's `sudo apt-get`). Neither is a finding.
+- **Two decisions Pedro has not yet made:** whether to bump `version` from
+  `0.1.0` to `1.0.0` before submitting (the card shows it), and whether he
+  submits by hand or tells the assistant to run the command above. Do not open
+  the issue without his word — it goes out under his account.
+- The full readiness rescan (manifest validate, fresh-clone validate, README
+  install+removal, LICENSE, preview.png, baseline patterns, the guide's qmllint,
+  ID collision against all 2,148 listed sources, git hygiene) passed at
+  `907aca1`. Re-run `omarchy plugin validate .` and `./test/all` before sending
+  if HEAD has moved.
+
+### After listing: how updates work
+
+Users install and update from mutable `main` (`omarchy plugin add` /
+`plugin update`), so every push reaches them immediately. The listing is a
+snapshot of one commit; later pushes make the card show "Update unverified"
+until a re-verification is requested through the verify-plugin form with the
+plugin ID, repo URL and the full 40-char SHA. Re-verify for releases, not every
+push. The plugin ID must never change.
+
+### Two sessions work on this project
+
+Session 3's robustness pass came from a second interactive session
+(`omarchy-monitor-options-8f`). Both sessions share this working tree; both
+were told the Candela names; both agreed to stay off the tree until Pedro asks.
+Check `git status` and `git log origin/main` before editing. Pedro's rule: do
+not name other tools in the repo.
+
+### Still owed (unchanged, see "Not yet verified")
+
+The live revert-fidelity test across every field is the one that underwrites
+the README's promise and has never been run in full; Pedro's hands-on pass of
+the session 2 and 3 UI changes; the laptop-only paths.
 
 ## Where things stand
 
