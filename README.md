@@ -139,7 +139,13 @@ change like every other field and needs `a` to apply.
 
 ## Command line
 
-Everything the UI does is a subcommand of `bin/omarchy-displays`:
+Everything the UI does is a subcommand of `bin/omarchy-displays`. It is not
+on your PATH by itself; the popup, the studio and the revert timer call it by
+its full path. To use it from a terminal, link it once:
+
+```bash
+ln -s ~/.config/omarchy/plugins/pmotta.displays/bin/omarchy-displays ~/.local/bin/
+```
 
 ```
 omarchy-displays state                          # JSON: displays, EDID capabilities, live + kept config, pending
