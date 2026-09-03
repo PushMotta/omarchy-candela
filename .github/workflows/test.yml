@@ -15,10 +15,10 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install jq, edid-decode and qmllint
+      - name: Install jq, edid-decode, socat and qmllint
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends jq edid-decode qt6-declarative-dev-tools
+          sudo apt-get install -y --no-install-recommends jq edid-decode socat qt6-declarative-dev-tools
 
       # Bash tests run the CLI inside a sandbox with a fake hyprctl and systemd;
       # node tests cover Model.js. No compositor is needed.
