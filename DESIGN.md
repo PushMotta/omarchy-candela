@@ -60,7 +60,23 @@ Summoned from Setup › Monitors (replacing the editor action), from the popup's
 
 Layout: **canvas** left (~60 %), **inspector** right (~40 %), **action bar** bottom.
 
-**Canvas.** Displays drawn to scale in logical pixels on a faint grid. Each block shows connector, model, mode and scale. Selected = selected-state chrome; focused = small dot. Arrow keys nudge 10 px, Shift+arrows 100 px, edges snap to neighbours, overlap is refused (the block turns urgent and Apply disables). Mirrors stack with a badge. A caption under the canvas prints the positions numerically.
+**Canvas.** Displays drawn to scale in logical pixels on a faint grid. Each block shows connector, model, mode and scale. Selected = selected-state chrome; focused = small dot. Arrow keys nudge 10 px, Shift+arrows 100 px, edges snap to neighbours, overlap is refused (the block turns urgent and Apply disables). Mirrors stack with a badge. A caption under the canvas prints the positions numerically, following the block while it is dragged.
+
+*Dragging.* A block's position is always the position it had when the press
+landed plus how far the pointer has travelled since — never its own last drawn
+position. Measuring against the block while the block is what you are moving
+feeds its displacement back in, and it oscillates instead of following the hand.
+The pointer is read in canvas coordinates for the same reason: the mouse area
+travels with the block. Snapping is applied to that pointer-derived position, so
+a block inside a snap zone stays snapped and one outside it goes exactly where
+the hand is, with no memory of either. The snap distance is **12 px measured on
+screen**, converted to logical pixels through the current zoom, so the pull
+feels the same whether the layout is drawn at a quarter scale or a fortieth — a
+threshold fixed in logical pixels becomes hundreds of pixels wide when zoomed
+out and glues every block to its neighbours. A press only becomes a drag after
+4 px of travel, so clicking a display to select it does not also move it. Only
+enabled, unmirrored displays are snapped to, blocked against, or counted in
+overlap: the others have no independent position.
 
 **Inspector** for the selected display, sections:
 

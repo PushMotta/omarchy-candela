@@ -18,16 +18,21 @@ Item {
   property color accent: Color.accent
   property color urgent: Color.urgent
   property string fontFamily: Style.font.family
-  property int snapThreshold: 40
+  // Snap distance measured on screen, not in logical pixels: the pull has to
+  // feel the same whether the layout is zoomed to a quarter or a fortieth.
+  property int snapThreshold: 12
+  // Pointer travel, in screen px, before a press turns into a drag. Without it
+  // a click that selects a display also nudges it by a pixel or two.
+  property int dragStartThreshold: 4
 
   signal selected(string name)
   signal moved(string name, int x, int y)
 
   readonly property var bounds: Model.boundsOf(root.rects)
-  readonly property var overlap: Model.anyOverlap(root.rects)
   readonly property real padding: Style.space(28)
   // Fit the whole layout with padding; never zoom past 1:4 so a lone display
-  // does not fill the canvas edge to edge.
+  // does not fill the canvas edge to edge. Held still during a drag: refitting
+  // under the pointer would move the block the user is trying to place.
   readonly property real factor: {
     var b = root.bounds
     if (b.width <= 0 || b.height <= 0) return 0.1
@@ -40,13 +45,36 @@ Item {
 
   property var guides: []
   property string draggingName: ""
-  property real dragX: 0
-  property real dragY: 0
+  // Where the dragged block currently sits, in logical px, after snapping.
+  property real dragLogX: 0
+  property real dragLogY: 0
+  // Filtered once when the drag arms, not on every pointer event.
+  property var dragTargets: []
+
+  // The layout as it stands right now, with the dragged block at its live
+  // position, so overlap and the caption describe what the user is seeing.
+  readonly property var liveRects: root.draggingName === ""
+    ? root.rects
+    : Model.withRect(root.rects, root.draggingName, Math.round(root.dragLogX), Math.round(root.dragLogY))
+  readonly property var overlap: Model.anyOverlap(Model.arrangeable(root.liveRects))
+
+  readonly property var blankRect: ({ name: "", x: 0, y: 0, width: 0, height: 0,
+                                      model: "", mode: "", scale: 1, hdr: false,
+                                      disabled: true, mirrorOf: "", focused: false })
 
   function toPixelX(lx) { return root.originX + lx * root.factor }
   function toPixelY(ly) { return root.originY + ly * root.factor }
   function toLogicalX(px) { return (px - root.originX) / root.factor }
   function toLogicalY(py) { return (py - root.originY) / root.factor }
+
+  // Delegates outlive a change to `rects`, so a display disappearing under the
+  // pointer has to end the drag explicitly.
+  onRectsChanged: {
+    if (root.draggingName !== "" && rectByName(root.draggingName) === null) {
+      root.draggingName = ""
+      root.guides = []
+    }
+  }
 
   function rectByName(name) {
     for (var i = 0; i < rects.length; i++) if (rects[i].name === name) return rects[i]
@@ -95,36 +123,46 @@ Item {
     }
   }
 
+  // Indexed by count, not by the array itself: a `var` array model rebuilds
+  // every delegate on every change, which during a drag means rebuilding the
+  // guides sixty times a second.
   Repeater {
-    model: root.guides
+    model: root.guides.length
     Rectangle {
-      required property var modelData
+      required property int index
+      readonly property var guide: root.guides[index] !== undefined ? root.guides[index] : null
+      visible: guide !== null
       color: root.accent
       opacity: 0.6
-      x: modelData.axis === "x" ? Math.round(root.toPixelX(modelData.at)) : 0
-      y: modelData.axis === "y" ? Math.round(root.toPixelY(modelData.at)) : 0
-      width: modelData.axis === "x" ? 1 : root.width
-      height: modelData.axis === "y" ? 1 : root.height
+      x: guide && guide.axis === "x" ? Math.round(root.toPixelX(guide.at)) : 0
+      y: guide && guide.axis === "y" ? Math.round(root.toPixelY(guide.at)) : 0
+      width: guide && guide.axis === "x" ? 1 : root.width
+      height: guide && guide.axis === "y" ? 1 : root.height
     }
   }
 
+  // Also indexed by count, so the delegates survive a change to `rects`. They
+  // hold the drag state and the position animations; rebuilding them mid-drag
+  // drops both.
   Repeater {
-    model: root.rects
+    model: root.rects.length
 
     BorderSurface {
       id: block
-      required property var modelData
-      readonly property bool isSelected: modelData.name === root.selectedName
-      readonly property bool isDragging: root.draggingName === modelData.name
-      readonly property bool isOverlapping: root.overlap !== null && (root.overlap[0] === modelData.name || root.overlap[1] === modelData.name)
+      required property int index
+      readonly property var disp: root.rects[index] !== undefined ? root.rects[index] : root.blankRect
+      readonly property bool isSelected: disp.name !== "" && disp.name === root.selectedName
+      readonly property bool isDragging: disp.name !== "" && root.draggingName === disp.name
+      readonly property bool isOverlapping: root.overlap !== null && (root.overlap[0] === disp.name || root.overlap[1] === disp.name)
 
-      x: isDragging ? root.dragX : Math.round(root.toPixelX(modelData.x))
-      y: isDragging ? root.dragY : Math.round(root.toPixelY(modelData.y))
-      width: Math.max(24, Math.round(modelData.width * root.factor))
-      height: Math.max(16, Math.round(modelData.height * root.factor))
+      visible: disp.name !== ""
+      x: isDragging ? root.toPixelX(root.dragLogX) : Math.round(root.toPixelX(disp.x))
+      y: isDragging ? root.toPixelY(root.dragLogY) : Math.round(root.toPixelY(disp.y))
+      width: Math.max(24, Math.round(disp.width * root.factor))
+      height: Math.max(16, Math.round(disp.height * root.factor))
       z: isSelected ? 2 : 1
       radius: Style.cornerRadius
-      opacity: modelData.disabled ? 0.45 : 1
+      opacity: disp.disabled ? 0.45 : 1
       color: isSelected
         ? Util.alpha(root.foreground, 0.10)
         : Util.alpha(root.foreground, 0.06)
@@ -136,6 +174,8 @@ Item {
 
       Behavior on x { enabled: !block.isDragging; NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
       Behavior on y { enabled: !block.isDragging; NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+      Behavior on width { enabled: !block.isDragging; NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+      Behavior on height { enabled: !block.isDragging; NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
 
       Column {
         anchors.left: parent.left
@@ -146,21 +186,21 @@ Item {
         Row {
           spacing: Style.space(6)
           Rectangle {
-            visible: block.modelData.focused
+            visible: block.disp.focused
             width: Style.space(6); height: width; radius: width / 2
             color: root.accent
             anchors.verticalCenter: parent.verticalCenter
           }
           Text {
             textFormat: Text.PlainText
-            text: block.modelData.name
+            text: block.disp.name
             color: root.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.title
             font.bold: true
           }
           BorderSurface {
-            visible: block.modelData.hdr || block.modelData.disabled || (block.modelData.mirrorOf && block.modelData.mirrorOf !== "")
+            visible: block.disp.hdr || block.disp.disabled || (block.disp.mirrorOf && block.disp.mirrorOf !== "")
             implicitWidth: badgeText.implicitWidth + Style.space(10)
             implicitHeight: badgeText.implicitHeight + Style.space(3)
             anchors.verticalCenter: parent.verticalCenter
@@ -171,7 +211,7 @@ Item {
               id: badgeText
               anchors.centerIn: parent
               textFormat: Text.PlainText
-              text: block.modelData.disabled ? "OFF" : (block.modelData.mirrorOf ? "MIRROR" : "HDR")
+              text: block.disp.disabled ? "OFF" : (block.disp.mirrorOf ? "MIRROR" : "HDR")
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -187,7 +227,7 @@ Item {
         anchors.margins: Style.space(10)
         width: parent.width - Style.space(20)
         textFormat: Text.PlainText
-        text: (block.modelData.model ? block.modelData.model + " · " : "") + block.modelData.mode + " · " + block.modelData.scale + "×\n" + block.modelData.width + "×" + block.modelData.height + " logical"
+        text: (block.disp.model ? block.disp.model + " · " : "") + block.disp.mode + " · " + block.disp.scale + "×\n" + block.disp.width + "×" + block.disp.height + " logical"
         color: Qt.darker(root.foreground, 1.4)
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
@@ -199,39 +239,64 @@ Item {
 
       MouseArea {
         anchors.fill: parent
-        cursorShape: block.modelData.disabled ? Qt.ArrowCursor : (block.isDragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor)
-        property real pressX: 0
-        property real pressY: 0
-        property real startX: 0
-        property real startY: 0
+        cursorShape: block.disp.disabled ? Qt.ArrowCursor : (block.isDragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor)
+        // The press point and the block's origin, both in canvas coordinates.
+        // `mouse.x` is relative to this MouseArea, which travels with the block
+        // while it is dragged, so every reading is mapped back to the canvas
+        // before it is used. Measuring in the moving frame feeds the block's
+        // own displacement back into the next position and it oscillates.
+        property real pressCanvasX: 0
+        property real pressCanvasY: 0
+        property real originLogX: 0
+        property real originLogY: 0
+        property bool armed: false
+        // The display grabbed at press. A delegate is bound to an index, not to
+        // a display, so if the list changes under the pointer this stops the
+        // drag from carrying on with whatever moved into the slot.
+        property string dragName: ""
 
         onPressed: function(mouse) {
-          root.selected(block.modelData.name)
-          if (block.modelData.disabled) return
-          pressX = mouse.x; pressY = mouse.y
-          startX = block.x; startY = block.y
-          root.dragX = block.x; root.dragY = block.y
-          root.draggingName = block.modelData.name
+          root.selected(block.disp.name)
+          armed = false
+          if (block.disp.disabled) return
+          var p = mapToItem(root, mouse.x, mouse.y)
+          pressCanvasX = p.x; pressCanvasY = p.y
+          originLogX = block.disp.x; originLogY = block.disp.y
+          dragName = block.disp.name
         }
         onPositionChanged: function(mouse) {
-          if (!block.isDragging) return
-          var px = startX + (mouse.x - pressX)
-          var py = startY + (mouse.y - pressY)
-          var proposed = { name: block.modelData.name, x: Math.round(root.toLogicalX(px)), y: Math.round(root.toLogicalY(py)), width: block.modelData.width, height: block.modelData.height }
-          var snapped = Model.snapRect(proposed, root.rects, root.snapThreshold / root.factor)
+          if (block.disp.disabled || block.disp.name !== dragName) return
+          var p = mapToItem(root, mouse.x, mouse.y)
+          var dx = p.x - pressCanvasX
+          var dy = p.y - pressCanvasY
+          if (!armed) {
+            if (Math.abs(dx) < root.dragStartThreshold && Math.abs(dy) < root.dragStartThreshold) return
+            armed = true
+            root.dragLogX = originLogX; root.dragLogY = originLogY
+            root.dragTargets = Model.snapTargets(root.rects, block.disp.name)
+            root.draggingName = block.disp.name
+          }
+          var snapped = Model.dragPosition({ name: block.disp.name, x: originLogX, y: originLogY,
+                                             width: block.disp.width, height: block.disp.height },
+                                           { x: dx / root.factor, y: dy / root.factor },
+                                           root.dragTargets, root.snapThreshold / root.factor)
           root.guides = snapped.guides
-          root.dragX = root.toPixelX(snapped.x)
-          root.dragY = root.toPixelY(snapped.y)
+          root.dragLogX = snapped.x
+          root.dragLogY = snapped.y
         }
         onReleased: function(mouse) {
-          if (!block.isDragging) return
-          var lx = Math.round(root.toLogicalX(root.dragX))
-          var ly = Math.round(root.toLogicalY(root.dragY))
+          if (!armed) return
+          armed = false
+          if (block.disp.name !== dragName) { root.draggingName = ""; root.guides = []; return }
+          var lx = Math.round(root.dragLogX)
+          var ly = Math.round(root.dragLogY)
+          // Commit before dropping the drag flag, so the block's position
+          // binding already reads the new value and nothing animates backwards.
+          if (lx !== block.disp.x || ly !== block.disp.y) root.moved(block.disp.name, lx, ly)
           root.draggingName = ""
           root.guides = []
-          if (lx !== block.modelData.x || ly !== block.modelData.y) root.moved(block.modelData.name, lx, ly)
         }
-        onCanceled: { root.draggingName = ""; root.guides = [] }
+        onCanceled: { armed = false; dragName = ""; root.draggingName = ""; root.guides = [] }
       }
     }
   }
@@ -242,7 +307,7 @@ Item {
     anchors.margins: Style.space(12)
     textFormat: Text.PlainText
     text: {
-      var s = Model.layoutCaption(root.rects) + " · logical px"
+      var s = Model.layoutCaption(root.liveRects) + " · logical px"
       if (root.overlap) s += " · " + root.overlap[0] + " overlaps " + root.overlap[1]
       else if (root.rects.length > 1) s += " · no overlap"
       return s

@@ -316,11 +316,45 @@ function snapRect(moving, others, threshold) {
   return best
 }
 
+// Where a dragged block lands: its position when the drag started, plus how far
+// the pointer has travelled since, then snapped. The travel is measured from the
+// press point and nothing else — measuring it against the block's last drawn
+// position feeds the block's own displacement back into the next frame and it
+// oscillates instead of following the hand.
+function dragPosition(origin, delta, targets, threshold) {
+  return snapRect({ name: origin.name, x: origin.x + delta.x, y: origin.y + delta.y,
+                    width: origin.width, height: origin.height }, targets, threshold)
+}
+
 function anyOverlap(rects) {
   for (var i = 0; i < rects.length; i++)
     for (var j = i + 1; j < rects.length; j++)
       if (overlaps(rects[i], rects[j])) return [rects[i].name, rects[j].name]
   return null
+}
+
+// Displays that take part in arrangement: enabled, and not mirroring another.
+// A mirrored or disabled output has no independent position, so it neither
+// snaps, nor blocks, nor counts as an overlap.
+function arrangeable(rects) {
+  return rects.filter(function (r) { return !r.disabled && !r.mirrorOf })
+}
+
+// Rects a dragged block may snap its edges to: arrangeable, minus itself.
+function snapTargets(rects, movingName) {
+  return arrangeable(rects).filter(function (r) { return r.name !== movingName })
+}
+
+// Replace the dragged rect with its provisional position, so overlap and the
+// caption can report where the block is now rather than where it was dropped.
+function withRect(rects, name, x, y) {
+  return rects.map(function (r) {
+    if (r.name !== name) return r
+    var c = {}
+    for (var k in r) c[k] = r[k]
+    c.x = x; c.y = y
+    return c
+  })
 }
 
 function layoutCaption(rects) {
@@ -359,6 +393,7 @@ if (typeof module !== "undefined") {
     outputCaption: outputCaption, capabilityLine: capabilityLine, luminanceLine: luminanceLine, primariesLine: primariesLine,
     displayTitle: displayTitle, panelLine: panelLine, metaLine: metaLine,
     logicalSize: logicalSize, rectOf: rectOf, overlaps: overlaps, boundsOf: boundsOf, snapRect: snapRect, anyOverlap: anyOverlap, layoutCaption: layoutCaption,
+    arrangeable: arrangeable, snapTargets: snapTargets, withRect: withRect, dragPosition: dragPosition,
     brightnessName: brightnessName, parseState: parseState, clamp: clamp, round2: round2
   }
 }

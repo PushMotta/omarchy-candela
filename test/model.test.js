@@ -120,3 +120,56 @@ test("state parsing is defensive", () => {
   assert.equal(M.parseState("{}"), null)
   assert.equal(M.parseState(JSON.stringify({ displays: [] })).displays.length, 0)
 })
+
+test("only arrangeable displays snap, block, or take part in overlap", () => {
+  const rects = monitors.map(m => M.rectOf(m))
+  const off = Object.assign({}, rects[0], { disabled: true })
+  const mirrored = Object.assign({}, rects[0], { mirrorOf: "DP-2" })
+  assert.deepEqual(M.arrangeable([off, rects[1]]).map(r => r.name), ["DP-2"])
+  assert.deepEqual(M.arrangeable([mirrored, rects[1]]).map(r => r.name), ["DP-2"])
+  // A dragged block never snaps to itself, and never to an output with no
+  // independent position of its own.
+  assert.deepEqual(M.snapTargets(rects, "DP-2").map(r => r.name), ["DP-1"])
+  assert.deepEqual(M.snapTargets([off, rects[1]], "DP-2"), [])
+  // An off display parked on top of a live one is not an overlap.
+  assert.equal(M.anyOverlap(M.arrangeable([Object.assign({}, off, { x: 0 }), rects[0]])), null)
+})
+
+test("a provisional position is substituted without touching the originals", () => {
+  const rects = monitors.map(m => M.rectOf(m))
+  const live = M.withRect(rects, "DP-2", 100, 40)
+  assert.equal(live[1].x, 100)
+  assert.equal(live[1].y, 40)
+  assert.equal(rects[1].x, 2400, "the source array is left alone")
+  assert.equal(live[0], rects[0], "untouched entries are passed through")
+  assert.deepEqual(M.anyOverlap(live), ["DP-1", "DP-2"])
+})
+
+test("a drag follows the pointer and not its own last position", () => {
+  const rects = monitors.map(m => M.rectOf(m))
+  const origin = rects[1]                       // DP-2 at 2400, 0
+  const targets = M.snapTargets(rects, "DP-2")
+  const t = 200
+
+  // The same pointer travel gives the same answer however the pointer got
+  // there: no memory of the previous frame, so nothing can accumulate.
+  const direct = M.dragPosition(origin, { x: 900, y: 500 }, targets, t)
+  let last = null
+  for (const step of [[120, 30], [400, 210], [900, 500]]) last = M.dragPosition(origin, { x: step[0], y: step[1] }, targets, t)
+  assert.deepEqual([last.x, last.y], [direct.x, direct.y])
+
+  // Held still inside a snap zone, the result stays put instead of alternating
+  // between the snapped and the free position.
+  const held = { x: 20, y: 12 }
+  const first = M.dragPosition(origin, held, targets, t)
+  const second = M.dragPosition(origin, held, targets, t)
+  assert.deepEqual([first.x, first.y], [second.x, second.y])
+  assert.deepEqual([first.x, first.y], [2400, 0], "snapped back to the shared edge")
+
+  // Push past the snap zone on one axis and that axis goes where the hand is,
+  // while the other keeps its guide: snapping is per axis, not all or nothing.
+  const free = M.dragPosition(origin, { x: 900, y: 0 }, targets, t)
+  assert.equal(free.x, 3300)
+  assert.deepEqual(free.guides.map(g => g.axis), ["y"])
+  assert.equal(free.y, 0)
+})
