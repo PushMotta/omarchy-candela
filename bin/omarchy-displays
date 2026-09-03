@@ -41,8 +41,13 @@ REVERT_SECONDS="${OMARCHY_DISPLAYS_REVERT_SECONDS:-15}"
 # instance signature; recover it from the newest instance runtime dir, the
 # same way omarchy-restart-shell does.
 if [[ -z ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
-  hypr_dir=$(find "${XDG_RUNTIME_DIR:-/run/user/$UID}/hypr" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n 1 | cut -d' ' -f2-)
-  [[ -n $hypr_dir ]] && export HYPRLAND_INSTANCE_SIGNATURE=${hypr_dir##*/}
+  # No runtime dir at all (Hyprland gone, or a test runner) must not be fatal:
+  # with pipefail a failing find takes the whole substitution down with it.
+  hypr_root="${XDG_RUNTIME_DIR:-/run/user/$UID}/hypr"
+  if [[ -d $hypr_root ]]; then
+    hypr_dir=$(find "$hypr_root" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n 1 | cut -d' ' -f2- || true)
+    if [[ -n $hypr_dir ]]; then export HYPRLAND_INSTANCE_SIGNATURE=${hypr_dir##*/}; fi
+  fi
 fi
 
 usage() {

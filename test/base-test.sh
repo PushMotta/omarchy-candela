@@ -33,7 +33,10 @@ assert_not_contains() {
 make_sandbox() {
   local dir
   dir="$(mktemp -d)"
-  mkdir -p "$dir/bin" "$dir/state" "$dir/drm/card1-DP-1" "$dir/drm/card1-DP-2"
+  # Its own runtime dir with no hypr/ inside, so the tests never lean on the
+  # host's compositor — the CI runner has none, and a revert timer can fire
+  # after Hyprland has gone.
+  mkdir -p "$dir/bin" "$dir/state" "$dir/runtime" "$dir/drm/card1-DP-1" "$dir/drm/card1-DP-2"
   cp "$FIXTURES/mateview-dp1.edid" "$dir/drm/card1-DP-1/edid"
   cp "$FIXTURES/mateview-dp1.edid" "$dir/drm/card1-DP-2/edid"
   cat > "$dir/bin/hyprctl" <<EOF
@@ -85,6 +88,8 @@ EOF
 run_cli() {
   local sandbox="$1"; shift
   PATH="$sandbox/bin:$PATH" \
+  XDG_RUNTIME_DIR="$sandbox/runtime" \
+  HYPRLAND_INSTANCE_SIGNATURE="" \
   OMARCHY_DRM_PATH="$sandbox/drm" \
   OMARCHY_DISPLAYS_STATE_DIR="$sandbox/state" \
   OMARCHY_DISPLAYS_LUA_FILE="$sandbox/state/displays-layout.lua" \
