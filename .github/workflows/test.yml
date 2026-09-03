@@ -25,16 +25,23 @@ jobs:
       - name: Backend and model tests
         run: ./test/all
 
-      # The shell's qs.* and Quickshell modules are not on the runner, so their
-      # imports resolve to warnings, which qmllint reports with exit 0. Only
-      # genuine errors — syntax, duplicate ids, bad bindings — exit non-zero.
+      # The runner has qmllint but none of the QML modules the plugin imports —
+      # not even QtQuick — so every type is "unresolved" and older qmllint
+      # versions exit non-zero on those warnings alone. What this step exists
+      # to catch is a file the QML parser cannot read, which qmllint reports as
+      # a warning with id "syntax" (Qt ≥ 6.5) or a parse-error message. Fail
+      # on those and nothing else.
       - name: QML lint
         run: |
           QMLLINT="$(command -v /usr/lib/qt6/bin/qmllint || command -v qmllint6 || command -v qmllint)"
           "$QMLLINT" --version
           status=0
           for f in *.qml components/*.qml; do
-            echo "== $f"
-            "$QMLLINT" "$f" || status=1
+            bad="$("$QMLLINT" --json /dev/stdout "$f" 2>/dev/null \
+              | jq -r '[.. | objects
+                          | select(has("message"))
+                          | select((.id? == "syntax") or (.message | test("expected token|unexpected token|syntax error|parse error"; "i")))
+                          | "\(.line // "?"):\(.column // "?") \(.message)"] | .[]')"
+            if [ -n "$bad" ]; then echo "== $f"; printf '%s\n' "$bad"; status=1; else echo "ok $f"; fi
           done
           exit $status
