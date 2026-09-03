@@ -8,12 +8,16 @@ Two surfaces, one backend:
 
 - **Popup** in the bar: brightness, SDR white while in HDR, scale, one
   `SDR · Wide · HDR` control gated by the panel's EDID, the display list,
-  Identify and Arrange.
-- **Studio** overlay: arrangement canvas in logical pixels with snapping, an
-  inspector for signal, geometry and colour (mode, refresh, VRR, scale,
-  rotation, position, mirror, enable, colour mode, SDR white, SDR transfer,
-  ICC profile) and an Advanced section (colour preset, mastering luminances,
-  capability overrides, auto-HDR).
+  Identify and Arrange. The bar icon itself takes the urgent colour while a
+  change is waiting to be kept, and the accent while any display is in HDR, so
+  neither needs the popup open to be seen.
+- **Studio** overlay: arrangement canvas in logical pixels with snapping, the
+  panel's identity and CIE gamut plot beneath it, an inspector for signal,
+  geometry and colour (mode, refresh, VRR, scale, rotation, position, mirror,
+  enable, colour mode, SDR white, SDR transfer, ICC profile) and an Advanced
+  section (colour preset, mastering luminances, capability overrides,
+  auto-HDR). A column that runs past its bottom edge says what is below it
+  rather than hiding it behind a scrollbar that only appears once you scroll.
 
 Every risky change is applied live and **reverts itself in 15 seconds unless
 kept**. The timer runs outside the shell, so a shell crash still reverts. The
@@ -26,17 +30,49 @@ The design and the reasoning behind it live in [DESIGN.md](DESIGN.md).
 
 ## What it looks like
 
-The studio: arrangement canvas on the left, inspector on the right, keyboard
-hints and the apply bar along the bottom. The gamut plot draws the panel's
-EDID primaries (solid) against BT.2020, P3 and sRGB (dashed).
+The studio: arrangement canvas top left, the panel's identity and its gamut
+underneath, the inspector on the right, keyboard hints and the apply bar along
+the bottom. The blocks on the canvas carry your own wallpaper, so the
+arrangement is a picture of the desk rather than a diagram of it.
 
-![The Candela studio, showing two MateView panels arranged side by side with the inspector open on DP-1](docs/studio.png)
+![The Candela studio, showing two MateView panels arranged side by side with the inspector open on DP-1](docs/media/studio.png)
 
 The bar popup, for what you change often. `SDR · Wide · HDR` is gated by what
 the panel actually reports, and the line under it says what the compositor is
 doing right now rather than what was asked for.
 
-<img src="docs/popup.png" alt="The Candela bar popup, showing brightness, scale, colour mode and the display list" width="330">
+<img src="docs/media/popup.png" alt="The Candela bar popup, showing brightness, scale, colour mode and the display list" width="330">
+
+### The gamut you are actually using
+
+The plot is a CIE 1931 chromaticity diagram: the spectral locus for context,
+BT.2020, DCI-P3 and sRGB dashed for reference, the panel's own EDID primaries
+outlined, and the gamut **in use** filled in — sRGB while the output is clamped
+to sRGB, the panel's own once wide gamut or HDR opens the container. Choosing a
+mode tweens between them, from the draft, before anything is applied, so you
+can see the headroom before you take it.
+
+![The gamut plot tweening from the sRGB triangle out to the panel's own primaries when wide gamut is chosen](docs/media/gamut.gif)
+
+Fill colours are approximate by construction: a chromaticity is converted to
+sRGB and out-of-gamut components are lifted by adding white rather than clipped
+to black. No display can show its own out-of-gamut colours, this one included.
+
+### Apply, then decide
+
+Every risky change applies live and reverts itself unless kept. The countdown
+is a rule along the strip's own bottom edge, and under five seconds it and the
+caption go urgent — nothing speeds up, so it warns without flapping.
+
+![The Keep/Revert strip counting down, its rule draining and turning urgent in the last five seconds before the change reverts itself](docs/media/countdown.gif)
+
+### Which screen is which
+
+`Identify` names every connector on its own screen, one screen at a time 60 ms
+apart, with an accent frame at each screen's edge for the one you are looking
+at from across the room.
+
+![The Identify badge naming DP-1 on its own screen](docs/media/identify.gif)
 
 ## Install
 
@@ -88,7 +124,7 @@ reinstall. To go back to a stock machine, also:
 
 ```bash
 rm -rf ~/.local/state/omarchy/candela                           # intent and pending state
-rm -f  ~/.local/state/omarchy/toggles/hypr/displays-{layout,pending}.lua   # the generated rules
+rm -f  ~/.local/state/omarchy/toggles/hypr/candela-{layout,pending}.lua    # the generated rules
 hyprctl reload                                                   # back to your own monitors.lua
 ```
 
