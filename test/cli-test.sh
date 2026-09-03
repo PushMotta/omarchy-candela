@@ -24,6 +24,8 @@ out="$(run_cli "$sandbox" apply '{"displays":[{"name":"DP-2","bitdepth":10,"cm":
 assert_contains "$out" "pending" "apply reports pending"
 [[ -s $sandbox/state/pending.json ]] || fail "pending file written"
 eval_chunk="$(cat "$sandbox/eval-last.txt")"
+[[ $(head -1 "$sandbox/eval-last.txt") == hl.* ]] || fail "live chunk starts with a statement, not the file header" "$(head -1 "$sandbox/eval-last.txt")"
+assert_not_contains "$eval_chunk" "-- " "live chunk carries no comments"
 assert_contains "$eval_chunk" 'output = "DP-1", mode = "3840x2560@59.98", position = "0x0", scale = 1.6, transform = 0' "untouched display declared explicitly"
 assert_contains "$eval_chunk" 'output = "DP-2", mode = "3840x2560@59.98", position = "2400x0", scale = 1.6, transform = 0, bitdepth = 10, cm = "hdr", sdr_max_luminance = 203' "changed display carries colour fields"
 assert_contains "$(cat "$sandbox/systemd-run.log")" "revert --expired" "revert timer armed"

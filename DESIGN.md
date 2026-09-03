@@ -194,14 +194,16 @@ Service listens on Hyprland's socket2 for `monitoradded` / `monitorremoved` and 
 | Identify, apply/revert countdown, CLI | Colour-correct screenshots under HDR (separate track, WS-1) |
 | Hotplug refresh | Chromium / Electron HDR guidance |
 
-## 8. Decisions still needed from Pedro
+## 8. Decisions (approved 3 Sep 2026)
 
-1. Approve the two-surface split and the section order.
-2. SDR white default: 203 cd/m² clamped to max-average. Agree?
-3. Wide mode as a first-class third state, or fold it under Advanced?
-4. Plugin id and display name (`pmotta.displays` / "Displays" are placeholders).
-5. Persistence: generated state file (recommended) vs managed block in monitors.lua.
-6. Is a probe available for validating the SDR-white anchor and EDID luminances?
+1. Two surfaces, section order as in §3. **Approved.**
+2. SDR white default 203 cd/m² clamped to max-average. **Approved.**
+3. Wide as a first-class third state. **Approved.**
+4. Plugin id `pmotta.displays`, name "Displays". **Kept as placeholders; rename is one manifest field.**
+5. Generated state file in the toggles directory. **Approved.**
+6. Probe availability: **still unknown**; WS-0 numbers wait on it.
+
+Earlier framing decisions: build as a plugin at first-party quality rather than an upstream PR first; start clean rather than on PR #7340; aim well past hyprmoncfg on design.
 
 ## 9. Findings from live tests (3 Sep 2026)
 

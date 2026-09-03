@@ -173,9 +173,15 @@ generate_lua() {
   '
 }
 
+# Live apply sends only statements: hyprctl parses a leading "--" as one of
+# its own flags, so the file header must never reach `hyprctl eval`.
 apply_live() {
-  local chunk="$1"
-  hyprctl eval "$chunk" >/dev/null 2>&1 || die "hyprctl rejected the change"
+  local chunk statements output
+  chunk="$1"
+  statements="$(printf '%s\n' "$chunk" | grep -vE '^[[:space:]]*(--|$)')"
+  [[ -n $statements ]] || return 0
+  output="$(hyprctl eval "$statements" 2>&1)" || die "hyprctl rejected the change: $output"
+  [[ $output == ok* ]] || die "hyprctl rejected the change: $output"
 }
 
 stop_timer() {
