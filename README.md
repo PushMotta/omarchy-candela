@@ -20,6 +20,20 @@ kept**. The timer runs outside the shell, so a shell crash still reverts.
 
 The design and the reasoning behind it live in [DESIGN.md](DESIGN.md).
 
+## What it looks like
+
+The studio: arrangement canvas on the left, inspector on the right, keyboard
+hints and the apply bar along the bottom. The gamut plot draws the panel's
+EDID primaries (solid) against BT.2020, P3 and sRGB (dashed).
+
+![The Displays studio, showing two MateView panels arranged side by side with the inspector open on DP-1](docs/studio.png)
+
+The bar popup, for what you change often. `SDR · Wide · HDR` is gated by what
+the panel actually reports, and the line under it says what the compositor is
+doing right now rather than what was asked for.
+
+<img src="docs/popup.png" alt="The Displays bar popup, showing brightness, scale, colour mode and the display list" width="330">
+
 ## Install
 
 ```bash
