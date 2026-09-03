@@ -641,9 +641,18 @@ Item {
                     Text { textFormat: Text.PlainText; text: Model.capabilityLine(root.caps); color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true; elide: Text.ElideRight; width: parent.width }
                     Text { textFormat: Text.PlainText; text: Model.luminanceLine(root.caps); visible: text !== ""; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; elide: Text.ElideRight; width: parent.width }
                     Text { textFormat: Text.PlainText; text: root.caps.primaries ? "Primaries (EDID) " + Model.primariesLine(root.caps) : ""; visible: text !== ""; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width }
-                    Text { textFormat: Text.PlainText; text: "solid: panel · dashed: BT.2020, P3, sRGB"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; width: parent.width }
+                    Text { textFormat: Text.PlainText; text: "filled: in use · outline: panel · dashed: BT.2020, P3, sRGB"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width }
                   }
-                  GamutPlot { id: gamut; primaries: root.caps.primaries || null; foreground: root.foreground; accent: root.accent }
+                  GamutPlot {
+                    id: gamut
+                    primaries: root.caps.primaries || null
+                    // Draft-aware, so the triangle grows the moment Wide or
+                    // HDR is chosen rather than waiting for the apply.
+                    mode: root.display ? root.colourOf(root.display) : "sdr"
+                    foreground: root.foreground
+                    accent: root.accent
+                    surface: root.background
+                  }
                 }
 
                 // ----- signal
