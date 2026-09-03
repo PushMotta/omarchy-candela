@@ -574,6 +574,10 @@ Item {
             DisplayCanvas {
               id: canvas
               anchors.left: parent.left
+              // Centred rather than top-aligned. Sharing a top edge with the
+              // inspector is the stronger grid, but with a layout as wide as
+              // two side-by-side displays it pools every spare pixel into one
+              // hole in the corner; split above and below it reads as air.
               anchors.verticalCenter: parent.verticalCenter
               width: Math.round(parent.width * 0.58)
               // Hug the arrangement instead of filling the column: two wide
