@@ -122,7 +122,26 @@ ever looks steppy, deleting that one Behavior is the fix. (The canvas
 frame's alignment settled itself: it is top-aligned again now that the
 identity block fills the column beneath it.)
 
-### Marketplace submission — drafted, not sent
+### Marketplace submission — SENT
+
+**Issue [#4744](https://github.com/omacom/omarchy-plugin-marketplace/issues/4744)**,
+opened 4 September 2026 under Pedro's account against commit `5380bb8`.
+The bots have already answered:
+
+- `validated` — "Ready for listing review", structure and Quattro
+  compatibility pass.
+- `security-review-required` with **zero findings** and one capability,
+  `service-management` (the `systemd-run` revert timer and its
+  `systemctl --user stop`), which the maintainer notes explain. `privilege`
+  was *not* raised: the baseline ignores `.github/` and prose, so the CI
+  workflow's `sudo apt-get` never counted.
+
+What happens next is a marketplace maintainer applying `approved-and-verified`.
+Nothing more to do unless they ask. After listing, every push reaches users
+immediately; the card shows "Update unverified" until a release SHA is
+re-verified through the verify form. The plugin ID must never change.
+
+### How the submission was prepared (kept for the next one)
 
 - Route (verified against the manual, plugins.omarchy.org and the marketplace
   repo): open ONE issue on `omacom/omarchy-plugin-marketplace` with the
