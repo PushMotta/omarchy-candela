@@ -8,7 +8,7 @@ Hardware
 
 ### Tags
 
-hyprland, quickshell, system
+Hyprland, Quickshell, System
 
 ### Suggest a missing tag
 
