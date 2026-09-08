@@ -5,13 +5,23 @@ on:
     branches: [main]
   pull_request:
 
+# This workflow only reads the repository and runs tests: it publishes
+# nothing, comments nowhere and uploads no artifact. Declaring the floor here
+# means every job inherits it, and a step that later needs more has to ask.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      # Actions are pinned to full commit SHAs rather than to the moving `v4`
+      # tags. A tag can be repointed at any time by whoever owns it, and the
+      # code behind it then runs here with this workflow's token; a SHA is the
+      # exact reviewed tree. Update these deliberately, checking what changed.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
