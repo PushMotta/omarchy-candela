@@ -207,6 +207,20 @@ test("the SDR white note appears only away from the colour-managed reference", (
   assert.ok(M.sdrWhiteClientNote(120, true).length < M.sdrWhiteClientNote(120).length)
 })
 
+test("inspector rows own their draft fields", () => {
+  assert.deepEqual(M.rowFields("rotation"), { display: ["transform"], global: [] })
+  assert.deepEqual(M.rowFields("autohdr"), { display: [], global: ["cm_auto_hdr"] })
+  assert.deepEqual(M.rowFields("advanced"), { display: [], global: [] })
+  assert.equal(M.rowChanged("refresh", { mode: "3840x2160@60" }, {}), true)
+  assert.equal(M.rowChanged("scale", { mode: "3840x2160@60" }, {}), false)
+  assert.equal(M.rowChanged("colour", { cm: "hdr", bitdepth: 10 }, {}), true)
+  assert.equal(M.rowChanged("colour", { sdr_max_luminance: 250 }, {}), false)
+  assert.equal(M.rowChanged("sdrwhite", { sdr_max_luminance: 250 }, {}), true)
+  assert.ok(M.rowFields("colour").display.includes("sdr_min_luminance"))
+  assert.equal(M.rowChanged("autohdr", undefined, { cm_auto_hdr: 2 }), true)
+  assert.equal(M.rowChanged("posx", null, null), false)
+})
+
 test("layout geometry works in logical pixels", () => {
   const rects = monitors.map(m => M.rectOf(m))
   assert.deepEqual(rects[0], { name: "DP-1", x: 0, y: 0, width: 2400, height: 1600 })

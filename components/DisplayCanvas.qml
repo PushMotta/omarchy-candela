@@ -29,6 +29,7 @@ Item {
   property real panX: 0
   property real panY: 0
   property bool snapBypass: false
+  property bool reducedMotion: false
   function fit() { zoom = 1; panX = 0; panY = 0 }
   function zoomIn() { zoom = Math.min(4, zoom * 1.2) }
   function zoomOut() { zoom = Math.max(0.5, zoom / 1.2) }
@@ -180,7 +181,7 @@ Item {
       // fade lives on creation rather than on a binding.
       opacity: 0
       Component.onCompleted: opacity = 0.6
-      Behavior on opacity { NumberAnimation { duration: 90; easing.type: Easing.OutCubic } }
+      Behavior on opacity { enabled: !root.reducedMotion; NumberAnimation { duration: 90; easing.type: Easing.OutCubic } }
       x: guide && guide.axis === "x" ? Math.round(root.toPixelX(guide.at)) : 0
       y: guide && guide.axis === "y" ? Math.round(root.toPixelY(guide.at)) : 0
       width: guide && guide.axis === "x" ? 1 : root.width
@@ -219,12 +220,12 @@ Item {
           ? Border.flat(root.accent, Math.max(1, Style.space(2)))
           : Border.controlSpec("normal", root.foreground, root.accent))
 
-      Behavior on x { enabled: !block.isDragging; NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
-      Behavior on y { enabled: !block.isDragging; NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
-      Behavior on width { enabled: !block.isDragging; NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
-      Behavior on height { enabled: !block.isDragging; NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
-      Behavior on color { ColorAnimation { duration: 120 } }
-      Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+      Behavior on x { enabled: !block.isDragging && !root.reducedMotion; NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+      Behavior on y { enabled: !block.isDragging && !root.reducedMotion; NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+      Behavior on width { enabled: !block.isDragging && !root.reducedMotion; NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+      Behavior on height { enabled: !block.isDragging && !root.reducedMotion; NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+      Behavior on color { enabled: !root.reducedMotion; ColorAnimation { duration: 120 } }
+      Behavior on opacity { enabled: !root.reducedMotion; NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
 
       // The picture on that screen, inset so a themed corner radius never
       // clips it and the block still reads as a panel with a bezel rather

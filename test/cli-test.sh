@@ -390,6 +390,31 @@ run_cli "$sandbox2" apply --now '{"displays":[{"name":"DP-1","scale":2}]}' >/dev
 [[ ! -e $sandbox2/state/internal-monitor-scale ]] || fail "no scale file without a built-in panel"
 pass "internal-monitor-scale follows the kept scale"
 
+# ---- state carries Hyprland's animations switch as the reduced-motion preference
+sandbox2="$(new_sandbox)"
+assert_eq "$(run_cli "$sandbox2" state | jq -r .animations)" "true" "animations on by default"
+jq '.animations = false' "$sandbox2/global.json" > "$sandbox2/g.tmp" && mv "$sandbox2/g.tmp" "$sandbox2/global.json"
+assert_eq "$(run_cli "$sandbox2" state | jq -r .animations)" "false" "animations off is reported"
+pass "state reports whether Hyprland animates"
+
+# ---- report is safe to paste into a public issue
+sandbox2="$(new_sandbox)"
+for f in monitors.json monitors.pristine.json; do
+  jq 'map(.serial = "SN0123456789" | .description = (.description + " SN0123456789"))' "$sandbox2/$f" > "$sandbox2/m.tmp" && mv "$sandbox2/m.tmp" "$sandbox2/$f"
+done
+run_cli "$sandbox2" apply '{"displays":[{"name":"DP-2","icc":"'"$sandbox2"'/profiles/panel.icc"}]}' >/dev/null 2>&1 || true
+run_cli "$sandbox2" keep >/dev/null 2>&1 || true
+out="$(run_cli "$sandbox2" report)"
+assert_contains "$out" "## Candela report" "report has its heading"
+assert_contains "$out" "| DP-1 | Huawei Technologies Co., Inc. MateView |" "report lists each display by make and model"
+assert_contains "$out" "### doctor" "report includes doctor"
+assert_not_contains "$out" "SN0123456789" "no serial number"
+assert_not_contains "$out" "sha256:" "no EDID hash"
+assert_not_contains "$out" "$sandbox2" "no home path"
+assert_contains "$out" '"icc": "~/profiles/panel.icc"' "a kept path under home is shown from ~"
+[[ -z $(ls "$sandbox2/state" | grep pending) ]] || fail "report changes nothing"
+pass "report is readable and carries no serial, hash or home path"
+
 # ---- doctor
 sandbox2="$(new_sandbox)"
 mkdir -p "$sandbox2/.config/hypr"

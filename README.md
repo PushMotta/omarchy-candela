@@ -55,6 +55,10 @@ canvas blocks included, light themes as well as dark.
 The one thing that does not follow the theme is the chromaticity fill in the
 gamut plot. Those colours are the measurement, not the decoration.
 
+Motion follows Hyprland: with its animations turned off
+(`animations:enabled`), the popup, the studio, the countdown and Identify
+change without animating too.
+
 ### The gamut you are actually using
 
 The plot is a CIE 1931 chromaticity diagram: the spectral locus for context,
@@ -160,7 +164,13 @@ added them. No file outside those paths is ever written.
 | 0 | — | on the canvas: move to the origin |
 | Enter | select the display under the cursor; on the display already selected, its power | activate row / open dropdown / focus a number field |
 | a / r / i | — | Apply / Revert or Discard / Identify |
+| ⌫ | — | put the current row back to what is kept; on the canvas, the display's position |
+| ? | — | every key, on one sheet |
 | Esc | close | cancel a pending countdown, then close |
+
+A row that the draft changes carries an accent mark in its left margin.
+Clicking the mark does what ⌫ does, so a draft can be taken back one field at
+a time instead of all at once.
 
 Mouse hover moves the same cursor; there is never a second highlight.
 
@@ -207,6 +217,7 @@ omarchy-candela edid DP-2
 omarchy-candela icc list
 omarchy-candela recover                        # every display off? switch the built-in (or first) one back on
 omarchy-candela doctor                         # is the layout loaded, does the compositor agree, what could fight it
+omarchy-candela report                         # diagnostics for a bug report, as Markdown, safe to paste in public
 ```
 
 Change JSON accepts, per display: `mode`, `position`, `scale`, `transform`,
@@ -293,6 +304,14 @@ Wayland colour management, such as Chromium and Electron, that SDR white is
 slider. At 203 the two agree, which is one reason it is the default; away from
 it the studio and the popup say so under the slider. Fixing this belongs to
 the compositor.
+
+## Reporting a problem
+
+Open an issue on GitHub and paste the output of `omarchy-candela report`. It
+lists the versions, what each display is doing, what Candela kept and what
+`doctor` found, as Markdown. Home paths become `~`, and serial numbers and
+EDID hashes are left out, so it can go into a public issue as it stands. It
+only reads; it changes nothing. Read it before you paste it all the same.
 
 ## Development
 

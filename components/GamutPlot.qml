@@ -39,7 +39,8 @@ Item {
   // 0 = clamped to sRGB, 1 = the panel's own primaries. The Behavior is what
   // makes a mode change legible rather than a jump cut.
   property real morph: root.mode === "sdr" ? 0 : 1
-  Behavior on morph { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+  property bool reducedMotion: false
+  Behavior on morph { enabled: !root.reducedMotion; NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
 
   onMorphChanged: plot.requestPaint()
   onSurfaceChanged: plot.requestPaint()

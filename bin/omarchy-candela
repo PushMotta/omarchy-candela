@@ -98,6 +98,7 @@ Usage: omarchy-candela <command> [args]
   icc list                       Installed ICC profiles as JSON
   recover                        If every display is off, switch the built-in (or first) one back on
   doctor                         Check that the layout is loaded, the compositor agrees, and nothing fights it
+  report                         Diagnostics for a bug report, as Markdown, with home paths, serials and EDID hashes removed
 
 Change JSON shape (any subset per display):
   {"displays":[{"name":"DP-2","bitdepth":10,"cm":"hdr","sdr_max_luminance":203}],
@@ -616,12 +617,16 @@ cmd_state() {
   [[ -n $focused ]] && brightness="$(omarchy-brightness-display --monitor "$focused" 2>/dev/null || true)"
   auto_hdr="$(run_bounded hyprctl getoption render:cm_auto_hdr -j 2>/dev/null | jq '.int // null' 2>/dev/null || echo null)"
   sdr_eotf="$(run_bounded hyprctl getoption render:cm_sdr_eotf -j 2>/dev/null | jq -r '.str // "default"' 2>/dev/null || echo default)"
+  # Hyprland's own animations switch doubles as the reduced-motion preference:
+  # someone who turned the compositor's motion off wants the shell's off too.
+  animations="$(run_bounded hyprctl getoption animations:enabled -j 2>/dev/null | jq 'if has("bool") then .bool elif has("int") then .int != 0 else null end' 2>/dev/null || echo null)"
+  [[ $animations == true || $animations == false ]] || animations=null
   internal_flag=false; [[ -f $INTERNAL_FLAG ]] && internal_flag=true
   jq -n --argjson live "$live" --argjson intent "$intent" --argjson pending "$pending" \
         --argjson edids "$edids" --arg focused "$focused" --arg brightness "$brightness" \
         --argjson autoHdr "$auto_hdr" --arg sdrEotf "$sdr_eotf" --arg pluginId "$PLUGIN_ID" \
         --argjson revertSeconds "$REVERT_SECONDS" --argjson now "$(now_epoch)" \
-        --argjson internalFlag "$internal_flag" --arg internalRe "$INTERNAL_RE" --arg stateDir "$STATE_DIR" '
+        --argjson internalFlag "$internal_flag" --arg internalRe "$INTERNAL_RE" --arg stateDir "$STATE_DIR" --argjson animations "$animations" '
     def bitdepth_of: if test("2101010") then 10 elif test("16161616") then 16 else 8 end;
     {
       version: 1,
@@ -629,6 +634,7 @@ cmd_state() {
       now: $now,
       focused: $focused,
       revertSeconds: $revertSeconds,
+      animations: $animations,
       pending: (if $pending == null then null else {since:$pending.since,expires:$pending.expires,remaining:([$pending.expires-$now,0]|max),phase:($pending.phase//"previewing"),intent:$pending.intent,baseline:$pending.baseline,targets:($pending.targets//[])} end),
       paths:{stateDir:$stateDir},
       recovery:(if $pending.recovery then ($pending.recovery+{status:$pending.phase,token:$pending.token}) else null end),
@@ -900,6 +906,51 @@ validate_icc() {
   [[ $sig == acsp && $declared =~ ^[0-9]+$ && $declared -ge 128 && $declared -le $actual ]]
 }
 
+# Everything a bug report needs and nothing it should not carry: versions,
+# what each display is doing, what Candela kept, and doctor's verdict. Home
+# paths become ~, and serial numbers and EDID hashes are never included, so
+# the output can be pasted into a public issue as it stands. Reads only.
+cmd_report() {
+  local version hypr omarchy qs driver m state doctor_out errors toggles out
+  version="$(jq -r '.version // "unknown"' "$SELF_DIR/../manifest.json" 2>/dev/null || echo unknown)"
+  hypr="$(run_bounded hyprctl version 2>/dev/null | head -1 | awk '{print $2}')" || true
+  omarchy="$(omarchy-version 2>/dev/null | head -1)" || true
+  qs="$(quickshell --version 2>/dev/null | head -1 | awk '{print $2}')" || true
+  driver=""
+  if [[ -r /sys/module/nvidia/version ]]; then driver="nvidia $(cat /sys/module/nvidia/version)"; fi
+  for m in amdgpu i915 xe nouveau; do [[ -d /sys/module/$m ]] && driver="${driver:+$driver, }$m"; done
+  state="$(cmd_state 2>/dev/null)" || state='{"displays":[]}'
+  doctor_out="$( (cmd_doctor) 2>&1 )" || true
+  errors="$(run_bounded hyprctl configerrors 2>/dev/null | grep -v '^ok$' | grep -v '^[[:space:]]*$')" || true
+  toggles="$(ls -1 "$TOGGLES_DIR" 2>/dev/null | paste -sd' ')" || true
+
+  out="$({
+    printf '## Candela report\n\n'
+    printf -- '- Candela %s\n- Hyprland %s\n- Omarchy %s\n- Quickshell %s\n- Kernel %s\n- GPU driver %s\n\n' \
+      "$version" "${hypr:-unknown}" "${omarchy:-unknown}" "${qs:-unknown}" "$(uname -r)" "${driver:-unknown}"
+    printf '### Displays\n\n'
+    jq -r '
+      def v: if . == null then "?" elif . == true then "yes" elif . == false then "no" else tostring end;
+      "| Output | Make and model | Mode | Scale | Position | Format | Colour | SDR white | HDR in EDID | Peak cd/m² |",
+      "|---|---|---|---|---|---|---|---|---|---|",
+      (.displays[] |
+        "| \(.name) | \(((.make // "") + " " + (.model // "")) | gsub("^\\s+|\\s+$"; "")) | "
+        + (if .enabled then "\(.width)x\(.height)@\(.refreshRate | . * 100 | round / 100)" else "off" end)
+        + " | \(.scale | v) | \(.x)x\(.y) | \(.currentFormat | v) | \(.live.cm | v) | \(.live.sdrMaxLuminance | v)"
+        + " | \(if .capabilities.available then (.capabilities.supportsHdr | v) else "no EDID" end)"
+        + " | \(.capabilities.hdr.maxLuminance | v) |")
+    ' <<<"$state"
+    printf '\n### Pending change\n\n'
+    jq -r 'if .pending == null then "None." else "Phase \(.pending.phase), \(.pending.remaining) s left" + (if .recovery then ", recovery: \(.recovery.error // "available")" else "" end) + "." end' <<<"$state"
+    printf '\n### Kept configuration\n\n```json\n%s\n```\n' "$(intent_json | jq .)"
+    printf '\n### doctor\n\n```\n%s\n```\n' "$doctor_out"
+    printf '\n### Hyprland config errors\n\n%s\n' "${errors:-None.}"
+    printf '\n### Toggles directory\n\n%s\n' "${toggles:-empty}"
+  })"
+  out="${out//"$HOME"/\~}"
+  printf '%s\n' "$out"
+}
+
 cmd_recover() {
   local live rescue
   live="$(live_json)"
@@ -1042,6 +1093,7 @@ case "$cmd" in
   edid) [[ -n ${1:-} ]] || die "edid needs a display name"; edid_for "$1" ;;
   icc) cmd_icc "$@" ;;
   doctor) cmd_doctor ;;
+  report) cmd_report ;;
   -h|--help|help|"") usage ;;
   *) usage >&2; die "unknown command $cmd" ;;
 esac

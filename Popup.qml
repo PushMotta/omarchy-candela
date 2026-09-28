@@ -34,6 +34,7 @@ Panel {
   readonly property string fam: bar ? bar.fontFamily : Style.font.family
 
   readonly property var service: bar && bar.shell ? bar.shell.serviceFor(root.moduleName) : null
+  readonly property bool reducedMotion: service ? service.reducedMotion : false
   readonly property var state: service ? service.state : null
   readonly property var displays: service ? service.displays : []
   readonly property string focusedName: service ? service.focused : ""
@@ -476,7 +477,7 @@ Panel {
     // easing that at the shell's card timing turns a jump into a movement. The
     // popup is a Wayland surface, so this resizes it every frame it runs: if a
     // compositor ever renders that steppy, dropping this Behavior is the fix.
-    Behavior on contentHeight { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+    Behavior on contentHeight { enabled: !root.reducedMotion; NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -505,6 +506,7 @@ Panel {
         available: keyCatcher.height
         foreground: root.fg
         fontFamily: root.fam
+        reducedMotion: root.reducedMotion
         markers: [
           { item: brightnessHeader, name: "brightness" },
           { item: sdrHeader, name: "sdr white" },
@@ -562,6 +564,7 @@ Panel {
             summary: root.service ? root.service.pendingSummary : "Display settings changed"
             phase: root.service ? root.service.operationPhase : "previewing"
             error: root.service ? root.service.recoveryError : ""
+            reducedMotion: root.reducedMotion
             onKeep: root.service.keep()
             onRevert: root.service.revert()
             onHovered: function(index, h) { if (h) root.hoverInto("pending", index) }

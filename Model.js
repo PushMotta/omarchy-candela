@@ -236,6 +236,35 @@ function fieldsForMode(mode, caps, intent) {
 
 // Slider position for SDR white: perceptually a log scale reads better than
 // linear across 80–500 cd/m², and 203 lands near the middle.
+// The draft fields each studio inspector row edits, so a row can show that
+// it has a change and reset exactly that change. A colour mode writes the
+// SDR luminances with it, so resetting the mode takes them back too.
+var ROW_FIELDS = {
+  mode: ["mode"], refresh: ["mode"], vrr: ["vrr"], scale: ["scale"], rotation: ["transform"],
+  posx: ["position"], posy: ["position"], mirror: ["mirror"], enabled: ["enabled"],
+  colour: ["cm", "bitdepth", "sdr_max_luminance", "sdr_min_luminance"], sdrwhite: ["sdr_max_luminance"],
+  transfer: ["sdr_eotf"], icc: ["icc"], preset: ["cm"], saturation: ["sdrsaturation"],
+  minlum: ["min_luminance"], maxlum: ["max_luminance"], avglum: ["max_avg_luminance"],
+  caphdr: ["supports_hdr"], capwide: ["supports_wide_color"]
+}
+var ROW_GLOBAL_FIELDS = { autohdr: ["cm_auto_hdr"] }
+// Fields that mark a row as changed, where that differs from what its reset
+// clears: SDR white has its own row, so moving it alone should not mark the
+// colour row too.
+var ROW_MARK_FIELDS = { colour: ["cm", "bitdepth"] }
+
+function rowFields(rowId) {
+  return { display: ROW_FIELDS[rowId] || [], global: ROW_GLOBAL_FIELDS[rowId] || [] }
+}
+
+function rowChanged(rowId, displayDraft, globalDraft) {
+  var f = rowFields(rowId), d = displayDraft || {}, g = globalDraft || {}
+  var mark = ROW_MARK_FIELDS[rowId] || f.display
+  for (var i = 0; i < mark.length; i++) if (d[mark[i]] !== undefined) return true
+  for (var j = 0; j < f.global.length; j++) if (g[f.global[j]] !== undefined) return true
+  return false
+}
+
 // The note under an SDR white control: empty at 203, where every window
 // agrees, else what the colour-managed apps do instead.
 function sdrWhiteClientNote(nits, compact) {
@@ -572,7 +601,7 @@ if (typeof module !== "undefined") {
     REFERENCE_WHITE: REFERENCE_WHITE, SDR_WHITE_FLOOR: SDR_WHITE_FLOOR, SCALE_PRESETS: SCALE_PRESETS,
     cleanScale: cleanScale, availableScales: availableScales, scaleIndex: scaleIndex, formatScale: formatScale, sameScale: sameScale, round5: round5,
     bitdepthFromFormat: bitdepthFromFormat, formatMode: formatMode, parseMode: parseMode, modeOptions: modeOptions, currentModeValue: currentModeValue,
-    effectiveIntent: effectiveIntent, effectiveGlobal: effectiveGlobal, colourMode: colourMode, offeredModes: offeredModes, hdrUnavailableReason: hdrUnavailableReason, sdrWhiteRange: sdrWhiteRange, defaultSdrWhite: defaultSdrWhite, sdrWhiteClientNote: sdrWhiteClientNote, CM_CLIENT_REFERENCE_WHITE: CM_CLIENT_REFERENCE_WHITE,
+    effectiveIntent: effectiveIntent, effectiveGlobal: effectiveGlobal, colourMode: colourMode, offeredModes: offeredModes, hdrUnavailableReason: hdrUnavailableReason, sdrWhiteRange: sdrWhiteRange, defaultSdrWhite: defaultSdrWhite, sdrWhiteClientNote: sdrWhiteClientNote, rowFields: rowFields, rowChanged: rowChanged, CM_CLIENT_REFERENCE_WHITE: CM_CLIENT_REFERENCE_WHITE,
     fieldsForMode: fieldsForMode, sdrWhiteToSlider: sdrWhiteToSlider, sliderToSdrWhite: sliderToSdrWhite,
     outputCaption: outputCaption, capabilityLine: capabilityLine, luminanceLine: luminanceLine, primariesLine: primariesLine,
     displayTitle: displayTitle, panelLine: panelLine, metaLine: metaLine, formatLuminance: formatLuminance, parseLuminance: parseLuminance,

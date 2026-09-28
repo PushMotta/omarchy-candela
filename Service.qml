@@ -47,6 +47,9 @@ Item {
   // backend's recovery record first, else the operation's own error.
   readonly property string recoveryError: state && state.recovery && state.recovery.error ? String(state.recovery.error) : operationError
   readonly property var displays: state && Array.isArray(state.displays) ? state.displays : []
+  // Reduced motion follows Hyprland's own animations switch: turning the
+  // compositor's motion off turns Candela's off with it.
+  readonly property bool reducedMotion: state !== null && state.animations === false
   readonly property string focused: state ? String(state.focused || "") : ""
   // Hyprland's live focus, for choosing a screen right now; `focused` above
   // lags by one state refresh.
@@ -567,6 +570,7 @@ Item {
               summary: root.pendingSummary
               phase: root.operationPhase
               error: root.recoveryError
+              reducedMotion: root.reducedMotion
               onKeep: root.keep()
               onRevert: root.revert()
               onHovered: function(index, h) { if (h) root.stripCursor = index }
@@ -688,10 +692,10 @@ Item {
 
         SequentialAnimation {
           id: showAnim
-          PauseAnimation { duration: overlay.screenIndex * 60 }
+          PauseAnimation { duration: root.reducedMotion ? 0 : overlay.screenIndex * 60 }
           ParallelAnimation {
-            NumberAnimation { target: overlay; property: "opacity"; to: 1; duration: 160; easing.type: Easing.OutCubic }
-            NumberAnimation { target: badge; property: "scale"; to: 1; duration: 200; easing.type: Easing.OutCubic }
+            NumberAnimation { target: overlay; property: "opacity"; to: 1; duration: root.reducedMotion ? 0 : 160; easing.type: Easing.OutCubic }
+            NumberAnimation { target: badge; property: "scale"; to: 1; duration: root.reducedMotion ? 0 : 200; easing.type: Easing.OutCubic }
           }
         }
 
@@ -700,7 +704,7 @@ Item {
           target: overlay
           property: "opacity"
           to: 0
-          duration: 180
+          duration: root.reducedMotion ? 0 : 180
           easing.type: Easing.OutCubic
         }
 

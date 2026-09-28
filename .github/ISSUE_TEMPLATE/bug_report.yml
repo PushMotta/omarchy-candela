@@ -1,0 +1,35 @@
+name: Bug report
+description: Something in Candela does not work as it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. The last field asks for the output of `omarchy-candela report`, which lists your versions, displays and `doctor` results with home paths, serial numbers and EDID hashes left out. It only reads and changes nothing. If the command is not on your PATH, the README's Command line section shows how to link it.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you saw, and which surface you were in (bar popup, studio, command line).
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the studio
+        2. ...
+  - type: textarea
+    id: report
+    attributes:
+      label: Output of omarchy-candela report
+      description: Run it in a terminal and paste everything it prints. Read it first.
+    validations:
+      required: true

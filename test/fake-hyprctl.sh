@@ -58,6 +58,7 @@ case "$1 $2" in
   "monitors all") cat "$dir/monitors.json" ;;
   "getoption render:cm_auto_hdr") jq '{option:"render:cm_auto_hdr",int:.cm_auto_hdr}' "$dir/global.json" ;;
   "getoption render:cm_sdr_eotf") jq '{option:"render:cm_sdr_eotf",str:.cm_sdr_eotf}' "$dir/global.json" ;;
+  "getoption animations:enabled") jq '{option:"animations:enabled",bool:(if has("animations") then .animations else true end)}' "$dir/global.json" ;;
   "eval "*)
     printf '%s\n' "$2" > "$dir/eval-last.txt"
     if [[ ${FAKE_HYPRCTL_EVAL_FAIL:-} == 1 ]]; then

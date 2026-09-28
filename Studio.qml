@@ -64,6 +64,7 @@ Item {
     draft = ({})
     draftGlobal = ({})
     advancedOpen = false
+    helpOpen = false
     focusArea = "inspector"
     currentRow = "mode"
     if (service) service.refresh()
@@ -113,6 +114,8 @@ Item {
     for (var i = 0; i < displays.length; i++) if (displays[i].name === name) return displays[i]
     return null
   }
+
+  readonly property bool reducedMotion: service ? service.reducedMotion : false
 
   property var draft: ({})
   property var draftGlobal: ({})
@@ -176,6 +179,46 @@ Item {
     for (var rk in draftGlobalRevisions) revisions[rk] = draftGlobalRevisions[rk]
     revisions[key] = ++editRevision
     draftGlobalRevisions = revisions
+  }
+
+  // Whether the selected display's draft touches this inspector row.
+  function rowChanged(rowId) {
+    return !!display && Model.rowChanged(rowId, draft[display.name], draftGlobal)
+  }
+
+  // Put one row back to what is kept by dropping its fields from the draft.
+  // A size field moves the flush neighbours back the way setSizeField moved
+  // them, and dropping a capability override or an ICC pick can leave the
+  // colour mode unreachable, which reconcileColour settles.
+  function resetRow(rowId) {
+    var d = display
+    if (!d || applyInFlight || !rowChanged(rowId)) return
+    var f = Model.rowFields(rowId)
+    var before = null
+    for (var i = 0; i < rects.length; i++) if (rects[i].name === d.name) before = rects[i]
+    if (f.display.length && draft[d.name]) {
+      var next = {}, revs = {}
+      for (var n in draft) { next[n] = {}; for (var k in draft[n]) next[n][k] = draft[n][k] }
+      for (var rn in draftRevisions) { revs[rn] = {}; for (var rk in draftRevisions[rn]) revs[rn][rk] = draftRevisions[rn][rk] }
+      for (var j = 0; j < f.display.length; j++) { delete next[d.name][f.display[j]]; if (revs[d.name]) delete revs[d.name][f.display[j]] }
+      if (Object.keys(next[d.name]).length === 0) delete next[d.name]
+      draft = next
+      draftRevisions = revs
+    }
+    if (f.global.length) {
+      var g = {}, grevs = {}
+      for (var gk in draftGlobal) g[gk] = draftGlobal[gk]
+      for (var gr in draftGlobalRevisions) grevs[gr] = draftGlobalRevisions[gr]
+      for (var m = 0; m < f.global.length; m++) { delete g[f.global[m]]; delete grevs[f.global[m]] }
+      draftGlobal = g
+      draftGlobalRevisions = grevs
+    }
+    var sized = f.display.some(function(key) { return key === "mode" || key === "scale" || key === "transform" })
+    if (sized && before) {
+      var moves = Model.reflowAfterResize(rects, d.name, { width: before.width, height: before.height })
+      for (var mv = 0; mv < moves.length; mv++) moveDisplay(moves[mv].name, moves[mv].x, moves[mv].y)
+    }
+    if (rowId === "caphdr" || rowId === "capwide" || rowId === "icc") reconcileColour(d)
   }
 
   // Draft → pending → kept → live, in that order.
@@ -342,7 +385,41 @@ Item {
   // and back on Apply when it ends so the cursor isn't left on a Revert
   // that no longer means "discard the draft".
   property int actionIndex: 2
-  onHasPendingChanged: actionIndex = hasPending ? 1 : 2
+  onHasPendingChanged: {
+    actionIndex = hasPending ? 1 : 2
+    // The sheet would cover the countdown, so a pending change closes it.
+    if (hasPending) helpOpen = false
+  }
+
+  // The key sheet (?): every key the studio knows, grouped by where it acts.
+  property bool helpOpen: false
+  readonly property var keySections: [
+    { title: "Everywhere", keys: [
+      ["?", "this sheet"],
+      ["⇥  ⇧⇥", "canvas ⇄ inspector ⇄ actions"],
+      ["1–9  [ ]", "select a display"],
+      ["a", "apply the draft"],
+      ["r", "discard the draft, or revert a pending change"],
+      ["i", "identify: a label on each screen"],
+      ["esc", "leave a field, revert a pending change, or close"] ] },
+    { title: "Inspector", keys: [
+      ["j k  ↓ ↑", "next and previous row"],
+      ["h l  ← →", "adjust the row"],
+      ["⇧ h l", "larger steps for position and luminance"],
+      ["↵  space", "open a dropdown, edit a field, or toggle"],
+      ["⌫", "reset the row to what is kept"] ] },
+    { title: "Canvas", keys: [
+      ["arrows", "nudge 10 px, with ⇧ 100 px"],
+      ["⌥ arrows", "flush beside the nearest display, centred"],
+      ["0", "move to the origin"],
+      ["j k", "next and previous display"],
+      ["⌫", "reset its position"],
+      ["drag with ⌥", "move without snapping"] ] },
+    { title: "Actions and countdown", keys: [
+      ["h l", "choose a button"],
+      ["↵", "press it; Keep while a change is pending"],
+      ["r  esc", "revert a pending change"] ] }
+  ]
 
   readonly property var rows: {
     var list = ["mode", "refresh", "vrr", "scale", "rotation", "posx", "posy", "mirror", "enabled"]
@@ -469,6 +546,10 @@ Item {
   function handleKey(event) {
     if (anyPopupOpen) return false
     var k = event.key
+    if (helpOpen) {
+      if (k === Qt.Key_Escape || k === Qt.Key_Question) helpOpen = false
+      return true
+    }
     var shift = (event.modifiers & Qt.ShiftModifier) !== 0
     var alt = (event.modifiers & Qt.AltModifier) !== 0
     if (k === Qt.Key_Escape) {
@@ -477,6 +558,12 @@ Item {
       requestClose(); return true
     }
     if (textEditing) return false
+    if (k === Qt.Key_Question) { if (!hasPending) helpOpen = true; return true }
+    if (k === Qt.Key_Backspace || k === Qt.Key_Delete) {
+      if (focusArea === "inspector") resetRow(currentRow)
+      else if (focusArea === "canvas") resetRow("posx")
+      return true
+    }
     if (k === Qt.Key_Tab || k === Qt.Key_Backtab) {
       var order = ["canvas", "inspector", "actions"]
       var i = order.indexOf(focusArea)
@@ -575,7 +662,7 @@ Item {
       anchors.fill: parent
       color: root.scrim
       opacity: root.opened ? 1 : 0
-      Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+      Behavior on opacity { enabled: !root.reducedMotion; NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
       MouseArea { anchors.fill: parent; onClicked: root.requestClose() }
     }
 
@@ -593,8 +680,8 @@ Item {
       // so the studio settles into place instead of zooming.
       opacity: root.opened ? 1 : 0
       scale: root.opened ? 1 : 0.985
-      Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
-      Behavior on scale { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+      Behavior on opacity { enabled: !root.reducedMotion; NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+      Behavior on scale { enabled: !root.reducedMotion; NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
 
       MouseArea { anchors.fill: parent; onClicked: {} }
 
@@ -662,7 +749,8 @@ Item {
               // wide layout, and the ceiling is simply the room available.
               height: Math.round(Math.max(parent.height * 0.42,
                                           Math.min(parent.height, canvas.preferredHeight)))
-              Behavior on height { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+              Behavior on height { enabled: !root.reducedMotion; NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+              reducedMotion: root.reducedMotion
               rects: root.rects
               selectedName: root.selectedName
               hasCursor: root.focusArea === "canvas"
@@ -735,6 +823,7 @@ Item {
                 // beside the identity text at the top of the inspector.
                 GamutPlot {
                   id: gamut
+                  reducedMotion: root.reducedMotion
                   // Takes the height the column has left, and a width in the
                   // diagram's own 0.8:0.9 proportion so the plot is all
                   // diagram and no padding.
@@ -763,6 +852,7 @@ Item {
               available: bodyItem.height
               foreground: root.foreground
               fontFamily: root.fontFamily
+              reducedMotion: root.reducedMotion
               markers: [
                 { item: signalHeader, name: "signal" },
                 { item: geometryHeader, name: "geometry" },
@@ -1257,6 +1347,7 @@ Item {
               summary: root.service ? root.service.pendingSummary : "Display settings changed"
               phase: root.service ? root.service.operationPhase : "previewing"
               error: root.service ? root.service.recoveryError : ""
+              reducedMotion: root.reducedMotion
               onKeep: root.service.keep()
               onRevert: root.service.revert()
               onHovered: function(index, h) { if (h) { root.focusArea = "actions"; root.actionIndex = index } }
@@ -1284,12 +1375,12 @@ Item {
               textFormat: Text.PlainText
               // Non-breaking spaces inside each pair: the strip wraps at the
               // separators, never between a key and what it does.
-              text: ["j/k\u00A0rows", "h/l\u00A0adjust",
+              text: ["?\u00A0all\u00A0keys"].concat(root.focusArea === "inspector" && root.rowChanged(root.currentRow) ? ["⌫\u00A0reset\u00A0row"] : []).concat(["j/k\u00A0rows", "h/l\u00A0adjust",
                      "⇥ canvas ⇄ inspector ⇄ actions",
                      "arrows nudge 10 px, ⇧ 100, ⌥ flush beside",
                      "0\u00A0origin", "1–9\u00A0[\u00A0]\u00A0select",
                      "a\u00A0apply", "r\u00A0" + (root.draftDirty ? "discard" : "revert"),
-                     "i\u00A0identify", "esc\u00A0close"].join(" · ")
+                     "i\u00A0identify", "esc\u00A0close"]).join(" · ")
               color: root.dim
               font.family: root.fontFamily; font.pixelSize: Style.font.caption
               anchors.left: parent.left; anchors.right: actionButtons.left; anchors.rightMargin: Style.space(16)
@@ -1337,6 +1428,52 @@ Item {
           }
         }
       }
+
+      // ---------- key sheet (?) ----------
+      Rectangle {
+        id: keySheet
+        anchors.fill: keyScope
+        visible: root.helpOpen
+        color: root.background
+        MouseArea { anchors.fill: parent; onClicked: root.helpOpen = false }
+        Column {
+          anchors.fill: parent
+          spacing: Style.spacing.panelGap
+          Item {
+            width: parent.width
+            implicitHeight: sheetTitle.implicitHeight
+            Text { id: sheetTitle; textFormat: Text.PlainText; text: "Keys"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.heading; font.bold: true; anchors.left: parent.left }
+            Text { textFormat: Text.PlainText; text: "? or esc to close"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; anchors.right: parent.right; anchors.verticalCenter: sheetTitle.verticalCenter }
+          }
+          Flow {
+            id: sheetFlow
+            width: parent.width
+            spacing: Style.space(32)
+            readonly property real columnWidth: (width - spacing) / 2
+            Repeater {
+              model: root.keySections
+              delegate: Column {
+                id: sheetSection
+                required property var modelData
+                width: sheetFlow.columnWidth
+                spacing: Style.spacing.xs
+                RowLabel { text: sheetSection.modelData.title }
+                Repeater {
+                  model: sheetSection.modelData.keys
+                  delegate: Row {
+                    id: sheetRow
+                    required property var modelData
+                    spacing: Style.spacing.md
+                    Text { textFormat: Text.PlainText; text: sheetRow.modelData[0]; width: Style.space(120); color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true }
+                    Text { textFormat: Text.PlainText; text: sheetRow.modelData[1]; width: sheetFlow.columnWidth - Style.space(120) - Style.spacing.md; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; wrapMode: Text.WordWrap }
+                  }
+                }
+              }
+            }
+          }
+          Text { textFormat: Text.PlainText; text: "A mark in a row's left margin means the draft changes it; click the mark or press ⌫ to put that row back."; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width }
+        }
+      }
     }
   }
 
@@ -1354,6 +1491,25 @@ Item {
     // A row that grows under the cursor (the SDR white note appearing) must
     // stay in view, so follow it again once the layout has settled.
     onHeightChanged: if (hasCursor) Qt.callLater(function() { root.ensureRowVisible(irow) })
+    // The changed mark: an accent rule in the row's left margin while the
+    // draft touches this row. Clicking it, or ⌫ on the row, resets the row.
+    readonly property bool changed: root.rowChanged(rowId)
+    Rectangle {
+      visible: irow.changed
+      width: Math.max(2, Style.space(2))
+      radius: width / 2
+      x: Math.round((Style.spacing.md - width) / 2)
+      anchors.top: parent.top; anchors.bottom: parent.bottom
+      anchors.topMargin: Style.spacing.md; anchors.bottomMargin: Style.spacing.md
+      color: root.accent
+    }
+    MouseArea {
+      visible: irow.changed && !root.applyInFlight
+      width: Style.spacing.md
+      height: parent.height
+      cursorShape: Qt.PointingHandCursor
+      onClicked: { root.focusArea = "inspector"; root.currentRow = irow.rowId; root.resetRow(irow.rowId) }
+    }
     Item {
       id: irowContent
       anchors.fill: parent
