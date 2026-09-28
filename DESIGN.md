@@ -189,7 +189,7 @@ The plugin id is provisional (`io.github.pushmotta.candela`); rename is one mani
 
 ### 6.2 Backend
 
-Bash, following AGENTS.md style, reading only `hyprctl -j`, `edid-decode`, `ddcutil` via the existing `omarchy-brightness-display`, and the DRM sysfs tree. JSON out, JSON in. Live changes go through `hyprctl eval` with `hl.monitor({...})` for **every** display in one chunk, never one display alone (see §9).
+Bash, in the style of Omarchy's own shell scripts, reading only `hyprctl -j`, `edid-decode`, `ddcutil` via the existing `omarchy-brightness-display`, and the DRM sysfs tree. JSON out, JSON in. Live changes go through `hyprctl eval` with `hl.monitor({...})` for **every** display in one chunk, never one display alone (see §9).
 
 ### 6.3 Persistence
 
@@ -257,7 +257,7 @@ Earlier framing decisions: build as a plugin at first-party quality rather than 
 - **SDR white defaults to 80 cd/m² in HDR.** `sdrMaxLuminance` stayed at Hyprland's default of 80 after the flip. That is the "washed out desktop" complaint in one number: the tool must write `sdr_max_luminance` (203 by default, §4.2) on every HDR entry.
 - **`hyprctl monitors -j` does not expose the negotiated HDR metadata** (min / max / max-average luminance sent to the panel), only the `sdr*` fields. The Panel section must derive those from EDID plus the config we wrote, and say so.
 
-Session 3 (3 Sep 2026, evening):
+Later tests the same evening (3 Sep 2026):
 
 - **A global set by a toggles file is visible to `hyprctl eval` after a reload.** The layout probe works on 0.56.2: `doctor` reports the file ran. `eval` prints only `ok` or an error, never a return value, so the probe is an `assert`.
 - **The two MateViews' EDIDs differ** (manufacture week 28 against 25 of 2021) although Hyprland reports a blank serial for both and the numeric serial in the base block is identical. The EDID hash is a usable identity on this desk; make, model and serial are not.
