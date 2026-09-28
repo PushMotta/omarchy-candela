@@ -28,6 +28,7 @@ Item {
   property color foreground: Color.foreground
   property string fontFamily: Style.font.family
   property real slack: Style.space(24)
+  property bool reducedMotion: false
 
   readonly property real viewHeight: flick ? flick.height : 0
   readonly property real contentHeight: content ? content.implicitHeight : 0
@@ -85,7 +86,12 @@ Item {
       var limit = Math.max(0, root.contentHeight - root.viewHeight)
       scrollAnim.target = flick
       // Never upward: the line is an offer to see what is below.
-      scrollAnim.to = Math.min(limit, Math.max(flick.contentY, markerTop(m.item) - Style.spacing.md))
+      var heading = markerTop(m.item) - Style.spacing.md
+      // If the heading is already visible but the section continues below the
+      // fold, advance by a page with overlap. Every enabled click progresses.
+      var page = Math.max(1, root.viewHeight - Style.space(40))
+      scrollAnim.to = Math.min(limit, heading > flick.contentY + 1 ? heading : flick.contentY + page)
+      if (root.reducedMotion) { flick.contentY = scrollAnim.to; return }
       scrollAnim.restart()
       return
     }
@@ -94,7 +100,7 @@ Item {
   NumberAnimation {
     id: scrollAnim
     property: "contentY"
-    duration: 220
+    duration: root.reducedMotion ? 0 : 220
     easing.type: Easing.OutCubic
   }
 
@@ -114,7 +120,7 @@ Item {
     elide: Text.ElideRight
     opacity: root.more ? 1 : 0
 
-    Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+    Behavior on opacity { NumberAnimation { duration: root.reducedMotion ? 0 : 140; easing.type: Easing.OutCubic } }
   }
 
   MouseArea {

@@ -140,15 +140,56 @@ token="$(jq -r '.token' "$sandbox2/state/pending.json")"
 assert_contains "$(cat "$sandbox2/systemd-run.log")" "revert --expired --token $token" "timer command line names the token"
 pass "apply writes a transaction token and arms the timer with it"
 
-# ---- a hyprctl rejection unwinds instead of leaving a dangling pending/timer
+# ---- a failed apply keeps recovery when even the explicit baseline replay fails
 sandbox2="$(new_sandbox)"
 if FAKE_HYPRCTL_EVAL_FAIL=1 run_cli "$sandbox2" apply '{"displays":[{"name":"DP-2","bitdepth":10,"cm":"hdr","sdr_max_luminance":203}]}' 2>/dev/null; then
   fail "apply exits non-zero when hyprctl rejects the eval"
 fi
-[[ ! -e $sandbox2/state/pending.json ]] || fail "no pending.json survives a failed apply"
+[[ -s $sandbox2/state/pending.json ]] || fail "failed recovery retains pending journal"
+assert_eq "$(jq -r .phase "$sandbox2/state/pending.json")" "failed" "failed apply records recovery phase"
+assert_eq "$(jq -r .recovery.available "$sandbox2/state/pending.json")" "true" "failed apply advertises recovery"
 assert_contains "$(cat "$sandbox2/systemctl.log")" "stop" "unwind stops the timer"
-assert_contains "$(tail -1 "$sandbox2/hyprctl.log")" "reload" "unwind reloads to restore the last kept config"
-pass "a failing hyprctl eval unwinds the pending apply"
+assert_contains "$(cat "$sandbox2/hyprctl.log")" "reload" "unwind reloads before replaying the observed baseline"
+run_cli "$sandbox2" revert >/dev/null
+[[ ! -e $sandbox2/state/pending.json ]] || fail "a later successful recovery clears the journal"
+pass "a failed apply never discards an unverified recovery"
+
+# ---- --now cannot confirm unrelated fields already waiting for Keep
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" apply '{"displays":[{"name":"DP-1","scale":2,"cm":"hdr","bitdepth":10}]}' >/dev/null
+out="$(run_cli "$sandbox2" apply --now '{"displays":[{"name":"DP-1","sdr_max_luminance":220}]}')"
+assert_contains "$out" "pending" "--now joins an existing transaction"
+[[ -s $sandbox2/state/pending.json ]] || fail "joined --now retains confirmation"
+[[ ! -e $sandbox2/state/intent.json ]] || fail "joined --now does not persist pending fields"
+assert_eq "$(jq -r '.intent.displays["DP-1"].scale' "$sandbox2/state/pending.json")" "2" "unrelated pending scale remains pending"
+run_cli "$sandbox2" revert >/dev/null
+pass "--now joins, and never silently keeps, an outstanding preview"
+
+# ---- first use restores observed non-default state and exact prior files
+sandbox2="$(new_sandbox)"
+jq 'map(if .name=="DP-1" then .scale=1.37 | .sdrBrightness=1.23 else . end)' "$sandbox2/monitors.json" > "$sandbox2/m.tmp" && mv "$sandbox2/m.tmp" "$sandbox2/monitors.json"
+: > "$sandbox2/state/candela-layout.lua"
+printf 'shared flag bytes\n\n' > "$sandbox2/state/internal-monitor-disable.lua"
+cp "$sandbox2/state/internal-monitor-disable.lua" "$sandbox2/flag-before"
+: > "$sandbox2/state/internal-monitor-scale"
+cp "$sandbox2/monitors.json" "$sandbox2/before.json"
+run_cli "$sandbox2" apply '{"displays":[{"name":"DP-1","scale":2,"sdrbrightness":2}]}'>/dev/null
+FAKE_HYPRCTL_PRESERVE_OMITTED=1 run_cli "$sandbox2" revert >/dev/null
+assert_eq "$(jq -S 'map({name,scale,sdrBrightness})' "$sandbox2/monitors.json")" "$(jq -S 'map({name,scale,sdrBrightness})' "$sandbox2/before.json")" "revert replays first-use observed baseline"
+[[ -f $sandbox2/state/candela-layout.lua && ! -s $sandbox2/state/candela-layout.lua ]] || fail "empty layout restored as empty"
+cmp -s "$sandbox2/flag-before" "$sandbox2/state/internal-monitor-disable.lua" || fail "shared flag content restored byte-for-byte"
+[[ -f $sandbox2/state/internal-monitor-scale && ! -s $sandbox2/state/internal-monitor-scale ]] || fail "empty internal scale restored as empty"
+pass "first-use revert preserves observed state and byte-exact file presence"
+
+# ---- a display unplugged during a preview does not make revert impossible
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" apply '{"displays":[{"name":"DP-1","scale":2}]}' >/dev/null
+for f in monitors.json monitors.pristine.json; do
+  jq 'map(select(.name != "DP-2"))' "$sandbox2/$f" > "$sandbox2/m.tmp" && mv "$sandbox2/m.tmp" "$sandbox2/$f"
+done
+run_cli "$sandbox2" revert >/dev/null || fail "revert succeeds when a baseline display has gone"
+[[ ! -e $sandbox2/state/pending.json ]] || fail "journal cleared after a revert with a missing display"
+pass "a display that vanished mid-preview is not required by revert"
 
 # ---- revert --expired only acts when the token matches a still-pending change
 sandbox2="$(new_sandbox)"
@@ -265,7 +306,7 @@ fi
 assert_contains "$out" "scale" "the mismatch names the field"
 [[ ! -e $sandbox2/state/pending.json ]] || fail "no pending.json survives a failed readback"
 [[ ! -e $sandbox2/state/candela-pending.lua ]] || fail "no pending toggles file survives a failed readback"
-assert_contains "$(tail -1 "$sandbox2/hyprctl.log")" "reload" "a failed readback unwinds with a reload"
+grep -qx 'reload' "$sandbox2/hyprctl.log" || fail "a failed readback unwinds with a reload"
 pass "a change the compositor did not land on is undone"
 
 # ---- keep proves the layout file ran on reload
@@ -305,6 +346,14 @@ jq 'map(.disabled = true | .width = 0 | .height = 0)' "$sandbox2/monitors.json" 
 assert_eq "$(run_cli "$sandbox2" recover)" "recovered DP-1" "recover names the display it switched on"
 assert_eq "$(PATH="$sandbox2/bin:$PATH" hyprctl monitors all -j | jq -r '.[] | select(.name == "DP-1") | .disabled')" "false" "DP-1 is on after recover"
 assert_eq "$(run_cli "$sandbox2" recover)" "nothing to recover" "recover is a no-op with a display on"
+# A stale journal must not capture the rescue as a timed preview.
+for f in monitors.json monitors.pristine.json; do jq 'map(.disabled = true)' "$sandbox2/$f" > "$sandbox2/m.tmp" && mv "$sandbox2/m.tmp" "$sandbox2/$f"; done
+printf '%s\n' '{"token":"stale","phase":"failed","intent":{"version":1,"displays":{},"global":{}}}' > "$sandbox2/state/pending.json"
+: > "$sandbox2/state/candela-pending.lua"
+assert_eq "$(run_cli "$sandbox2" recover)" "recovered DP-1" "recover with a stale journal still rescues"
+[[ ! -e $sandbox2/state/pending.json ]] || fail "recover discards the stale journal instead of joining it"
+[[ ! -e $sandbox2/state/candela-pending.lua ]] || fail "recover discards the stale pending Lua"
+assert_eq "$(jq -r '.displays["DP-1"].enabled' "$sandbox2/state/intent.json")" "true" "the rescue was kept, not previewed"
 sandbox2="$(new_sandbox laptop)"
 jq 'map(.disabled = true | .width = 0 | .height = 0)' "$sandbox2/monitors.json" > "$sandbox2/m.tmp" && mv "$sandbox2/m.tmp" "$sandbox2/monitors.json"
 assert_eq "$(run_cli "$sandbox2" recover)" "recovered eDP-1" "recover prefers the built-in panel"
@@ -323,7 +372,7 @@ assert_eq "$(PATH="$sandbox2/bin:$PATH" hyprctl monitors all -j | jq -r '.[] | s
 # A timed re-enable removes the flag; reverting puts it back.
 run_cli "$sandbox2" apply '{"displays":[{"name":"eDP-1","enabled":true}]}' >/dev/null
 [[ ! -e $flag ]] || fail "a timed re-enable removes the flag"
-assert_eq "$(jq -r '.internalFlagBefore.present' "$sandbox2/state/pending.json")" "true" "pending remembers the flag was there"
+assert_eq "$(jq -r '.files.internalFlag.present' "$sandbox2/state/pending.json")" "true" "pending snapshots the flag byte-for-byte"
 run_cli "$sandbox2" revert >/dev/null
 [[ -f $flag ]] || fail "revert restores the flag"
 assert_eq "$(PATH="$sandbox2/bin:$PATH" hyprctl monitors all -j | jq -r '.[] | select(.name == "eDP-1") | .disabled')" "true" "panel is off again after revert"

@@ -8,6 +8,8 @@
 #   FAKE_HYPRCTL_EVAL_FAIL=1          eval is rejected outright
 #   FAKE_HYPRCTL_IGNORE_SCALE=1       eval lands everything but the scale
 #   FAKE_HYPRCTL_TOGGLES_NOT_LOADED=1 reload reads no toggles files at all
+#   FAKE_HYPRCTL_PRESERVE_OMITTED=1   reload starts from current, non-pristine state
+#   FAKE_HYPRCTL_RELOAD_FAIL=1        reload fails before changing live state
 
 dir="$FAKE_DIR"
 echo "$*" >> "$dir/hyprctl.log"
@@ -40,22 +42,22 @@ apply_rules() {
              else . end)
           | (if ($r.scale | type) == "number" and $ignore_scale != "1" then .scale = ($r.scale | r2) else . end)
           | (if $r.transform != null then .transform = $r.transform else . end)
-          | .mirrorOf = (if ($r.mirror // "") == "" then "none" else $r.mirror end)
-          | .currentFormat = (if $r.bitdepth == 10 then "XBGR2101010" else "XRGB8888" end)
-          | .colorManagementPreset = ($r.cm // "srgb")
-          | .sdrMaxLuminance = ($r.sdr_max_luminance // 80)
-          | .sdrMinLuminance = ($r.sdr_min_luminance // 0.005)
-          | .sdrBrightness = ($r.sdrbrightness // 1)
-          | .sdrSaturation = ($r.sdrsaturation // 1)
-          | .vrr = (($r.vrr // 0) != 0)
+          | (if $r|has("mirror") then .mirrorOf = (if $r.mirror == "" then "none" else $r.mirror end) else . end)
+          | (if $r|has("bitdepth") then .currentFormat = (if $r.bitdepth == 10 then "XBGR2101010" else "XRGB8888" end) else . end)
+          | (if $r|has("cm") then .colorManagementPreset = $r.cm else . end)
+          | (if $r|has("sdr_max_luminance") then .sdrMaxLuminance = $r.sdr_max_luminance else . end)
+          | (if $r|has("sdr_min_luminance") then .sdrMinLuminance = $r.sdr_min_luminance else . end)
+          | (if $r|has("sdrbrightness") then .sdrBrightness = $r.sdrbrightness else . end)
+          | (if $r|has("sdrsaturation") then .sdrSaturation = $r.sdrsaturation else . end)
+          | (if $r|has("vrr") then .vrr = ($r.vrr != 0) else . end)
         end end)' "$dir/monitors.json" > "$dir/monitors.json.tmp" && mv "$dir/monitors.json.tmp" "$dir/monitors.json"
   done < <(rules_from)
 }
 
 case "$1 $2" in
   "monitors all") cat "$dir/monitors.json" ;;
-  "getoption render:cm_auto_hdr") echo '{"option":"render:cm_auto_hdr","int":1}' ;;
-  "getoption render:cm_sdr_eotf") echo '{"option":"render:cm_sdr_eotf","str":"default"}' ;;
+  "getoption render:cm_auto_hdr") jq '{option:"render:cm_auto_hdr",int:.cm_auto_hdr}' "$dir/global.json" ;;
+  "getoption render:cm_sdr_eotf") jq '{option:"render:cm_sdr_eotf",str:.cm_sdr_eotf}' "$dir/global.json" ;;
   "eval "*)
     printf '%s\n' "$2" > "$dir/eval-last.txt"
     if [[ ${FAKE_HYPRCTL_EVAL_FAIL:-} == 1 ]]; then
@@ -70,10 +72,14 @@ case "$1 $2" in
       exit 7
     fi
     apply_rules <<<"$2"
+    if [[ $2 =~ cm_auto_hdr[[:space:]]*=[[:space:]]*([012]) ]]; then
+      jq --argjson v "${BASH_REMATCH[1]}" '.cm_auto_hdr=$v' "$dir/global.json" > "$dir/global.json.tmp" && mv "$dir/global.json.tmp" "$dir/global.json"
+    fi
     echo ok
     ;;
   "reload "*|"reload")
-    cp "$dir/monitors.pristine.json" "$dir/monitors.json"
+    if [[ ${FAKE_HYPRCTL_RELOAD_FAIL:-} == 1 ]]; then echo "fake hyprctl: reload rejected" >&2; exit 1; fi
+    [[ ${FAKE_HYPRCTL_PRESERVE_OMITTED:-} == 1 ]] || cp "$dir/monitors.pristine.json" "$dir/monitors.json"
     : > "$dir/probe.txt"
     if [[ ${FAKE_HYPRCTL_TOGGLES_NOT_LOADED:-} != 1 ]]; then
       # Sorted like require_all: candela-layout, candela-pending, internal-monitor-*.

@@ -51,8 +51,9 @@ Item {
   // ---------------------------------------------------------- lifecycle
   // Logical pixels and cd/m² are not currency: no thousands separators.
   Component.onCompleted: {
-    var fields = [posXField, posYField, minLumField, maxLumField, avgLumField]
+    var fields = [posXField, posYField, maxLumField, avgLumField]
     for (var i = 0; i < fields.length; i++) if (fields[i] && fields[i].field) fields[i].field.locale = Qt.locale("C")
+    minLumField.validatorLocale = "C"
   }
 
   function open(payloadJson) {
@@ -115,14 +116,37 @@ Item {
 
   property var draft: ({})
   property var draftGlobal: ({})
+  property var submittedDraft: ({})
+  property var submittedGlobal: ({})
+  property bool applyInFlight: false
+  property int submittedRequestId: -1
+  property var draftRevisions: ({})
+  property var submittedRevisions: ({})
+  property var draftGlobalRevisions: ({})
+  property var submittedGlobalRevisions: ({})
+  property int editRevision: 0
   readonly property bool draftDirty: Object.keys(draft).length > 0 || Object.keys(draftGlobal).length > 0
 
   function setField(name, key, value) {
     var next = {}
     for (var n in draft) { next[n] = {}; for (var k in draft[n]) next[n][k] = draft[n][k] }
     if (!next[name]) next[name] = {}
-    next[name][key] = value
+    var base = displayByName(name)
+    var original = base ? Model.effectiveIntent(base)[key] : undefined
+    // While Apply is running, restoring the old value is still a new edit:
+    // once that request lands, it must be sent again to undo the submitted
+    // field. `null` is the backend's explicit clear operation.
+    var restoringSubmitted = applyInFlight && submittedDraft[name] && submittedDraft[name][key] !== undefined
+    if ((value === original || (value === null && original === undefined)) && !restoringSubmitted) delete next[name][key]
+    else if (restoringSubmitted && value === undefined) next[name][key] = null
+    else next[name][key] = value
+    if (Object.keys(next[name]).length === 0) delete next[name]
     draft = next
+    var revisions = {}
+    for (var rn in draftRevisions) { revisions[rn] = {}; for (var rk in draftRevisions[rn]) revisions[rn][rk] = draftRevisions[rn][rk] }
+    if (!revisions[name]) revisions[name] = {}
+    revisions[name][key] = ++editRevision
+    draftRevisions = revisions
   }
 
   // A new mode, scale or rotation changes the display's logical size. The
@@ -141,8 +165,17 @@ Item {
   function setGlobal(key, value) {
     var next = {}
     for (var k in draftGlobal) next[k] = draftGlobal[k]
-    next[key] = value
+    var g = service && service.state ? service.state.global : null
+    var original = Model.effectiveGlobal(g)[key]
+    var restoringSubmitted = applyInFlight && submittedGlobal[key] !== undefined
+    if ((value === original || (value === null && original === undefined)) && !restoringSubmitted) delete next[key]
+    else if (restoringSubmitted && value === undefined) next[key] = null
+    else next[key] = value
     draftGlobal = next
+    var revisions = {}
+    for (var rk in draftGlobalRevisions) revisions[rk] = draftGlobalRevisions[rk]
+    revisions[key] = ++editRevision
+    draftGlobalRevisions = revisions
   }
 
   // Draft → pending → kept → live, in that order.
@@ -167,6 +200,18 @@ Item {
   function mirrorOf(d) { var m = field(d, "mirror", d.mirrorOf === "none" ? "" : d.mirrorOf); return m || "" }
   function vrrOf(d) { return Number(field(d, "vrr", d.vrr ? 1 : 0)) }
   function modeOf(d) { return String(field(d, "mode", Model.currentModeValue(d))) }
+  function resolutionOf(d) {
+    var m = Model.parseMode(modeOf(d))
+    return m ? m.width + "x" + m.height : ""
+  }
+  function setResolution(d, resolution) {
+    var choices = Model.refreshOptions(d, resolution)
+    if (!choices.length) return
+    var current = Model.parseMode(modeOf(d)), best = choices[0]
+    if (current) for (var i = 0; i < choices.length; i++)
+      if (Math.abs(choices[i].refresh - current.refresh) < Math.abs(best.refresh - current.refresh)) best = choices[i]
+    setSizeField(d, "mode", best.value)
+  }
   function colourOf(d) {
     var dr = draft[d.name] || {}
     if (dr.cm !== undefined) return (dr.cm === "hdr" || dr.cm === "hdredid") ? "hdr" : (dr.bitdepth === 10 ? "wide" : "sdr")
@@ -176,7 +221,10 @@ Item {
   function eotfOf(d) { return String(field(d, "sdr_eotf", "default")) }
   function iccOf(d) { return String(field(d, "icc", "")) }
   function presetOf(d) { return String(field(d, "cm", d.live ? d.live.cm : "srgb")) }
-  function saturationOf(d) { return Number(field(d, "sdrsaturation", d.live ? d.live.sdrSaturation : 1)) || 1 }
+  function saturationOf(d) {
+    var v = Number(field(d, "sdrsaturation", d.live ? d.live.sdrSaturation : 1))
+    return isNaN(v) ? 1 : v
+  }
   // Fallback -1, not 0: Hyprland's own convention is 1 force-on / 0
   // force-off / -1 trust-the-EDID, and a display that has never had this
   // field set is exactly the "absent" case, not "forced off".
@@ -185,7 +233,8 @@ Item {
   function autoHdrOf() {
     if (draftGlobal.cm_auto_hdr !== undefined) return Number(draftGlobal.cm_auto_hdr)
     var g = service && service.state ? service.state.global : null
-    if (g && g.kept && g.kept.cm_auto_hdr !== undefined) return Number(g.kept.cm_auto_hdr)
+    var effective = Model.effectiveGlobal(g)
+    if (effective.cm_auto_hdr !== undefined) return Number(effective.cm_auto_hdr)
     return g && g.cm_auto_hdr !== null && g.cm_auto_hdr !== undefined ? Number(g.cm_auto_hdr) : 1
   }
 
@@ -239,7 +288,7 @@ Item {
 
   // ---------------------------------------------------------- apply
   function applyDraft() {
-    if (!service || !draftDirty || overlap) return
+    if (!service || !draftDirty || overlap || applyInFlight) return
     var change = { displays: [] }
     for (var name in draft) {
       var entry = { name: name }
@@ -247,9 +296,31 @@ Item {
       change.displays.push(entry)
     }
     if (Object.keys(draftGlobal).length) change.global = draftGlobal
-    service.apply(change, false)
-    draft = ({})
-    draftGlobal = ({})
+    submittedDraft = draft
+    submittedGlobal = draftGlobal
+    submittedRevisions = draftRevisions
+    submittedGlobalRevisions = draftGlobalRevisions
+    applyInFlight = true
+    submittedRequestId = service.apply(change, false)
+  }
+
+  Connections {
+    target: root.service
+    function onRequestFinished(requestId, action, ok, output) {
+      if (action !== "apply" || !root.applyInFlight || requestId !== root.submittedRequestId) return
+      root.applyInFlight = false
+      if (!ok) return
+      var next = {}
+      for (var n in root.draft) {
+        next[n] = {}
+        for (var k in root.draft[n]) if (!root.submittedDraft[n] || !root.submittedRevisions[n] || root.draftRevisions[n][k] !== root.submittedRevisions[n][k]) next[n][k] = root.draft[n][k]
+        if (Object.keys(next[n]).length === 0) delete next[n]
+      }
+      var ng = {}
+      for (var gk in root.draftGlobal) if (!root.submittedGlobalRevisions[gk] || root.draftGlobalRevisions[gk] !== root.submittedGlobalRevisions[gk]) ng[gk] = root.draftGlobal[gk]
+      root.draft = next; root.draftGlobal = ng
+      root.focusArea = "actions"; root.actionIndex = 1
+    }
   }
 
   function revertOrDiscard() {
@@ -274,7 +345,7 @@ Item {
   onHasPendingChanged: actionIndex = hasPending ? 1 : 2
 
   readonly property var rows: {
-    var list = ["mode", "vrr", "scale", "rotation", "posx", "posy", "mirror", "enabled"]
+    var list = ["mode", "refresh", "vrr", "scale", "rotation", "posx", "posy", "mirror", "enabled"]
     if (caps.available) {
       list.push("colour")
       if (display && colourOf(display) === "hdr") list.push("sdrwhite")
@@ -306,8 +377,12 @@ Item {
     var step = big ? 100 : 10
     switch (currentRow) {
       case "mode": {
-        var opts = Model.modeOptions(d).map(function(o) { return o.value })
-        if (opts.length) setSizeField(d, "mode", cycle(opts, modeOf(d), delta)); break
+        var res = Model.resolutionOptions(d).map(function(o) { return o.value })
+        if (res.length) setResolution(d, cycle(res, resolutionOf(d), delta)); break
+      }
+      case "refresh": {
+        var rates = Model.refreshOptions(d, resolutionOf(d)).map(function(o) { return o.value })
+        if (rates.length) setSizeField(d, "mode", cycle(rates, modeOf(d), delta)); break
       }
       case "vrr": setField(d.name, "vrr", cycle([0, 1, 2], vrrOf(d), delta)); break
       case "scale": {
@@ -364,7 +439,8 @@ Item {
     var d = display
     if (!d) return
     switch (currentRow) {
-      case "mode": modeDropdown.toggle(); break
+      case "mode": resolutionDropdown.toggle(); break
+      case "refresh": refreshDropdown.toggle(); break
       case "enabled": setField(d.name, "enabled", !enabledOf(d)); break
       case "advanced": advancedOpen = !advancedOpen; break
       case "icc": if (colourOf(d) !== "hdr") iccDropdown.toggle(); break   // disabled while the draft is in HDR
@@ -387,7 +463,7 @@ Item {
     selectDisplayIndex((idx + delta + displays.length) % displays.length)
   }
 
-  readonly property bool anyPopupOpen: modeDropdown.popupOpen || iccDropdown.popupOpen
+  readonly property bool anyPopupOpen: resolutionDropdown.popupOpen || refreshDropdown.popupOpen || iccDropdown.popupOpen
   readonly property bool textEditing: keyScope.activeFocus === false && (posXField.field.activeFocus || posYField.field.activeFocus || minLumField.field.activeFocus || maxLumField.field.activeFocus || avgLumField.field.activeFocus)
 
   function handleKey(event) {
@@ -653,6 +729,7 @@ Item {
                   Text { textFormat: Text.PlainText; text: Model.luminanceLine(root.caps); visible: text !== ""; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; elide: Text.ElideRight; width: parent.width }
                   Text { textFormat: Text.PlainText; text: root.caps.primaries ? "Primaries (EDID) " + Model.primariesLine(root.caps) : ""; visible: text !== ""; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width }
                   Text { textFormat: Text.PlainText; text: "filled: in use · outline: panel · dashed: BT.2020, P3, sRGB"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width }
+                  Text { textFormat: Text.PlainText; text: "Illustrative, not measured · ICC and custom presets not represented"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width }
                 }
                 // Room to be an instrument here, which it never had wedged
                 // beside the identity text at the top of the inspector.
@@ -715,16 +792,34 @@ Item {
 
                 InspectorRow {
                   rowId: "mode"
-                  Dropdown {
-                    id: modeDropdown
+                  // Two keyboard rows share this surface: the cursor sits on
+                  // whichever dropdown the row name says.
+                  hasCursor: root.focusArea === "inspector" && (root.currentRow === "mode" || root.currentRow === "refresh")
+                  Row {
                     width: parent.width
-                    label: "Mode"
-                    options: root.display ? Model.modeOptions(root.display) : []
-                    value: root.display ? root.modeOf(root.display) : ""
-                    foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily
-                    hasCursor: root.focusArea === "inspector" && root.currentRow === "mode"
-                    onChanged: function(v) { if (root.display) root.setSizeField(root.display, "mode", v) }
-                    onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "mode" } }
+                    spacing: Style.spacing.md
+                    Dropdown {
+                      id: resolutionDropdown
+                      width: (parent.width - parent.spacing) * 0.58
+                      label: "Resolution"
+                      options: root.display ? Model.resolutionOptions(root.display) : []
+                      value: root.display ? root.resolutionOf(root.display) : ""
+                      foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily
+                      hasCursor: root.focusArea === "inspector" && root.currentRow === "mode"
+                      onChanged: function(v) { if (root.display) root.setResolution(root.display, v) }
+                      onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "mode" } }
+                    }
+                    Dropdown {
+                      id: refreshDropdown
+                      width: parent.width - x
+                      label: "Refresh"
+                      options: root.display ? Model.refreshOptions(root.display, root.resolutionOf(root.display)) : []
+                      value: root.display ? root.modeOf(root.display) : ""
+                      foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily
+                      hasCursor: root.focusArea === "inspector" && root.currentRow === "refresh"
+                      onChanged: function(v) { if (root.display) root.setSizeField(root.display, "mode", v) }
+                      onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "refresh" } }
+                    }
                   }
                 }
 
@@ -1033,15 +1128,14 @@ Item {
                   InspectorRow {
                     rowId: "minlum"
                     width: (parent.width - parent.spacing * 2) / 3
-                    NumberField {
+                    DecimalField {
                       id: minLumField
                       label: "Min cd/m²"
-                      value: root.display ? Math.round((isNaN(root.lumOf(root.display, "min_luminance")) ? root.edidLum("min_luminance") : root.lumOf(root.display, "min_luminance")) * 1000) : 0
-                      from: 0; to: 100000; stepSize: 100
-                      fieldWidth: parent.width
+                      value: root.display ? (isNaN(root.lumOf(root.display, "min_luminance")) ? root.edidLum("min_luminance") : root.lumOf(root.display, "min_luminance")) : 0
+                      from: 0; to: 100
                       foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily
                       hasCursor: root.focusArea === "inspector" && root.currentRow === "minlum"
-                      onModified: function(v) { if (root.display) root.setField(root.display.name, "min_luminance", v / 1000) }
+                      onModified: function(v) { if (root.display) root.setField(root.display.name, "min_luminance", v) }
                       onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "minlum" } }
                     }
                   }
@@ -1159,6 +1253,9 @@ Item {
               foreground: root.foreground
               fontFamily: root.fontFamily
               cursorIndex: root.focusArea === "actions" ? Math.min(1, root.actionIndex) : -1
+              summary: root.service ? root.service.pendingSummary : "Display settings changed"
+              phase: root.service ? root.service.operationPhase : "previewing"
+              error: root.service ? root.service.recoveryError : ""
               onKeep: root.service.keep()
               onRevert: root.service.revert()
               onHovered: function(index, h) { if (h) { root.focusArea = "actions"; root.actionIndex = index } }

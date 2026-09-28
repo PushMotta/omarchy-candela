@@ -19,6 +19,14 @@ BorderSurface {
   // floating card of its own (the service's every-screen strip) the card is
   // the frame, and a second one inside it reads as clutter.
   property bool bare: false
+  property string summary: "Display settings changed"
+  property string phase: "previewing"
+  // The backend's recovery record, shown in place of a countdown that is
+  // not running once a change or a save has failed.
+  property string error: ""
+  // Hyprland's errors span lines; the caption is one line that elides.
+  readonly property string errorLine: error.replace(/\s+/g, " ").trim()
+  property bool reducedMotion: false
 
   signal keep()
   signal revert()
@@ -54,7 +62,7 @@ BorderSurface {
 
       Text {
         textFormat: Text.PlainText
-        text: root.compact ? "Keep changes?" : "Keep these settings?"
+        text: root.phase === "failed" ? "Display change failed" : root.compact ? "Keep changes?" : "Keep these settings?"
         color: root.foreground
         font.family: root.fontFamily
         font.pixelSize: Style.font.subtitle
@@ -65,14 +73,17 @@ BorderSurface {
 
       Text {
         textFormat: Text.PlainText
-        text: "Reverting in " + root.remaining + " s unless kept."
-        color: root.urgentSoon ? Color.urgent : Qt.darker(root.foreground, 1.5)
+        text: root.phase === "applying" ? "Applying…" : root.phase === "checking" ? "Checking…"
+              : root.phase === "saving" ? "Saving…" : root.phase === "reverting" ? "Reverting…"
+              : root.phase === "failed" ? "Keep retries · Revert restores" + (root.errorLine ? " · " + root.errorLine : "")
+              : "Reverting in " + root.remaining + " s unless kept · " + root.summary
+        color: root.phase === "failed" || root.urgentSoon ? Color.urgent : Qt.darker(root.foreground, 1.5)
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
         elide: Text.ElideRight
         width: parent.width
 
-        Behavior on color { ColorAnimation { duration: 400 } }
+        Behavior on color { ColorAnimation { duration: root.reducedMotion ? 0 : 400 } }
       }
     }
 
@@ -117,7 +128,9 @@ BorderSurface {
     anchors.bottom: parent.bottom
     anchors.margins: root.borderBottom
     height: Math.max(1, Style.space(2))
-    visible: root.remaining > 0 || root.fraction > 0
+    // No clock runs behind a failed change: the timer was stopped when the
+    // change unwound, so a draining rule there would be a lie.
+    visible: root.phase !== "failed" && (root.remaining > 0 || root.fraction > 0)
 
     Rectangle {
       anchors.fill: parent
@@ -130,8 +143,8 @@ BorderSurface {
       width: parent.width * root.fraction
       color: root.urgentSoon ? Color.urgent : Color.accent
 
-      Behavior on width { NumberAnimation { duration: 1000; easing.type: Easing.Linear } }
-      Behavior on color { ColorAnimation { duration: 400 } }
+      Behavior on width { NumberAnimation { duration: root.reducedMotion ? 0 : 1000; easing.type: Easing.Linear } }
+      Behavior on color { ColorAnimation { duration: root.reducedMotion ? 0 : 400 } }
     }
   }
 }

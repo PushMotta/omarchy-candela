@@ -31,8 +31,21 @@ Item {
   // ------------------------------------------------------------ state
   property var state: null
   property bool loading: false
-  property bool busy: applyProc.running || keepProc.running || revertProc.running || applyQueue.length > 0
-  property string lastError: ""
+  property bool busy: writerRunning() || writerQueue.length > 0
+  property string stateError: ""
+  property string operationError: ""
+  property string operationErrorAction: ""
+  readonly property string lastError: operationError || stateError
+  property string operationPhase: "idle"
+  property var activeChange: null
+  // A change this Service sent is summarised by its fields; one made from
+  // the command line is known only by the displays the journal names.
+  property string pendingSummary: activeChange ? Model.changeSummary(activeChange)
+                                  : pending && Array.isArray(pending.targets) && pending.targets.length ? pending.targets.join(", ")
+                                  : "Display settings"
+  // What the confirmation bar shows once a change or a save has failed: the
+  // backend's recovery record first, else the operation's own error.
+  readonly property string recoveryError: state && state.recovery && state.recovery.error ? String(state.recovery.error) : operationError
   readonly property var displays: state && Array.isArray(state.displays) ? state.displays : []
   readonly property string focused: state ? String(state.focused || "") : ""
   // Hyprland's live focus, for choosing a screen right now; `focused` above
@@ -40,12 +53,20 @@ Item {
   readonly property string liveFocused: Hyprland.focusedMonitor && Hyprland.focusedMonitor.name ? String(Hyprland.focusedMonitor.name) : focused
   readonly property var pending: state && state.pending ? state.pending : null
   readonly property bool hasPending: pending !== null
+  onHasPendingChanged: {
+    if (hasPending) stripCursor = 1
+    if (hasPending && operationPhase !== "failed" && operationPhase !== "saving" && operationPhase !== "reverting") operationPhase = "previewing"
+    else if (!hasPending && operationPhase === "previewing") operationPhase = "idle"
+  }
   readonly property int revertSeconds: state && state.revertSeconds ? Number(state.revertSeconds) : 15
   property int now: Math.floor(Date.now() / 1000)
   readonly property int pendingRemaining: hasPending ? Math.max(0, Number(pending.expires) - now) : 0
 
   signal stateChangedExternally()
   signal actionFinished(string action, bool ok, string output)
+  signal requestFinished(int requestId, string action, bool ok, string output)
+  property int nextRequestId: 1
+  property var activeRequestIds: []
 
   function displayByName(name) {
     for (var i = 0; i < displays.length; i++) if (displays[i].name === name) return displays[i]
@@ -72,11 +93,18 @@ Item {
         if (parsed) {
           root.state = parsed
           root.now = Math.floor(Date.now() / 1000)
-          root.lastError = ""
+          root.stateError = ""
+          // The journal's phase is authoritative between this Service's own
+          // operations: a failure recorded by the command line or the watchdog
+          // must reach the bar too, and a journal cleared elsewhere ends it.
+          if (!root.writerRunning())
+            root.operationPhase = !parsed.pending ? "idle"
+                                  : parsed.pending.phase === "failed" || root.operationPhase === "failed" ? "failed"
+                                  : "previewing"
           root.stateChangedExternally()
           root.maybeRecover()
         } else {
-          root.lastError = "omarchy-candela state returned no data"
+          root.stateError = "omarchy-candela state returned no data"
         }
         if (root.refreshQueued) { root.refreshQueued = false; root.refresh() }
       }
@@ -117,17 +145,29 @@ Item {
   // rotation, then position) all reach the backend instead of only the
   // last one. A --now request never merges with a pending one: they always
   // run as separate, ordered process calls.
-  property var applyQueue: []
+  property var writerQueue: []
+
+  function writerRunning() { return applyProc.running || keepProc.running || revertProc.running }
+
+  function pumpWriter() {
+    if (writerRunning() || !writerQueue.length) return
+    var q = writerQueue.slice(), next = q.shift(); writerQueue = q
+    if (next.kind === "apply") { runApply(next); return }
+    if (next.kind === "keep") { operationPhase = "saving"; keepProc.running = true; return }
+    if (next.kind === "revert") { operationPhase = "reverting"; revertProc.running = true; return }
+  }
 
   function apply(change, immediately) {
-    var queue = applyQueue.slice()
+    var requestId = nextRequestId++
+    var queue = writerQueue.slice()
     var tail = queue.length ? queue[queue.length - 1] : null
-    if (tail && tail.immediately === immediately)
-      queue[queue.length - 1] = { change: mergeApplyChange(tail.change, change), immediately: immediately }
+    if (tail && tail.kind === "apply" && tail.immediately === immediately)
+      queue[queue.length - 1] = { kind: "apply", change: mergeApplyChange(tail.change, change), immediately: immediately, ids: tail.ids.concat([requestId]) }
     else
-      queue.push({ change: change, immediately: immediately })
-    applyQueue = queue
-    if (!applyProc.running) runNextApply()
+      queue.push({ kind: "apply", change: change, immediately: immediately, ids: [requestId] })
+    writerQueue = queue
+    pumpWriter()
+    return requestId
   }
 
   // Overlay `incoming` onto `base` (both are apply() change objects: an
@@ -158,15 +198,14 @@ Item {
     return merged
   }
 
-  function runNextApply() {
-    if (!applyQueue.length) return
-    var queue = applyQueue.slice()
-    var next = queue.shift()
-    applyQueue = queue
+  function runApply(next) {
     var args = [root.cli, "apply"]
     if (next.immediately) args.push("--now")
     args.push(JSON.stringify(next.change))
     applyProc.command = args
+    activeChange = next.change
+    activeRequestIds = next.ids || []
+    operationPhase = "applying"
     applyProc.running = true
   }
 
@@ -178,14 +217,50 @@ Item {
   }
 
   function keep() {
-    if (keepProc.running) return
-    keepProc.running = true
+    cancelQueuedPreviews()
+    if (applyProc.running) { decisionAfterApply = "keep"; return }
+    enqueueDecision("keep")
   }
 
   function revert() {
-    if (revertProc.running) return
-    revertProc.running = true
+    cancelQueuedPreviews()
+    if (applyProc.running) { decisionAfterApply = "revert"; return }
+    enqueueDecision("revert")
   }
+  property string decisionAfterApply: ""
+
+  function enqueueDecision(kind) {
+    // The latest explicit choice wins until the decision starts.
+    var q = writerQueue.filter(function(x) { return x.kind !== "keep" && x.kind !== "revert" })
+    q.push({ kind: kind }); writerQueue = q; pumpWriter()
+  }
+
+  function cancelQueuedPreviews() {
+    var queued = [], retained = []
+    for (var qi = 0; qi < writerQueue.length; qi++) {
+      if (writerQueue[qi].kind === "apply" || writerQueue[qi].preview === true) queued.push(writerQueue[qi])
+      else retained.push(writerQueue[qi])
+    }
+    writerQueue = retained
+    for (var i = 0; i < queued.length; i++) {
+      var ids = queued[i].ids || []
+      for (var j = 0; j < ids.length; j++) requestFinished(ids[j], "apply", false, "Cancelled by Keep/Revert")
+    }
+  }
+
+  function failOperation(action, message) {
+    operationErrorAction = action
+    operationError = message
+    operationPhase = "failed"
+  }
+  function succeedOperation(action) {
+    if (operationErrorAction === action) { operationError = ""; operationErrorAction = "" }
+  }
+  function acknowledgeError() {
+    operationError = ""; operationErrorAction = ""
+    if (operationPhase === "failed") operationPhase = hasPending ? "previewing" : "idle"
+  }
+
 
   function setColourMode(name, mode) {
     var d = displayByName(name)
@@ -194,7 +269,9 @@ Item {
   }
 
   function setSdrWhite(name, nits) {
-    applyDisplay(name, { sdr_max_luminance: Math.round(nits) }, true)
+    // The backend joins --now into an existing preview. Avoiding --now here
+    // also makes the intent explicit and keeps confirmation visible.
+    applyDisplay(name, { sdr_max_luminance: Math.round(nits) }, hasPending ? false : true)
   }
 
   function setBrightness(name, percent) {
@@ -224,10 +301,17 @@ Item {
       if (running) return
       var ok = applyProc.lastExitCode === 0
       var out = ok ? String(applyOut.text || "").trim() : String(applyErr.text || "").trim()
-      if (!ok) root.lastError = out
+      if (!ok) root.failOperation("apply", out || "Could not apply display settings")
+      else { root.succeedOperation("apply"); root.operationPhase = "checking" }
       root.actionFinished("apply", ok, out)
-      if (root.applyQueue.length) { root.runNextApply(); return }
+      for (var i = 0; i < root.activeRequestIds.length; i++) root.requestFinished(root.activeRequestIds[i], "apply", ok, out)
+      root.activeRequestIds = []
+      if (root.decisionAfterApply !== "") {
+        var decision = root.decisionAfterApply; root.decisionAfterApply = ""
+        if (decision === "revert" || ok) root.enqueueDecision(decision)
+      }
       root.refresh()
+      root.pumpWriter()
     }
   }
 
@@ -242,9 +326,11 @@ Item {
       if (running) return
       var ok = keepProc.lastExitCode === 0
       var out = ok ? String(keepOut.text || "").trim() : String(keepErr.text || "").trim()
-      if (!ok) root.lastError = out
+      if (!ok) root.failOperation("keep", out || "Could not save display settings")
+      else { root.succeedOperation("keep"); root.operationPhase = "idle"; root.activeChange = null }
       root.actionFinished("keep", ok, out)
       root.refresh()
+      root.pumpWriter()
     }
   }
 
@@ -259,18 +345,29 @@ Item {
       if (running) return
       var ok = revertProc.lastExitCode === 0
       var out = ok ? String(revertOut.text || "").trim() : String(revertErr.text || "").trim()
-      if (!ok) root.lastError = out
+      if (!ok) root.failOperation("revert", out || "Could not restore display settings")
+      else { root.succeedOperation("revert"); root.operationPhase = "idle"; root.activeChange = null }
       root.actionFinished("revert", ok, out)
       root.refresh()
+      root.pumpWriter()
     }
   }
 
   Process {
     id: brightnessProc
-    stdout: StdioCollector { waitForEnd: true }
+    property int lastExitCode: -1
+    stdout: StdioCollector { id: brightnessOut; waitForEnd: true }
+    stderr: StdioCollector { id: brightnessErr; waitForEnd: true }
+    onExited: function(exitCode) { brightnessProc.lastExitCode = exitCode }
     onRunningChanged: {
       if (running) return
+      var ok = brightnessProc.lastExitCode === 0
+      var out = ok ? String(brightnessOut.text || "").trim() : String(brightnessErr.text || "").trim()
+      if (!ok) root.failOperation("brightness", out || "The display did not accept the brightness change")
+      else root.succeedOperation("brightness")
+      root.actionFinished("brightness", ok, out)
       if (root.brightnessQueued) { var next = root.brightnessQueued; root.brightnessQueued = null; brightnessProc.command = next; brightnessProc.running = true }
+      else root.refresh()
     }
   }
 
@@ -308,7 +405,9 @@ Item {
   // The backend rewrites pending.json on every apply/keep/revert, including
   // the detached revert timer, so watching it keeps the surfaces truthful.
   FileView {
-    path: Quickshell.env("HOME") + "/.local/state/omarchy/candela/pending.json"
+    path: (root.state && root.state.paths && root.state.paths.stateDir
+           ? String(root.state.paths.stateDir)
+           : ((Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")) + "/omarchy/candela")) + "/pending.json"
     watchChanges: true
     printErrors: false
     onFileChanged: root.scheduleRefresh()
@@ -339,7 +438,7 @@ Item {
     stdout: StdioCollector { waitForEnd: true }
     stderr: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (String(text).trim() !== "") root.lastError = String(text).trim()
+      onStreamFinished: if (String(text).trim() !== "") root.operationError = String(text).trim()
     }
     onRunningChanged: if (!running) root.refresh()
   }
@@ -394,8 +493,6 @@ Item {
   // has the keyboard: ↵ acts on the highlighted button (Keep by default),
   // esc reverts, h/l move between the two. Same keys as the studio's bar.
   property int stripCursor: 1
-  onHasPendingChanged: if (hasPending) stripCursor = 1
-
   function handleStripKey(event) {
     var k = event.key
     if (k === Qt.Key_Return || k === Qt.Key_Enter || k === Qt.Key_Space) { if (stripCursor === 0) revert(); else keep(); return true }
@@ -467,6 +564,9 @@ Item {
               foreground: Color.popups.text
               fontFamily: Style.font.family
               cursorIndex: stripWindow.ownsKeyboard ? root.stripCursor : -1
+              summary: root.pendingSummary
+              phase: root.operationPhase
+              error: root.recoveryError
               onKeep: root.keep()
               onRevert: root.revert()
               onHovered: function(index, h) { if (h) root.stripCursor = index }

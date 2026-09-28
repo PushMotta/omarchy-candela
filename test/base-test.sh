@@ -79,6 +79,7 @@ EOF
   [[ $fixture == laptop ]] && source="$FIXTURES/hyprctl-monitors-laptop.json"
   cp "$source" "$dir/monitors.json"
   cp "$source" "$dir/monitors.pristine.json"
+  printf '%s\n' '{"cm_auto_hdr":1,"cm_sdr_eotf":"default"}' > "$dir/global.json"
   echo "$dir"
 }
 

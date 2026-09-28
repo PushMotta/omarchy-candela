@@ -57,6 +57,15 @@ INTERNAL_SCALE_FILE="$TOGGLES_DIR/internal-monitor-scale"    # read by Omarchy's
 REVERT_UNIT="omarchy-candela-revert"
 REVERT_SECONDS="${OMARCHY_CANDELA_REVERT_SECONDS:-15}"
 VERIFY_SECONDS="${OMARCHY_CANDELA_VERIFY_SECONDS:-3}"
+COMMAND_SECONDS="${OMARCHY_CANDELA_COMMAND_SECONDS:-2}"
+# The calls that change displays (hyprctl eval of monitor rules, hyprctl
+# reload) block for as long as the modeset takes, which is not a query's two
+# seconds. 15 is a placeholder until a real mode switch has been timed.
+APPLY_SECONDS="${OMARCHY_CANDELA_APPLY_SECONDS:-15}"
+LOCK_SECONDS="${OMARCHY_CANDELA_LOCK_SECONDS:-2}"
+# Longer than a keep can hold the lock: commit, reload, verify and, on
+# failure, the restore path, each bounded by APPLY_SECONDS.
+WATCHDOG_LOCK_SECONDS="${OMARCHY_CANDELA_WATCHDOG_LOCK_SECONDS:-45}"
 INTERNAL_RE='^(eDP|LVDS|DSI)-'
 
 # A transient systemd unit (the revert timer) may lack the compositor's
@@ -109,8 +118,23 @@ is_internal() { [[ $1 =~ $INTERNAL_RE ]]; }
 acquire_lock() {
   mkdir -p "$STATE_DIR"
   exec 9>"$STATE_DIR/.lock"
-  flock 9
+  flock -w "$LOCK_SECONDS" 9 || die "state lock is busy; recovery was not discarded"
 }
+
+# The detached revert is the last recovery route. A foreground command may
+# briefly own the lock when the deadline fires, so retry instead of dropping
+# the only automatic restoration attempt.
+acquire_watchdog_lock() {
+  local deadline=$(( $(now_epoch) + WATCHDOG_LOCK_SECONDS ))
+  mkdir -p "$STATE_DIR"
+  exec 9>"$STATE_DIR/.lock"
+  until flock -w 1 9; do
+    (( $(now_epoch) < deadline )) || die "state lock stayed busy; recovery record retained; run omarchy-candela revert"
+  done
+}
+
+run_bounded() { timeout --kill-after=1 --signal=TERM "$COMMAND_SECONDS" "$@"; }
+run_apply_bounded() { timeout --kill-after=1 --signal=TERM "$APPLY_SECONDS" "$@"; }
 
 read_json_arg() {
   local arg="${1:-}"
@@ -124,7 +148,7 @@ read_json_arg() {
 }
 
 live_json() {
-  hyprctl monitors all -j 2>/dev/null || die "hyprctl is not answering"
+  run_bounded hyprctl monitors all -j 2>/dev/null || die "hyprctl is not answering within ${COMMAND_SECONDS}s"
 }
 
 intent_json() {
@@ -133,6 +157,36 @@ intent_json() {
 
 pending_json() {
   if [[ -s $PENDING_FILE ]]; then cat "$PENDING_FILE"; else echo 'null'; fi
+}
+
+# A recovery baseline is compositor observation, rather than Candela's saved
+# overrides.  It is deliberately limited to fields with faithful readback.
+observed_intent() {
+  local live="$1" auto
+  auto="$(run_bounded hyprctl getoption render:cm_auto_hdr -j 2>/dev/null | jq '.int // null' 2>/dev/null || echo null)"
+  jq -n --argjson live "$live" --argjson auto "$auto" '
+    def r2: (. * 100 | round) / 100;
+    def depth: if test("2101010") then 10 elif test("16161616") then 16 else 8 end;
+    {version:1, displays: ($live | map({key:.name, value:{
+      enabled:(.disabled != true), mode:(if .width > 0 then "\(.width)x\(.height)@\(.refreshRate|r2)" else "preferred" end),
+      position:"\(.x)x\(.y)", scale:.scale, transform:(.transform // 0),
+      mirror:(if (.mirrorOf // "none") == "none" then "" else .mirrorOf end),
+      bitdepth:(.currentFormat // "" | depth), cm:(.colorManagementPreset // "srgb"),
+      sdrbrightness:(.sdrBrightness // 1), sdrsaturation:(.sdrSaturation // 1),
+      sdr_min_luminance:(.sdrMinLuminance // 0.005), sdr_max_luminance:(.sdrMaxLuminance // 80)
+    }}) | from_entries), global:(if $auto == null then {} else {cm_auto_hdr:$auto} end)}'
+}
+
+restore_observed() {
+  local baseline="$1" live chunk err
+  live="$(live_json)"
+  chunk="$(generate_lua "$baseline" "$live" "recovery baseline" "" live)"
+  run_apply_bounded hyprctl reload >/dev/null 2>&1 || { printf 'Hyprland reload failed'; return 1; }
+  err="$(apply_live "$chunk")" || { printf 'hyprctl rejected the recovery baseline: %s' "$err"; return 1; }
+  # A display that has gone since the transaction began cannot be restored
+  # live, and its file state is already back; requiring it would make every
+  # revert fail until it is plugged in again.
+  err="$(verify_live "$baseline" "$(jq -c --argjson live "$live" '[.displays | keys[] | select(. as $n | [$live[].name] | index($n) != null)]' <<<"$baseline")")" || { printf '%s' "$err"; return 1; }
 }
 
 focused_name() {
@@ -155,7 +209,8 @@ merge_intent() {
       (d.name // "" | if is_name then . else fail("display name") end) as $name
       | (d | del(.name) | to_entries | map(
           .key as $k | .value as $v
-          | if $v == null then {key: $k, value: null}
+          | if (["mode","position","scale","transform","vrr","enabled","mirror","bitdepth","cm","sdr_eotf","sdrbrightness","sdrsaturation","sdr_min_luminance","min_luminance","sdr_max_luminance","max_luminance","max_avg_luminance","icc","supports_hdr","supports_wide_color"] | index($k)) == null then fail("unknown key " + $k)
+            elif $v == null then {key: $k, value: null}
             elif $k == "mode" then (if ($v|type)=="string" and ($v|test("^(preferred|highres|highrr|[0-9]+x[0-9]+(@[0-9]+(\\.[0-9]+)?)?)$")) then . else fail("mode") end)
             elif $k == "position" then (if ($v|type)=="string" and ($v|test("^(auto|auto-(left|right|up|down)|-?[0-9]+x-?[0-9]+)$")) then . else fail("position") end)
             elif $k == "scale" then (if (($v|type)=="number" and $v > 0 and $v <= 10) or $v == "auto" then . else fail("scale") end)
@@ -177,7 +232,8 @@ merge_intent() {
     def check_global(g):
       (g // {}) | to_entries | map(
         .key as $k | .value as $v
-        | if $v == null then .
+        | if $k != "cm_auto_hdr" then fail("unknown global " + $k)
+          elif $v == null then .
           elif $k == "cm_auto_hdr" then (if $v == 0 or $v == 1 or $v == 2 then . else fail("cm_auto_hdr") end)
           else fail("unknown global " + $k) end
       ) | from_entries;
@@ -307,7 +363,7 @@ apply_live() {
   chunk="$1"
   statements="$(printf '%s\n' "$chunk" | grep -vE '^[[:space:]]*(--|$)')"
   [[ -n $statements ]] || return 0
-  output="$(hyprctl eval "$statements" 2>&1)" || { printf '%s' "$output"; return 1; }
+  output="$(run_apply_bounded hyprctl eval "$statements" 2>&1)" || { printf '%s' "$output"; return 1; }
   if [[ $output != ok* ]]; then printf '%s' "$output"; return 1; fi
 }
 
@@ -319,17 +375,24 @@ apply_live() {
 # faithfully: position and mode are skipped on a mirror, cm only for presets
 # Hyprland echoes back verbatim, scale to hyprctl's two decimals.
 verify_live() {
-  local intent="$1" deadline mismatch live
+  local intent="$1" required="${2:-[]}" deadline mismatch live
   deadline=$(( $(now_ms) + $(awk -v s="$VERIFY_SECONDS" 'BEGIN { printf "%d", s * 1000 }') ))
   while :; do
-    live="$(hyprctl monitors all -j 2>/dev/null)" || { printf 'hyprctl is not answering'; return 1; }
-    mismatch="$(jq -r -n --argjson intent "$intent" --argjson live "$live" '
+    # Measured on the desk (9 September 2026): the eval returns in ~5 ms and
+    # the modeset shows up as the next readback blocking 0.2-0.4 s. A poll
+    # that times out during a slower modeset is retried until the deadline.
+    if ! live="$(run_bounded hyprctl monitors all -j 2>/dev/null)"; then
+      (( $(now_ms) >= deadline )) && { printf 'hyprctl is not answering'; return 1; }
+      sleep 0.2; continue
+    fi
+    mismatch="$(jq -r -n --argjson intent "$intent" --argjson live "$live" --argjson required "$required" '
       def depth_of: if test("2101010") then 10 elif test("16161616") then 16 else 8 end;
       def r2: (. * 100 | round) / 100;
       [ ($intent.displays // {}) | to_entries[] | .key as $n | .value as $i
         | ([$live[] | select(.name == $n)][0]) as $d
-        | select($d != null)
-        | if $i.enabled == false then
+        | if $d == null and ($required | index($n)) != null then "\($n) is no longer connected"
+          elif $d == null then empty
+          elif $i.enabled == false then
             (if $d.disabled != true then "\($n) is still on" else empty end)
           elif $d.disabled == true then
             (if $i.enabled == true then "\($n) is still off" else empty end)
@@ -368,18 +431,18 @@ verify_live() {
 # toggles directory is still being loaded.
 probe_loaded() {
   local out
-  out="$(hyprctl eval "assert(omarchy_candela_layout_probe == \"$1\", \"candela-layout.lua did not run\")" 2>&1)" || return 1
+  out="$(run_bounded hyprctl eval "assert(omarchy_candela_layout_probe == \"$1\", \"candela-layout.lua did not run\")" 2>&1)" || return 1
   [[ $out == ok* ]]
 }
 
 stop_timer() {
-  systemctl --user stop "$REVERT_UNIT.timer" "$REVERT_UNIT.service" >/dev/null 2>&1 || true
+  run_bounded systemctl --user stop "$REVERT_UNIT.timer" "$REVERT_UNIT.service" >/dev/null 2>&1 || true
 }
 
 start_timer() {
   local token="$1"
   stop_timer
-  systemd-run --user --quiet --collect --unit="$REVERT_UNIT" \
+  run_bounded systemd-run --user --quiet --collect --unit="$REVERT_UNIT" \
     --on-active="${REVERT_SECONDS}s" --timer-property=AccuracySec=200ms \
     -- "$SELF" revert --expired --token "$token" >/dev/null 2>&1 || {
     # No systemd user manager (tests, odd sessions): fall back to a detached
@@ -391,12 +454,40 @@ start_timer() {
 }
 
 notify_shell() {
-  omarchy-shell -q "$PLUGIN_ID" refresh 2>/dev/null || true
+  run_bounded omarchy-shell -q "$PLUGIN_ID" refresh 2>/dev/null || true
 }
 
 # A temp file beside $1, not a fixed name, so two concurrent writers cannot
 # clobber each other's temp file. Caller does `cmd > "$tmp" && mv "$tmp" "$1"`.
 tmp_for() { mktemp "$(dirname "$1")/.$(basename "$1").XXXXXX"; }
+
+snapshot_files() {
+  local out='{}' key path present content
+  while (( $# >= 2 )); do
+    key="$1"; path="$2"; shift 2
+    if [[ -f $path ]]; then present=true; content="$(base64 -w0 "$path")"; else present=false; content=""; fi
+    out="$(jq -c --arg k "$key" --arg p "$path" --argjson present "$present" --arg content "$content" '.+{($k):{path:$p,present:$present,contentBase64:$content}}' <<<"$out")"
+  done
+  printf '%s' "$out"
+}
+
+restore_files() {
+  local snaps="$1" key path present tmp status=0
+  while IFS= read -r key; do
+    path="$(jq -r --arg k "$key" '.[$k].path' <<<"$snaps")"
+    present="$(jq -r --arg k "$key" '.[$k].present' <<<"$snaps")"
+    if [[ $present == true ]]; then
+      mkdir -p "$(dirname "$path")" || { status=1; continue; }
+      tmp="$(tmp_for "$path")" || { status=1; continue; }
+      if ! jq -r --arg k "$key" '.[$k].contentBase64' <<<"$snaps" | base64 -d > "$tmp" || ! mv "$tmp" "$path"; then
+        rm -f -- "$tmp"; status=1
+      fi
+    else
+      rm -f -- "$path" || status=1
+    fi
+  done < <(jq -r 'keys[]' <<<"$snaps")
+  return "$status"
+}
 
 # ---------------------------------------------------------------- built-in panel
 #
@@ -415,21 +506,7 @@ internal_name_in() {
   jq -r --arg re "$INTERNAL_RE" '[ .displays // [] | .[] | select(.name | test($re)) | select(has("enabled")) | .name ] | last // ""' <<<"$1"
 }
 
-flag_snapshot() {
-  if [[ -f $INTERNAL_FLAG ]]; then jq -nc --arg c "$(cat "$INTERNAL_FLAG")" '{present: true, content: $c}'
-  else echo '{"present":false}'; fi
-}
 
-restore_flag() {
-  local snap="${1:-null}"
-  [[ -n $snap && $snap != null ]] || return 0
-  if [[ $(jq -r '.present' <<<"$snap") == true ]]; then
-    mkdir -p "$TOGGLES_DIR"
-    jq -r '.content' <<<"$snap" > "$INTERNAL_FLAG"
-  else
-    rm -f "$INTERNAL_FLAG"
-  fi
-}
 
 # Same content Omarchy's own `omarchy-hyprland-monitor-internal off` writes.
 apply_internal_verdict() {
@@ -468,12 +545,22 @@ write_internal_scale() {
 # pending files, put Omarchy's flag back, and reload so hyprctl falls back to
 # the last kept Lua.
 unwind_pending() {
-  local before=null
-  [[ -s $PENDING_FILE ]] && before="$(jq -c '.internalFlagBefore // null' "$PENDING_FILE")"
+  local baseline=null files='{}' files_err="" live_err="" err
+  [[ -s $PENDING_FILE ]] && baseline="$(jq -c '.baseline // null' "$PENDING_FILE")"
+  [[ -s $PENDING_FILE ]] && files="$(jq -c '.files // {}' "$PENDING_FILE")"
   stop_timer
-  rm -f "$PENDING_FILE" "$PENDING_LUA"
-  restore_flag "$before"
-  hyprctl reload >/dev/null 2>&1 || true
+  # Under errexit an unguarded failure here would abort before the record
+  # below is written, leaving pending.json claiming a preview is still on.
+  restore_files "$files" || files_err="restoring the saved files failed"
+  if [[ $baseline == null ]]; then live_err="no recovery baseline"
+  elif ! live_err="$(restore_observed "$baseline")"; then live_err="${live_err:-live restoration failed}"; fi
+  if [[ -z $files_err && -z $live_err ]]; then
+    rm -f "$PENDING_FILE"
+    return 0
+  fi
+  err="${files_err}${files_err:+${live_err:+; }}${live_err}"
+  [[ -s $PENDING_FILE ]] && jq --arg e "$err" '.phase="failed"|.recovery={available:true,error:$e}' "$PENDING_FILE" > "$PENDING_FILE.tmp" && mv "$PENDING_FILE.tmp" "$PENDING_FILE"
+  return 1
 }
 
 # Reload so Hyprland re-reads the just-written layout, then check for config
@@ -481,31 +568,32 @@ unwind_pending() {
 # `keep` and `apply --now` use, so a bad write is never silently reported as
 # kept.
 reload_and_check() {
-  local intent="$1" probe="${2:-}" errors mismatch
-  hyprctl reload >/dev/null 2>&1 || true
-  errors="$(hyprctl configerrors 2>/dev/null | grep -v '^ok$' || true)"
+  local intent="$1" probe="${2:-}" required="${3:-[]}" errors mismatch
+  run_apply_bounded hyprctl reload >/dev/null 2>&1 || { printf 'Hyprland reload failed'; return 1; }
+  if ! errors="$(run_bounded hyprctl configerrors 2>/dev/null)"; then printf 'Hyprland config error query failed'; return 1; fi
+  errors="$(grep -v '^ok$' <<<"$errors" || true)"
   notify_shell
-  [[ -z $errors ]] || die "kept, but Hyprland reports config errors: $errors"
+  [[ -z $errors ]] || { printf 'Hyprland reports config errors: %s' "$errors"; return 1; }
   if [[ -n $probe ]] && ! probe_loaded "$probe"; then
-    die "kept, but Hyprland did not run $LUA_FILE on reload: is require(\"default.hypr.toggles\") still in ~/.config/hypr/hyprland.lua? \`omarchy-candela doctor\` explains."
+    printf 'Hyprland did not run %s on reload; omarchy-candela doctor explains' "$LUA_FILE"; return 1
   fi
-  if ! mismatch="$(verify_live "$intent")"; then
-    die "kept, but the compositor did not land on it: $mismatch"
+  if ! mismatch="$(verify_live "$intent" "$required")"; then
+    printf 'the compositor did not land on it: %s' "$mismatch"; return 1
   fi
 }
 
 LAST_PROBE=""
 commit_intent() {
   local intent="$1" live tmp probe
-  live="$(live_json)"
-  intent="$(strip_internal_enabled "$intent")"
+  live="$(live_json)" || return 1
+  intent="$(strip_internal_enabled "$intent")" || return 1
   probe="$(now_epoch)-$$-$RANDOM"
-  mkdir -p "$STATE_DIR" "$TOGGLES_DIR"
-  tmp="$(tmp_for "$INTENT_FILE")"
-  printf '%s\n' "$intent" | jq . > "$tmp" && mv "$tmp" "$INTENT_FILE"
-  tmp="$(tmp_for "$LUA_FILE")"
-  generate_lua "$intent" "$live" "" "$probe" file > "$tmp" && mv "$tmp" "$LUA_FILE"
-  write_internal_scale "$intent" "$live"
+  mkdir -p "$STATE_DIR" "$TOGGLES_DIR" || return 1
+  tmp="$(tmp_for "$INTENT_FILE")" || return 1
+  if ! printf '%s\n' "$intent" | jq . > "$tmp" || ! mv "$tmp" "$INTENT_FILE"; then rm -f -- "$tmp"; return 1; fi
+  tmp="$(tmp_for "$LUA_FILE")" || return 1
+  if ! generate_lua "$intent" "$live" "" "$probe" file > "$tmp" || ! mv "$tmp" "$LUA_FILE"; then rm -f -- "$tmp"; return 1; fi
+  write_internal_scale "$intent" "$live" || return 1
   LAST_PROBE="$probe"
 }
 
@@ -526,15 +614,14 @@ cmd_state() {
 
   brightness=""
   [[ -n $focused ]] && brightness="$(omarchy-brightness-display --monitor "$focused" 2>/dev/null || true)"
-  auto_hdr="$(hyprctl getoption render:cm_auto_hdr -j 2>/dev/null | jq '.int // null' 2>/dev/null || echo null)"
-  sdr_eotf="$(hyprctl getoption render:cm_sdr_eotf -j 2>/dev/null | jq -r '.str // "default"' 2>/dev/null || echo default)"
+  auto_hdr="$(run_bounded hyprctl getoption render:cm_auto_hdr -j 2>/dev/null | jq '.int // null' 2>/dev/null || echo null)"
+  sdr_eotf="$(run_bounded hyprctl getoption render:cm_sdr_eotf -j 2>/dev/null | jq -r '.str // "default"' 2>/dev/null || echo default)"
   internal_flag=false; [[ -f $INTERNAL_FLAG ]] && internal_flag=true
-
   jq -n --argjson live "$live" --argjson intent "$intent" --argjson pending "$pending" \
         --argjson edids "$edids" --arg focused "$focused" --arg brightness "$brightness" \
         --argjson autoHdr "$auto_hdr" --arg sdrEotf "$sdr_eotf" --arg pluginId "$PLUGIN_ID" \
         --argjson revertSeconds "$REVERT_SECONDS" --argjson now "$(now_epoch)" \
-        --argjson internalFlag "$internal_flag" --arg internalRe "$INTERNAL_RE" '
+        --argjson internalFlag "$internal_flag" --arg internalRe "$INTERNAL_RE" --arg stateDir "$STATE_DIR" '
     def bitdepth_of: if test("2101010") then 10 elif test("16161616") then 16 else 8 end;
     {
       version: 1,
@@ -542,8 +629,10 @@ cmd_state() {
       now: $now,
       focused: $focused,
       revertSeconds: $revertSeconds,
-      pending: (if $pending == null then null else { since: $pending.since, expires: $pending.expires, remaining: ([$pending.expires - $now, 0] | max) } end),
-      global: { cm_auto_hdr: $autoHdr, cm_sdr_eotf: $sdrEotf, kept: ($intent.global // {}), pending: (($pending.intent.global // {}) ), internalPanelOffByOmarchy: $internalFlag },
+      pending: (if $pending == null then null else {since:$pending.since,expires:$pending.expires,remaining:([$pending.expires-$now,0]|max),phase:($pending.phase//"previewing"),intent:$pending.intent,baseline:$pending.baseline,targets:($pending.targets//[])} end),
+      paths:{stateDir:$stateDir},
+      recovery:(if $pending.recovery then ($pending.recovery+{status:$pending.phase,token:$pending.token}) else null end),
+      global: { cm_auto_hdr: $autoHdr, cm_sdr_eotf: $sdrEotf, kept: ($intent.global // {}), pending: (($pending.intent.global // {}) ), pendingConfig:(if $pending==null then null else ($pending.intent.global//{}) end), internalPanelOffByOmarchy: $internalFlag },
       displays: [ $live[] | {
         name, description, make, model, serial: (.serial | gsub("^\\s+|\\s+$"; "")),
         internal: (.name | test($internalRe)),
@@ -566,21 +655,33 @@ cmd_state() {
 cmd_apply() {
   local now=0
   if [[ ${1:-} == "--now" ]]; then now=1; shift; fi
-  local change intent base merged live chunk_live chunk_file
+  local change intent base merged live chunk_live chunk_file baseline previous targets files
   change="$(read_json_arg "${1:-}")"
   [[ -n $change ]] || die "apply needs a JSON change"
   printf '%s' "$change" | jq -e . >/dev/null 2>&1 || die "change is not valid JSON"
+  targets="$(jq -c '[.displays // [] | .[].name] | unique' <<<"$change")"
 
   # Chain onto a pending change, so successive slider moves accumulate.
-  local before_flag=null
   if [[ -s $PENDING_FILE ]]; then
     base="$(jq -c '.intent' "$PENDING_FILE")"
-    before_flag="$(jq -c '.internalFlagBefore // null' "$PENDING_FILE")"
+    baseline="$(jq -c '.baseline' "$PENDING_FILE")"
+    previous="$(jq -c '.previousIntent' "$PENDING_FILE")"
+    files="$(jq -c '.files' "$PENDING_FILE")"
+    # An immediate slider move joins the outstanding preview; it cannot keep
+    # unrelated fields that are still waiting for confirmation.
+    now=0
   else
     base="$(intent_json)"
+    previous="$base"
+    files="$(snapshot_files intent "$INTENT_FILE" layout "$LUA_FILE" pendingLua "$PENDING_LUA" internalFlag "$INTERNAL_FLAG" internalScale "$INTERNAL_SCALE_FILE")"
   fi
   merged="$(merge_intent "$base" "$change")" || die "${merged#jq: error (at <unknown>): }"
   live="$(live_json)"
+  [[ -n ${baseline:-} && $baseline != null ]] || baseline="$(observed_intent "$live")"
+  # Every display named by this interactive transaction must still exist.
+  local missing
+  missing="$(jq -r -n --argjson c "$change" --argjson l "$live" '[($c.displays//[])[].name | select(. as $n | [$l[].name] | index($n) == null)] | join(", ")')"
+  [[ -z $missing ]] || die "requested display is not connected: $missing"
   merged="$(remember_geometry "$merged" "$live" "$change")"
   check_some_display_stays_on "$merged" "$live"
   chunk_live="$(generate_lua "$merged" "$live" "" "" live)"
@@ -590,7 +691,6 @@ cmd_apply() {
   internal="$(internal_name_in "$change")"
   # The first change in a chain to touch the panel's flag records what it
   # looked like before; later ones in the same chain keep that original.
-  if [[ -n $verdict && $before_flag == null ]]; then before_flag="$(flag_snapshot)"; fi
 
   # Pending is written and the timer armed BEFORE the live displays are
   # touched, so a hyprctl rejection partway through, or the process being
@@ -600,8 +700,9 @@ cmd_apply() {
   token="$(now_epoch)-$$-$RANDOM"
   since="$(now_epoch)"; expires=$(( since + REVERT_SECONDS ))
   tmp="$(tmp_for "$PENDING_FILE")"
-  jq -n --argjson intent "$merged" --argjson since "$since" --argjson expires "$expires" --arg token "$token" --argjson before "$before_flag" \
-    '{since: $since, expires: $expires, token: $token, intent: $intent, internalFlagBefore: $before}' > "$tmp" && mv "$tmp" "$PENDING_FILE"
+  if [[ -s $PENDING_FILE ]]; then targets="$(jq -c --argjson n "$targets" '((.targets//[]) + $n)|unique' "$PENDING_FILE")"; fi
+  jq -n --argjson intent "$merged" --argjson baseline "$baseline" --argjson previous "$previous" --argjson targets "$targets" --argjson files "$files" --argjson since "$since" --argjson expires "$expires" --arg token "$token" \
+    '{since:$since, expires:$expires, token:$token, phase:"previewing", intent:$intent, baseline:$baseline, previousIntent:$previous, targets:$targets,files:$files}' > "$tmp" && mv "$tmp" "$PENDING_FILE"
   start_timer "$token"
 
   if (( ! now )); then
@@ -619,17 +720,13 @@ cmd_apply() {
     unwind_pending
     die "hyprctl rejected the change: $err"
   fi
-  if ! err="$(verify_live "$merged")"; then
+  if ! err="$(verify_live "$merged" "$targets")"; then
     unwind_pending
     die "applied, but the compositor did not land on it, so it was undone: $err"
   fi
 
   if (( now )); then
-    stop_timer
-    rm -f "$PENDING_FILE" "$PENDING_LUA"
-    commit_intent "$merged"
-    reload_and_check "$(intent_json)" "$LAST_PROBE"
-    echo "kept"
+    cmd_keep
     return
   fi
 
@@ -639,12 +736,35 @@ cmd_apply() {
 
 cmd_keep() {
   [[ -s $PENDING_FILE ]] || { echo "nothing pending"; return 0; }
-  local intent
+  local intent previous baseline targets files err restore_err
   intent="$(jq -c '.intent' "$PENDING_FILE")"
+  previous="$(jq -c '.previousIntent' "$PENDING_FILE")"
+  baseline="$(jq -c '.baseline' "$PENDING_FILE")"
+  targets="$(jq -c '.targets//[]' "$PENDING_FILE")"
+  files="$(jq -c '.files' "$PENDING_FILE")"
+  jq '.phase="saving"' "$PENDING_FILE" > "$PENDING_FILE.tmp" && mv "$PENDING_FILE.tmp" "$PENDING_FILE"
+  # Keep this call in the current shell: commit_intent returns the load probe
+  # through LAST_PROBE, and a command substitution would lose that assignment.
+  if commit_intent "$intent"; then
+    rm -f "$PENDING_LUA"
+    err="$(reload_and_check "$(intent_json)" "$LAST_PROBE" "$targets")" || true
+  else
+    err="persistence failed"
+  fi
+  if [[ -n $err ]]; then
+    if ! restore_files "$files"; then
+      jq --arg e "$err; restoring the saved files failed" '.phase="failed"|.recovery={available:true,error:$e,restored:false}' "$PENDING_FILE" > "$PENDING_FILE.tmp" && mv "$PENDING_FILE.tmp" "$PENDING_FILE"
+      die "keep failed and recovery record was retained: $err; restoring the saved files failed"
+    fi
+    if restore_err="$(restore_observed "$baseline")"; then
+      jq --arg e "$err" '.phase="failed"|.recovery={available:true,error:$e,restored:true}' "$PENDING_FILE" > "$PENDING_FILE.tmp" && mv "$PENDING_FILE.tmp" "$PENDING_FILE"
+      die "keep failed; previous configuration restored: $err"
+    fi
+    jq --arg e "$err; recovery failed: $restore_err" '.phase="failed"|.recovery={available:true,error:$e,restored:false}' "$PENDING_FILE" > "$PENDING_FILE.tmp" && mv "$PENDING_FILE.tmp" "$PENDING_FILE"
+    die "keep failed and recovery remains available: $err; $restore_err"
+  fi
   stop_timer
-  commit_intent "$intent"
   rm -f "$PENDING_FILE" "$PENDING_LUA"
-  reload_and_check "$(intent_json)" "$LAST_PROBE"
   echo "kept"
 }
 
@@ -672,23 +792,35 @@ cmd_revert() {
   # SIGTERM this very process before the pending file is removed. The timer
   # has already elapsed, so only an interactive revert needs to cancel it.
   (( expired )) || stop_timer
-  local had_pending=0 before=null
-  if [[ -s $PENDING_FILE ]]; then had_pending=1; before="$(jq -c '.internalFlagBefore // null' "$PENDING_FILE")"; fi
-  rm -f "$PENDING_FILE" "$PENDING_LUA"
-  restore_flag "$before"
-  hyprctl reload >/dev/null 2>&1 || true
+  local had_pending=0 baseline=null files='{}' files_err="" live_err="" err phase_before=previewing
+  if [[ -s $PENDING_FILE ]]; then had_pending=1; baseline="$(jq -c '.baseline//null' "$PENDING_FILE")"; files="$(jq -c '.files//{}' "$PENDING_FILE")"; phase_before="$(jq -r '.phase // "previewing"' "$PENDING_FILE")"; fi
+  [[ -s $PENDING_FILE ]] && jq '.phase="reverting"' "$PENDING_FILE" > "$PENDING_FILE.tmp" && mv "$PENDING_FILE.tmp" "$PENDING_FILE"
+  restore_files "$files" || files_err="restoring the saved files failed"
+  if (( had_pending )); then
+    if [[ $baseline == null ]]; then
+      # A journal written before baselines existed: the reload alone is the
+      # revert, as it always was. Replaying the pre-reload live state here
+      # would put the preview straight back.
+      run_apply_bounded hyprctl reload >/dev/null 2>&1 || live_err="Hyprland reload failed"
+    elif ! live_err="$(restore_observed "$baseline")"; then
+      live_err="${live_err:-reload or baseline replay failed}"
+    fi
+  fi
+  if [[ -n $files_err || -n $live_err ]]; then
+    err="${files_err}${files_err:+${live_err:+; }}${live_err}"
+    jq --arg e "$err" '.phase="failed"|.recovery={available:true,error:$e,restored:false}' "$PENDING_FILE" > "$PENDING_FILE.tmp" && mv "$PENDING_FILE.tmp" "$PENDING_FILE"
+    die "revert failed; recovery record retained: $err"
+  fi
+  rm -f "$PENDING_FILE"
   if (( expired && had_pending )); then
-    omarchy-notification-send "Display changes reverted" "They were not kept within ${REVERT_SECONDS} seconds." -t 4000 2>/dev/null || true
+    if [[ $phase_before == failed ]]; then
+      omarchy-notification-send "Display changes reverted" "Saving them had failed; the previous configuration is back." -t 4000 2>/dev/null || true
+    else
+      omarchy-notification-send "Display changes reverted" "They were not kept within ${REVERT_SECONDS} seconds." -t 4000 2>/dev/null || true
+    fi
   fi
   notify_shell
   echo "reverted"
-  # The reload is the whole of the revert, so say so if it did not take:
-  # an exit code the shell can show beats a display quietly left changed.
-  local mismatch
-  if (( had_pending )) && ! mismatch="$(verify_live "$(intent_json)")"; then
-    echo "omarchy-candela: reverted, but the compositor did not return to the kept configuration: $mismatch" >&2
-    exit 1
-  fi
 }
 
 cmd_persist() {
@@ -743,21 +875,31 @@ cmd_open() {
 }
 
 cmd_icc() {
-  [[ ${1:-list} == "list" ]] || die "icc supports: list"
+  local action="${1:-list}"
+  [[ $action == list && $# -le 1 ]] || die "icc supports only: list"
   local dirs=("$HOME/.local/share/icc" "$HOME/.color/icc" "$HOME/.local/share/color/icc" /usr/share/color/icc /usr/local/share/color/icc)
   {
     for d in "${dirs[@]}"; do
       [[ -d $d ]] || continue
       find "$d" -type f \( -iname '*.icc' -o -iname '*.icm' \) -print0 2>/dev/null
     done
-  } | sort -z | jq -Rsc 'split(" ") | map(select(length > 0)) | map({path: ., name: (split("/") | last)})'
+  } | sort -zu | while IFS= read -r -d '' f; do [[ -r $f ]] && validate_icc "$f" && icc_record "$f" || true; done | jq -s .
 }
 
-# A machine with every display off has nowhere to show a Keep button. A kept
-# layout that switches one display off is unconditional in Lua, so booting it
-# without the other display attached leaves the screen black; Omarchy's own
-# recovery unit covers its flag, this covers ours. Prefer the built-in panel,
-# the one display a laptop always has, else whatever comes first.
+icc_record() {
+  local path="$1" statv hash
+  statv="$(stat -c '%s %Y' "$path")"; hash="$(sha256sum "$path" | cut -d' ' -f1)"
+  jq -nc --arg id "$hash" --arg name "$(basename "$path")" --arg path "$path" --argjson size "${statv%% *}" --argjson modified "${statv##* }" \
+    '{id:$id,name:$name,path:$path,size:$size,modified:$modified}'
+}
+
+validate_icc() {
+  local p="$1" declared actual sig
+  actual="$(stat -c %s "$p")"; (( actual >= 128 )) || return 1
+  declared="$(od -An -tu4 -N4 --endian=big "$p" | tr -d ' ')"; sig="$(dd if="$p" bs=1 skip=36 count=4 status=none)"
+  [[ $sig == acsp && $declared =~ ^[0-9]+$ && $declared -ge 128 && $declared -le $actual ]]
+}
+
 cmd_recover() {
   local live rescue
   live="$(live_json)"
@@ -767,6 +909,10 @@ cmd_recover() {
   fi
   rescue="$(jq -r --arg re "$INTERNAL_RE" '([.[] | select(.name | test($re))][0] // .[0]).name' <<<"$live")"
   omarchy-notification-send "Candela" "Every display was off. Switching $rescue back on." -t 6000 2>/dev/null || true
+  # A journal left from before the blackout would make the rescue's --now
+  # join it as a preview with a timer, and the timer would switch the
+  # display off again. The rescue outranks whatever that journal was for.
+  if [[ -s $PENDING_FILE ]]; then stop_timer; rm -f "$PENDING_FILE" "$PENDING_LUA"; fi
   cmd_apply --now "$(jq -nc --arg n "$rescue" '{displays: [{name: $n, enabled: true}]}')" >/dev/null
   echo "recovered $rescue"
 }
@@ -886,7 +1032,7 @@ case "$cmd" in
   state) cmd_state ;;
   apply) acquire_lock; cmd_apply "$@" ;;
   keep) acquire_lock; cmd_keep ;;
-  revert) acquire_lock; cmd_revert "$@" ;;
+  revert) if [[ " $* " == *" --expired "* ]]; then acquire_watchdog_lock; else acquire_lock; fi; cmd_revert "$@" ;;
   persist) acquire_lock; cmd_persist ;;
   hdr) acquire_lock; cmd_hdr "$@" ;;
   recover) acquire_lock; cmd_recover ;;

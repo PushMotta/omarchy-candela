@@ -172,7 +172,30 @@ test("captions describe the physical output", () => {
 
 test("effective intent lets pending override kept", () => {
   const d = display({ kept: { cm: "hdr", sdr_max_luminance: 203 }, pendingConfig: { sdr_max_luminance: 250 } })
-  assert.deepEqual(M.effectiveIntent(d), { cm: "hdr", sdr_max_luminance: 250 })
+  assert.deepEqual(M.effectiveIntent(d), { sdr_max_luminance: 250 })
+  assert.deepEqual(M.effectiveIntent(display({ kept: { supports_hdr: -1 }, pendingConfig: {} })), {})
+  assert.deepEqual(M.effectiveIntent(display({ kept: { supports_hdr: -1 }, pendingConfig: null })), { supports_hdr: -1 })
+})
+
+test("global pending intent is authoritative, including an empty snapshot", () => {
+  assert.deepEqual(M.effectiveGlobal({ kept: { cm_auto_hdr: 1 }, pendingConfig: {} }), {})
+  assert.deepEqual(M.effectiveGlobal({ kept: { cm_auto_hdr: 1 }, pendingConfig: null }), { cm_auto_hdr: 1 })
+  assert.deepEqual(M.effectiveGlobal({ kept: { cm_auto_hdr: 1 }, pendingConfig: { cm_auto_hdr: 0 } }), { cm_auto_hdr: 0 })
+})
+
+test("resolution and refresh choices preserve only advertised mode pairs", () => {
+  const d = display({ availableModes: ["3840x2160@60.00Hz", "3840x2160@120.00Hz", "2560x1440@144.00Hz"] })
+  assert.deepEqual(M.resolutionOptions(d).map(x => x.value), ["3840x2160", "2560x1440"])
+  assert.deepEqual(M.refreshOptions(d, "3840x2160").map(x => x.value), ["3840x2160@60", "3840x2160@120"])
+  assert.deepEqual(M.refreshOptions(d, "2560x1440").map(x => x.value), ["2560x1440@144"])
+})
+
+test("missing numeric metadata stays unknown and luminance decimals round trip", () => {
+  assert.equal(M.capabilityLine({ available: true, hdr: { maxLuminance: null } }), "SDR")
+  assert.equal(M.luminanceLine({ hdr: { maxLuminance: null } }), "")
+  assert.equal(M.formatLuminance(null), "Unknown")
+  assert.equal(M.formatLuminance(0.2), "0.2")
+  assert.equal(M.parseLuminance("0,125"), 0.125)
 })
 
 test("layout geometry works in logical pixels", () => {

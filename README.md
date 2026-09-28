@@ -219,6 +219,11 @@ rejected at every level, and two rules hold on the merged result rather than
 just the change: an ICC profile and an HDR preset cannot coexist, and an HDR
 preset is refused while `supports_hdr` is forced off (`-1`).
 
+A field set to `null` is cleared from the intent: the display then keeps
+whatever it is doing at that moment, and the next keep pins that into the
+layout file, so clearing `mode` does not return a display to its preferred
+mode. Set the mode you want instead.
+
 ## How it persists
 
 - `~/.local/state/omarchy/candela/intent.json` — what you chose, per connector.
@@ -248,7 +253,10 @@ accepted, apply reads the compositor back for up to three seconds and undoes
 a change Hyprland did not land on, naming the field. `keep` and `apply --now`
 reload, check `hyprctl configerrors`, ask Hyprland whether the layout file
 actually ran (the file sets a global for exactly this question; `doctor` asks
-it too), and read the displays back once more.
+it too), and read the displays back once more. While a preview is pending,
+`apply --now` joins it instead of keeping: the change shows at once and waits
+for Keep with the rest, so an immediate change can never silently confirm
+fields that are still awaiting a decision.
 
 A display that is switched off keeps its mode, position and scale in intent,
 so it comes back where it was. Should every display ever be off, for instance
@@ -292,9 +300,10 @@ Layout:
 ```
 manifest.json      kinds: bar-widget (Popup.qml), overlay (Studio.qml), service (Service.qml)
 Model.js           pure logic shared by QML and tests
-components/        ApplyBar, DisplayCanvas, GamutPlot
+components/        ApplyBar, DecimalField, DisplayCanvas, FoldHint, GamutPlot
 bin/               omarchy-candela, omarchy-candela-edid
-test/              all, *-test.sh, fake-hyprctl.sh (a compositor that keeps state), model.test.js, fixtures/
+test/              all, *-test.sh, fake-hyprctl.sh (a compositor that keeps state), model.test.js, fixtures/,
+                   *.test.qml with qml-stubs/ (offscreen component checks; skipped without the Qt 6 runtime)
 design/            the visual design review (HTML, real theme tokens)
 ```
 

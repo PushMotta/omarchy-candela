@@ -25,6 +25,13 @@ Item {
   // Pointer travel, in screen px, before a press turns into a drag. Without it
   // a click that selects a display also nudges it by a pixel or two.
   property int dragStartThreshold: 4
+  property real zoom: 1
+  property real panX: 0
+  property real panY: 0
+  property bool snapBypass: false
+  function fit() { zoom = 1; panX = 0; panY = 0 }
+  function zoomIn() { zoom = Math.min(4, zoom * 1.2) }
+  function zoomOut() { zoom = Math.max(0.5, zoom / 1.2) }
 
   // The desktop's own wallpaper, dimmed, inside every block. A display
   // arranger whose blocks show what is actually on those displays stops being
@@ -62,7 +69,7 @@ Item {
     if (b.width <= 0 || b.height <= 0) return 0.1
     var fx = (root.width - root.padding * 2) / b.width
     var fy = (root.height - root.padding * 2) / b.height
-    return Math.max(0.01, Math.min(fx, fy, 0.25))
+    return Math.max(0.01, Math.min(fx, fy, 0.25)) * root.zoom
   }
   // What height this canvas would need to hold the layout at the width it has,
   // so the frame can hug the arrangement instead of stranding it in the middle
@@ -75,8 +82,8 @@ Item {
     return inner * (b.height / b.width) + root.padding * 2
   }
 
-  readonly property real originX: root.padding + ((root.width - root.padding * 2) - root.bounds.width * root.factor) / 2 - root.bounds.x * root.factor
-  readonly property real originY: root.padding + ((root.height - root.padding * 2) - root.bounds.height * root.factor) / 2 - root.bounds.y * root.factor
+  readonly property real originX: root.padding + ((root.width - root.padding * 2) - root.bounds.width * root.factor) / 2 - root.bounds.x * root.factor + root.panX
+  readonly property real originY: root.padding + ((root.height - root.padding * 2) - root.bounds.height * root.factor) / 2 - root.bounds.y * root.factor + root.panY
 
   property var guides: []
   property string draggingName: ""
@@ -118,7 +125,7 @@ Item {
 
   function nudge(dx, dy) {
     var r = rectByName(selectedName)
-    if (!r) return
+    if (!r || r.disabled || r.mirrorOf) return
     root.moved(r.name, r.x + dx, r.y + dy)
   }
 
@@ -337,7 +344,7 @@ Item {
             if (Math.abs(dx) < root.dragStartThreshold && Math.abs(dy) < root.dragStartThreshold) return
             armed = true
             root.dragLogX = originLogX; root.dragLogY = originLogY
-            root.dragTargets = Model.snapTargets(root.rects, block.disp.name)
+            root.dragTargets = root.snapBypass || (mouse.modifiers & Qt.AltModifier) ? [] : Model.snapTargets(root.rects, block.disp.name)
             root.draggingName = block.disp.name
           }
           var snapped = Model.dragPosition({ name: block.disp.name, x: originLogX, y: originLogY,

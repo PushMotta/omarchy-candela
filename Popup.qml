@@ -559,6 +559,9 @@ Panel {
             foreground: root.fg
             fontFamily: root.fam
             cursorIndex: root.cursorActive && root.focusSection === "pending" ? root.selectedIndex : -1
+            summary: root.service ? root.service.pendingSummary : "Display settings changed"
+            phase: root.service ? root.service.operationPhase : "previewing"
+            error: root.service ? root.service.recoveryError : ""
             onKeep: root.service.keep()
             onRevert: root.service.revert()
             onHovered: function(index, h) { if (h) root.hoverInto("pending", index) }

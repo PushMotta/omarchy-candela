@@ -18,7 +18,8 @@ if command -v node >/dev/null 2>&1; then
   echo "== node tests"
   if node --test "$root"/test/*.test.js; then :; else failed=1; fi
 else
-  echo "== node not found; skipping Model.js tests"
+  echo "== node not found; Model.js tests are required" >&2
+  failed=1
 fi
 
 (( failed == 0 )) && echo "ALL PASSED" || { echo "FAILURES" >&2; exit 1; }

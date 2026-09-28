@@ -44,14 +44,18 @@ jobs:
       - name: QML lint
         run: |
           QMLLINT="$(command -v /usr/lib/qt6/bin/qmllint || command -v qmllint6 || command -v qmllint)"
+          if [ -z "$QMLLINT" ]; then echo "qmllint is required" >&2; exit 1; fi
           "$QMLLINT" --version
           status=0
           for f in *.qml components/*.qml; do
-            bad="$("$QMLLINT" --json /dev/stdout "$f" 2>/dev/null \
-              | jq -r '[.. | objects
+            result="$("$QMLLINT" --json /dev/stdout "$f" 2>/dev/null || true)"
+            if [ -z "$result" ] || ! jq -s -e 'length > 0' >/dev/null 2>&1 <<<"$result"; then
+              echo "== $f"; echo "qmllint returned no parseable JSON result" >&2; status=1; continue
+            fi
+            bad="$(jq -sr '[.. | objects
                           | select(has("message"))
                           | select((.id? == "syntax") or (.message | test("expected token|unexpected token|syntax error|parse error"; "i")))
-                          | "\(.line // "?"):\(.column // "?") \(.message)"] | .[]')"
+                          | "\(.line // "?"):\(.column // "?") \(.message)"] | .[]' <<<"$result")"
             if [ -n "$bad" ]; then echo "== $f"; printf '%s\n' "$bad"; status=1; else echo "ok $f"; fi
           done
           exit $status

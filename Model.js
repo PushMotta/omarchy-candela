@@ -12,6 +12,7 @@ var SCALE_PRESETS = ["1", "1.25", "1.6", "2", "3", "4"]
 // ---------------------------------------------------------------- numbers
 
 function num(v, fallback) {
+  if (v === null || v === undefined || v === "") return fallback
   var n = Number(v)
   return isFinite(n) ? n : fallback
 }
@@ -127,12 +128,26 @@ function currentModeValue(display) {
 
 // Effective intent for a display: what is pending wins over what was kept.
 function effectiveIntent(display) {
-  var out = {}
-  var kept = (display && display.kept) || {}
-  var pending = (display && display.pendingConfig) || {}
-  for (var k in kept) out[k] = kept[k]
-  for (var p in pending) out[p] = pending[p]
-  return out
+  if (display && display.pendingConfig !== null && display.pendingConfig !== undefined)
+    return display.pendingConfig || {}
+  return (display && display.kept) || {}
+}
+
+function effectiveGlobal(globalState) {
+  var g = globalState || {}
+  if (g.pendingConfig !== null && g.pendingConfig !== undefined) return g.pendingConfig || {}
+  return g.kept || {}
+}
+
+function formatLuminance(value, decimals) {
+  var n = num(value, NaN)
+  return isFinite(n) ? n.toFixed(decimals === undefined ? 1 : decimals).replace(/\.0+$/, "") : "Unknown"
+}
+
+function parseLuminance(text) {
+  var normalized = String(text === undefined ? "" : text).trim().replace(",", ".")
+  if (!/^\d+(?:\.\d+)?$/.test(normalized)) return NaN
+  return Number(normalized)
 }
 
 // One of "sdr" | "wide" | "hdr", from what the compositor reports right now.
@@ -283,6 +298,32 @@ function displayTitle(display) {
   if (!display) return ""
   var model = String(display.model || "").trim()
   return model ? display.name + " · " + model : display.name
+}
+
+function resolutionOptions(display) {
+  var seen = {}, out = []
+  modeOptions(display).forEach(function (m) {
+    var key = m.width + "x" + m.height
+    if (!seen[key]) { seen[key] = true; out.push({ value: key, label: m.width + "×" + m.height, width: m.width, height: m.height }) }
+  })
+  return out
+}
+
+function refreshOptions(display, resolution) {
+  return modeOptions(display).filter(function (m) { return m.width + "x" + m.height === resolution })
+    .map(function (m) { return { value: m.value, label: m.refresh + " Hz", refresh: m.refresh } })
+}
+
+function changeSummary(change) {
+  if (!change) return "Checking display settings"
+  var parts = []
+  ;(change.displays || []).forEach(function (d) {
+    var fields = []
+    for (var k in d) if (k !== "name") fields.push(k.replace(/_/g, " "))
+    parts.push(d.name + ": " + (fields.length ? fields.join(", ") : "settings"))
+  })
+  if (change.global) parts.push("Global colour settings")
+  return parts.join(" · ") || "Display settings"
 }
 
 function panelLine(display) {
@@ -515,10 +556,11 @@ if (typeof module !== "undefined") {
     REFERENCE_WHITE: REFERENCE_WHITE, SDR_WHITE_FLOOR: SDR_WHITE_FLOOR, SCALE_PRESETS: SCALE_PRESETS,
     cleanScale: cleanScale, availableScales: availableScales, scaleIndex: scaleIndex, formatScale: formatScale, sameScale: sameScale, round5: round5,
     bitdepthFromFormat: bitdepthFromFormat, formatMode: formatMode, parseMode: parseMode, modeOptions: modeOptions, currentModeValue: currentModeValue,
-    effectiveIntent: effectiveIntent, colourMode: colourMode, offeredModes: offeredModes, hdrUnavailableReason: hdrUnavailableReason, sdrWhiteRange: sdrWhiteRange, defaultSdrWhite: defaultSdrWhite,
+    effectiveIntent: effectiveIntent, effectiveGlobal: effectiveGlobal, colourMode: colourMode, offeredModes: offeredModes, hdrUnavailableReason: hdrUnavailableReason, sdrWhiteRange: sdrWhiteRange, defaultSdrWhite: defaultSdrWhite,
     fieldsForMode: fieldsForMode, sdrWhiteToSlider: sdrWhiteToSlider, sliderToSdrWhite: sliderToSdrWhite,
     outputCaption: outputCaption, capabilityLine: capabilityLine, luminanceLine: luminanceLine, primariesLine: primariesLine,
-    displayTitle: displayTitle, panelLine: panelLine, metaLine: metaLine,
+    displayTitle: displayTitle, panelLine: panelLine, metaLine: metaLine, formatLuminance: formatLuminance, parseLuminance: parseLuminance,
+    resolutionOptions: resolutionOptions, refreshOptions: refreshOptions, changeSummary: changeSummary,
     logicalSize: logicalSize, rectOf: rectOf, overlaps: overlaps, boundsOf: boundsOf, snapRect: snapRect, anyOverlap: anyOverlap, layoutCaption: layoutCaption,
     arrangeable: arrangeable, snapTargets: snapTargets, withRect: withRect, dragPosition: dragPosition,
     reflowAfterResize: reflowAfterResize, placeOutsideOverlaps: placeOutsideOverlaps, snapBeside: snapBeside,
