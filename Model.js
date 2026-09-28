@@ -7,6 +7,12 @@
 
 var REFERENCE_WHITE = 203      // BT.2408 reference white, cd/m²
 var SDR_WHITE_FLOOR = 80       // Hyprland's default sdr_max_luminance
+// What Hyprland 0.56 tells clients using Wayland colour management
+// (Chromium, Electron) SDR white is, whatever sdr_max_luminance says: the HDR
+// image description it offers them keeps the default 203 cd/m² reference
+// (read from its source, CMonitor::applyCMType). Only other windows follow
+// the SDR white slider, so away from 203 the two disagree.
+var CM_CLIENT_REFERENCE_WHITE = 203
 var SCALE_PRESETS = ["1", "1.25", "1.6", "2", "3", "4"]
 
 // ---------------------------------------------------------------- numbers
@@ -230,6 +236,16 @@ function fieldsForMode(mode, caps, intent) {
 
 // Slider position for SDR white: perceptually a log scale reads better than
 // linear across 80–500 cd/m², and 203 lands near the middle.
+// The note under an SDR white control: empty at 203, where every window
+// agrees, else what the colour-managed apps do instead.
+function sdrWhiteClientNote(nits, compact) {
+  var n = Math.round(num(nits, NaN))
+  if (!isFinite(n) || n === CM_CLIENT_REFERENCE_WHITE) return ""
+  return compact
+    ? "Chromium and Electron apps stay at " + CM_CLIENT_REFERENCE_WHITE + " cd/m² (Hyprland 0.56)."
+    : "In Hyprland 0.56, apps that use Wayland colour management, such as Chromium and Electron, stay at " + CM_CLIENT_REFERENCE_WHITE + " cd/m²."
+}
+
 function sdrWhiteToSlider(nits, range) {
   var lo = Math.log(range.min), hi = Math.log(range.max)
   if (hi <= lo) return 0
@@ -556,7 +572,7 @@ if (typeof module !== "undefined") {
     REFERENCE_WHITE: REFERENCE_WHITE, SDR_WHITE_FLOOR: SDR_WHITE_FLOOR, SCALE_PRESETS: SCALE_PRESETS,
     cleanScale: cleanScale, availableScales: availableScales, scaleIndex: scaleIndex, formatScale: formatScale, sameScale: sameScale, round5: round5,
     bitdepthFromFormat: bitdepthFromFormat, formatMode: formatMode, parseMode: parseMode, modeOptions: modeOptions, currentModeValue: currentModeValue,
-    effectiveIntent: effectiveIntent, effectiveGlobal: effectiveGlobal, colourMode: colourMode, offeredModes: offeredModes, hdrUnavailableReason: hdrUnavailableReason, sdrWhiteRange: sdrWhiteRange, defaultSdrWhite: defaultSdrWhite,
+    effectiveIntent: effectiveIntent, effectiveGlobal: effectiveGlobal, colourMode: colourMode, offeredModes: offeredModes, hdrUnavailableReason: hdrUnavailableReason, sdrWhiteRange: sdrWhiteRange, defaultSdrWhite: defaultSdrWhite, sdrWhiteClientNote: sdrWhiteClientNote, CM_CLIENT_REFERENCE_WHITE: CM_CLIENT_REFERENCE_WHITE,
     fieldsForMode: fieldsForMode, sdrWhiteToSlider: sdrWhiteToSlider, sliderToSdrWhite: sliderToSdrWhite,
     outputCaption: outputCaption, capabilityLine: capabilityLine, luminanceLine: luminanceLine, primariesLine: primariesLine,
     displayTitle: displayTitle, panelLine: panelLine, metaLine: metaLine, formatLuminance: formatLuminance, parseLuminance: parseLuminance,

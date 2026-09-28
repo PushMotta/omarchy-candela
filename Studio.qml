@@ -1011,6 +1011,7 @@ Item {
                       }
                     }
                     Text { textFormat: Text.PlainText; text: parent.range.min + " → " + parent.range.max + " cd/m² (max-average from EDID). 203 marked: BT.2408 reference white."; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width }
+                    Text { textFormat: Text.PlainText; text: root.display ? Model.sdrWhiteClientNote(root.sdrWhiteOf(root.display), false) : ""; visible: text !== ""; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width }
                   }
                 }
 
@@ -1350,6 +1351,9 @@ Item {
     foreground: root.foreground
     accent: root.accent
     onHasCursorChanged: if (hasCursor) root.ensureRowVisible(irow)
+    // A row that grows under the cursor (the SDR white note appearing) must
+    // stay in view, so follow it again once the layout has settled.
+    onHeightChanged: if (hasCursor) Qt.callLater(function() { root.ensureRowVisible(irow) })
     Item {
       id: irowContent
       anchors.fill: parent

@@ -697,6 +697,19 @@ Panel {
               width: parent.width - Style.space(12)
               x: Style.space(6)
             }
+
+            // Colour-managed apps ignore SDR white on Hyprland 0.56; say so
+            // whenever the slider is away from the one value they share.
+            Text {
+              textFormat: Text.PlainText
+              text: Model.sdrWhiteClientNote(sdrSlider.dragging ? Model.sliderToSdrWhite(sdrSlider.liveValue / 100, root.sdrRange) : (root.sdrPreview >= 0 ? root.sdrPreview : root.sdrWhite), true)
+              visible: text !== ""
+              color: root.fg
+              font.family: root.fam; font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+              width: parent.width - Style.space(12)
+              x: Style.space(6)
+            }
           }
 
           // ---------- Scale ----------

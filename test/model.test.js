@@ -198,6 +198,15 @@ test("missing numeric metadata stays unknown and luminance decimals round trip",
   assert.equal(M.parseLuminance("0,125"), 0.125)
 })
 
+test("the SDR white note appears only away from the colour-managed reference", () => {
+  assert.equal(M.sdrWhiteClientNote(203), "")
+  assert.equal(M.sdrWhiteClientNote(203.4), "")
+  assert.equal(M.sdrWhiteClientNote(null), "")
+  assert.match(M.sdrWhiteClientNote(250), /stay at 203 cd\/m²/)
+  assert.match(M.sdrWhiteClientNote(120, true), /^Chromium and Electron apps stay at 203/)
+  assert.ok(M.sdrWhiteClientNote(120, true).length < M.sdrWhiteClientNote(120).length)
+})
+
 test("layout geometry works in logical pixels", () => {
   const rects = monitors.map(m => M.rectOf(m))
   assert.deepEqual(rects[0], { name: "DP-1", x: 0, y: 0, width: 2400, height: 1600 })

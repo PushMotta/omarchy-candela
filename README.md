@@ -287,6 +287,13 @@ disagree; `doctor` warns when yours sets a number there.
 Hyprland's own default for SDR white in HDR mode is 80 cd/m², which is why
 HDR desktops look washed out. This tool always writes it on HDR entry.
 
+SDR white does not reach every window. Hyprland 0.56 tells apps that use
+Wayland colour management, such as Chromium and Electron, that SDR white is
+203 cd/m² whatever `sdr_max_luminance` says, so only other windows follow the
+slider. At 203 the two agree, which is one reason it is the default; away from
+it the studio and the popup say so under the slider. Fixing this belongs to
+the compositor.
+
 ## Development
 
 ```bash
