@@ -750,16 +750,88 @@ function planLine(homes, rects) {
 
 // ---------------------------------------------------------------- virtual displays
 
-// Sizes a virtual display is offered at, in pixels. A tablet's is its own
-// screen, so a viewer there shows it pixel for pixel.
-var VIRTUAL_SIZES = [
-  { value: "1366x768", label: "1366×768" },
-  { value: "1920x1080", label: "1920×1080" },
-  { value: "2560x1440", label: "2560×1440" },
-  { value: "3840x2160", label: "3840×2160" },
-  { value: "2388x1668", label: "iPad 11″" },
-  { value: "2732x2048", label: "iPad 12.9″" }
+// Devices a virtual display can stand in for: the panel's native size in
+// landscape, in physical pixels, and the scale that keeps its interface the
+// size it is on the device. A viewer there then shows it pixel for pixel.
+// Every size was checked against the maker's own specification page on
+// 5 October 2026 (`source`); a device is only added with one.
+var VIRTUAL_DEVICES = [
+  { id: "ipad-pro-13-m4", label: "iPad Pro 13″ (M4, M5)", group: "Apple iPad", width: 2752, height: 2064, scale: 2, source: "https://support.apple.com/en-us/119891" },
+  { id: "ipad-pro-12-9", label: "iPad Pro 12.9″ (3rd–6th generation)", group: "Apple iPad", width: 2732, height: 2048, scale: 2, source: "https://support.apple.com/en-us/111979" },
+  { id: "ipad-pro-11-m4", label: "iPad Pro 11″ (M4, M5)", group: "Apple iPad", width: 2420, height: 1668, scale: 2, source: "https://support.apple.com/en-us/119892" },
+  { id: "ipad-pro-11", label: "iPad Pro 11″ (1st–4th generation)", group: "Apple iPad", width: 2388, height: 1668, scale: 2, source: "https://support.apple.com/en-us/111974" },
+  { id: "ipad-air-13", label: "iPad Air 13″ (M2, M3, M4)", group: "Apple iPad", width: 2732, height: 2048, scale: 2, source: "https://support.apple.com/en-us/119893" },
+  { id: "ipad-air-11", label: "iPad Air 11″ (M2, M3, M4), Air (4th, 5th generation), iPad (A16), iPad (10th generation)", group: "Apple iPad", width: 2360, height: 1640, scale: 2, source: "https://support.apple.com/en-us/119894" },
+  { id: "ipad-10-2", label: "iPad (7th–9th generation)", group: "Apple iPad", width: 2160, height: 1620, scale: 2, source: "https://support.apple.com/en-us/111898" },
+  { id: "ipad-mini", label: "iPad mini (6th generation, A17 Pro)", group: "Apple iPad", width: 2266, height: 1488, scale: 2, source: "https://support.apple.com/en-us/121456" },
+  { id: "macbook-air-13", label: "MacBook Air 13″ (M2–M5)", group: "Apple Mac", width: 2560, height: 1664, scale: 2, source: "https://support.apple.com/en-us/111867" },
+  { id: "macbook-air-15", label: "MacBook Air 15″ (M2–M5)", group: "Apple Mac", width: 2880, height: 1864, scale: 2, source: "https://support.apple.com/en-us/111346" },
+  { id: "macbook-air-m1", label: "MacBook Air (M1), MacBook Pro 13″ (M1, M2)", group: "Apple Mac", width: 2560, height: 1600, scale: 2, source: "https://support.apple.com/en-us/111883" },
+  { id: "macbook-pro-14", label: "MacBook Pro 14″ (2021 and later)", group: "Apple Mac", width: 3024, height: 1964, scale: 2, source: "https://support.apple.com/en-us/111902" },
+  { id: "macbook-pro-16", label: "MacBook Pro 16″ (2021 and later)", group: "Apple Mac", width: 3456, height: 2234, scale: 2, source: "https://support.apple.com/en-us/111901" },
+  { id: "galaxy-tab-11", label: "Galaxy Tab S9, S11 (11″)", group: "Samsung", width: 2560, height: 1600, scale: 2, source: "https://www.samsung.com/uk/ (SM-X710, SM-X730)" },
+  { id: "galaxy-tab-plus", label: "Galaxy Tab S9+, S10+ (12.4″)", group: "Samsung", width: 2800, height: 1752, scale: 2, source: "https://www.samsung.com/uk/ (SM-X810, SM-X820)" },
+  { id: "galaxy-tab-ultra", label: "Galaxy Tab S9, S10, S11 Ultra (14.6″)", group: "Samsung", width: 2960, height: 1848, scale: 2, source: "https://www.samsung.com/uk/ (SM-X910, SM-X930)" },
+  { id: "galaxy-tab-fe", label: "Galaxy Tab S9 FE, S10 FE (10.9″)", group: "Samsung", width: 2304, height: 1440, scale: 2, source: "https://www.samsung.com/uk/ (SM-X510, SM-X526)" },
+  { id: "galaxy-tab-fe-plus-13", label: "Galaxy Tab S10 FE+ (13.1″)", group: "Samsung", width: 2880, height: 1800, scale: 2, source: "https://www.samsung.com/uk/ (SM-X626)" },
+  { id: "pixel-tablet", label: "Pixel Tablet", group: "Google", width: 2560, height: 1600, scale: 2, source: "https://support.google.com/googlepixeltablet/answer/13555146" },
+  { id: "oneplus-pad", label: "OnePlus Pad", group: "OnePlus", width: 2800, height: 2000, scale: 2, source: "https://www.oneplus.com/us/oneplus-pad/specs" },
+  { id: "oneplus-pad-2", label: "OnePlus Pad 2", group: "OnePlus", width: 3000, height: 2120, scale: 2, source: "https://www.oneplus.com/" },
+  { id: "oneplus-pad-3", label: "OnePlus Pad 3", group: "OnePlus", width: 3392, height: 2400, scale: 2, source: "https://www.oneplus.com/" },
+  { id: "surface-pro-13", label: "Surface Pro 8, 9, 10, 11th Edition (13″)", group: "Microsoft Surface", width: 2880, height: 1920, scale: 2, source: "https://www.microsoft.com/en-us/surface/devices/surface-pro" },
+  { id: "surface-pro-12", label: "Surface Pro 12″ (12th Edition)", group: "Microsoft Surface", width: 2196, height: 1464, scale: 2, source: "https://www.microsoft.com/en-us/surface/" },
+  { id: "surface-laptop-13-5", label: "Surface Laptop 3, 5 (13.5″)", group: "Microsoft Surface", width: 2256, height: 1504, scale: 2, source: "https://support.microsoft.com/ (Surface Laptop 3, 5 specifications)" },
+  { id: "surface-laptop-13-8", label: "Surface Laptop 13.8″ (7th, 8th Edition)", group: "Microsoft Surface", width: 2304, height: 1536, scale: 2, source: "https://www.microsoft.com/en-us/surface/" },
+  { id: "steam-deck", label: "Steam Deck (LCD, OLED)", group: "Valve", width: 1280, height: 800, scale: 1, source: "https://www.steamdeck.com/en/tech" },
+  { id: "framework-13", label: "Framework Laptop 13 (2.2K)", group: "Framework", width: 2256, height: 1504, scale: 2, source: "https://frame.work/laptop13?tab=specs" },
+  { id: "framework-13-2-8k", label: "Framework Laptop 13 (2.8K)", group: "Framework", width: 2880, height: 1920, scale: 2, source: "https://frame.work/laptop13?tab=specs" }
 ]
+
+// Plain sizes, for a stage to share or record, or a test bench.
+var VIRTUAL_SIZES = [
+  { id: "720p", label: "1280×720", group: "Common sizes", width: 1280, height: 720, scale: 1 },
+  { id: "768p", label: "1366×768", group: "Common sizes", width: 1366, height: 768, scale: 1 },
+  { id: "1080p", label: "1920×1080", group: "Common sizes", width: 1920, height: 1080, scale: 1 },
+  { id: "1200p", label: "1920×1200", group: "Common sizes", width: 1920, height: 1200, scale: 1 },
+  { id: "1440p", label: "2560×1440", group: "Common sizes", width: 2560, height: 1440, scale: 1 },
+  { id: "1600p", label: "2560×1600", group: "Common sizes", width: 2560, height: 1600, scale: 1 },
+  { id: "2160p", label: "3840×2160", group: "Common sizes", width: 3840, height: 2160, scale: 2 }
+]
+
+function virtualPresets() { return VIRTUAL_DEVICES.concat(VIRTUAL_SIZES) }
+
+function virtualPresetById(id) {
+  var all = virtualPresets()
+  for (var i = 0; i < all.length; i++) if (all[i].id === id) return all[i]
+  return null
+}
+
+// The searchable list: device or size, with its pixels, scale and maker in
+// the description so "2732" or "samsung" finds it too.
+function virtualPresetOptions() {
+  return virtualPresets().map(function (p) {
+    return { value: p.id, label: p.label, description: p.width + "×" + p.height + " · " + formatScale(p.scale) + "× · " + p.group }
+  }).concat([{ value: "custom", label: "Custom size", description: "any width and height" }])
+}
+
+// Which preset a size and scale are, in either orientation; "custom" when none.
+function virtualPresetFor(width, height, scale) {
+  var w = Math.max(width, height), h = Math.min(width, height), all = virtualPresets()
+  for (var i = 0; i < all.length; i++)
+    if (all[i].width === w && all[i].height === h && sameScale(all[i].scale, scale)) return all[i].id
+  return "custom"
+}
+
+function virtualOrientation(width, height) { return height > width ? "portrait" : "landscape" }
+
+// A portrait display is the same panel with its sides swapped, not rotated:
+// what is captured is then already upright for the viewer.
+function virtualModeFor(preset, orientation, refresh) {
+  var w = preset.width, h = preset.height
+  if (orientation === "portrait") { var t = w; w = h; h = t }
+  return w + "x" + h + "@" + (refresh || 60)
+}
+
 // Same as the backend: the gap a display placed apart keeps from the desk,
 // which the pointer cannot cross.
 var VIRTUAL_GAP = 320
@@ -857,6 +929,7 @@ if (typeof module !== "undefined") {
     WORKSPACE_IDS: WORKSPACE_IDS, workspaceLabel: workspaceLabel, planOrder: planOrder, presetPlan: presetPlan, samePlanHomes: samePlanHomes,
     planKind: planKind, planKindLabel: planKindLabel, homesOn: homesOn, effectiveShows: effectiveShows, planMoves: planMoves, planSummary: planSummary,
     chipsFor: chipsFor, rehomeFrom: rehomeFrom, workspaceChange: workspaceChange, workspaceList: workspaceList, openChipsFor: openChipsFor, planLine: planLine,
-    VIRTUAL_SIZES: VIRTUAL_SIZES, VIRTUAL_GAP: VIRTUAL_GAP, realRects: realRects, touching: touching, virtualPlacement: virtualPlacement, virtualPositionFor: virtualPositionFor
+    VIRTUAL_SIZES: VIRTUAL_SIZES, VIRTUAL_DEVICES: VIRTUAL_DEVICES, VIRTUAL_GAP: VIRTUAL_GAP, virtualPresets: virtualPresets, virtualPresetById: virtualPresetById,
+    virtualPresetOptions: virtualPresetOptions, virtualPresetFor: virtualPresetFor, virtualOrientation: virtualOrientation, virtualModeFor: virtualModeFor, realRects: realRects, touching: touching, virtualPlacement: virtualPlacement, virtualPositionFor: virtualPositionFor
   }
 }

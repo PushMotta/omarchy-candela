@@ -52,7 +52,7 @@ Item {
   // ---------------------------------------------------------- lifecycle
   // Logical pixels and cd/m² are not currency: no thousands separators.
   Component.onCompleted: {
-    var fields = [posXField, posYField, maxLumField, avgLumField]
+    var fields = [posXField, posYField, maxLumField, avgLumField, customWidthField, customHeightField]
     for (var i = 0; i < fields.length; i++) if (fields[i] && fields[i].field) fields[i].field.locale = Qt.locale("C")
     minLumField.validatorLocale = "C"
   }
@@ -545,8 +545,35 @@ Item {
   Timer { id: removeArm; interval: 4000; onTriggered: root.removeArmedFor = "" }
 
   function sizeOf(d) { var m = Model.parseMode(modeOf(d)); return m ? m.width + "x" + m.height : "" }
+  function pixelsOf(d) { var m = Model.parseMode(modeOf(d)); return m ? { width: m.width, height: m.height } : { width: 0, height: 0 } }
+  // "custom" is chosen, not only matched: picking it shows the fields even
+  // while the size still happens to be a preset's.
+  property bool customSizeChosen: false
+  function presetOf(d) {
+    if (customSizeChosen) return "custom"
+    var p = pixelsOf(d)
+    return Model.virtualPresetFor(p.width, p.height, scaleOf(d))
+  }
+  function orientationOf(d) { var p = pixelsOf(d); return Model.virtualOrientation(p.width, p.height) }
+  function setVirtualPreset(d, id) {
+    if (id === "custom") { customSizeChosen = true; return }
+    customSizeChosen = false
+    var preset = Model.virtualPresetById(id)
+    if (!preset) return
+    setSizeField(d, "mode", Model.virtualModeFor(preset, orientationOf(d), refreshOfVirtual(d)))
+    setSizeField(d, "scale", preset.scale)
+  }
+  function setOrientation(d, orientation) {
+    var p = pixelsOf(d)
+    if (Model.virtualOrientation(p.width, p.height) === orientation) return
+    setSizeField(d, "mode", p.height + "x" + p.width + "@" + refreshOfVirtual(d))
+  }
+  function setCustomSize(d, width, height) {
+    if (width < 320 || height < 240 || width > 8192 || height > 8192) return
+    setSizeField(d, "mode", Math.round(width) + "x" + Math.round(height) + "@" + refreshOfVirtual(d))
+  }
+  onSelectedNameChanged: customSizeChosen = false
   function refreshOfVirtual(d) { var m = Model.parseMode(modeOf(d)); return m ? Math.round(m.refresh) : 60 }
-  function setVirtualSize(d, size) { setSizeField(d, "mode", size + "@" + refreshOfVirtual(d)) }
   function setVirtualRefresh(d, hz) { setSizeField(d, "mode", sizeOf(d) + "@" + hz) }
   function setPlacement(d, placement) {
     var p = Model.virtualPositionFor(rects, d.name, placement)
@@ -631,7 +658,8 @@ Item {
 
   readonly property var rows: {
     var list = isVirtual
-      ? ["vsize", "vrefresh", "scale", "rotation", "posx", "posy", "vplace", "enabled", "vwindow", "vnetwork"]
+      ? ["vsize", "vorient"].concat(display && presetOf(display) === "custom" ? ["vcustomw", "vcustomh"] : [])
+          .concat(["vrefresh", "scale", "posx", "posy", "vplace", "enabled", "vwindow", "vnetwork"])
       : ["mode", "refresh", "vrr", "scale", "rotation", "posx", "posy", "mirror", "enabled"]
     if (isVirtual) {
       if (!virtualState.wayvnc) list.push("vinstall")
@@ -704,7 +732,10 @@ Item {
         if (homes.length) setShow(d, cycle(homes, Model.effectiveShows(plan.homes, plan.shows)[d.name] || homes[0], delta)); break
       }
       case "wssend": break
-      case "vsize": setVirtualSize(d, cycle(Model.VIRTUAL_SIZES.map(function(o) { return o.value }), sizeOf(d), delta)); break
+      case "vsize": setVirtualPreset(d, cycle(Model.virtualPresetOptions().map(function(o) { return o.value }), presetOf(d), delta)); break
+      case "vorient": setOrientation(d, orientationOf(d) === "landscape" ? "portrait" : "landscape"); break
+      case "vcustomw": { var pw = pixelsOf(d); setCustomSize(d, pw.width + delta * (big ? 100 : 10), pw.height); break }
+      case "vcustomh": { var ph = pixelsOf(d); setCustomSize(d, ph.width, ph.height + delta * (big ? 100 : 10)); break }
       case "vrefresh": setVirtualRefresh(d, cycle([30, 60], refreshOfVirtual(d), delta)); break
       case "vplace": setPlacement(d, Model.virtualPlacement(rects, d.name) === "beside" ? "apart" : "beside"); break
       case "vaddress": {
@@ -766,6 +797,9 @@ Item {
       case "wshomes": toggleHome(d, Model.WORKSPACE_IDS[wsPillIndex]); break
       case "wssend": if (service) service.sendWorkspacesHome(); break
       case "vwindow": if (service) service.togglePreview(d.name); break
+      case "vsize": sizeDropdown.toggle(); break
+      case "vcustomw": customWidthField.field.forceActiveFocus(); break
+      case "vcustomh": customHeightField.field.forceActiveFocus(); break
       case "vinstall": if (service) service.installWayvnc(); break
       case "vnetwork": if (service && virtualState.wayvnc) service.virtualView(d.name, "network", !virtualNetwork.on); break
       case "vsecret": if (service) service.showVirtualSecret(d.name); break
@@ -791,8 +825,8 @@ Item {
     selectDisplayIndex((idx + delta + displays.length) % displays.length)
   }
 
-  readonly property bool anyPopupOpen: resolutionDropdown.popupOpen || refreshDropdown.popupOpen || iccDropdown.popupOpen
-  readonly property bool textEditing: keyScope.activeFocus === false && (posXField.field.activeFocus || posYField.field.activeFocus || minLumField.field.activeFocus || maxLumField.field.activeFocus || avgLumField.field.activeFocus)
+  readonly property bool anyPopupOpen: resolutionDropdown.popupOpen || refreshDropdown.popupOpen || iccDropdown.popupOpen || sizeDropdown.popupOpen
+  readonly property bool textEditing: keyScope.activeFocus === false && (posXField.field.activeFocus || posYField.field.activeFocus || customWidthField.field.activeFocus || customHeightField.field.activeFocus || minLumField.field.activeFocus || maxLumField.field.activeFocus || avgLumField.field.activeFocus)
 
   function handleKey(event) {
     if (anyPopupOpen) return false
@@ -1308,28 +1342,76 @@ Item {
                   visible: root.isVirtual
                   Column {
                     width: parent.width; spacing: Style.spacing.labelGap
-                    RowLabel { text: "Size in pixels" }
-                    Flow {
+                    SearchableDropdown {
+                      id: sizeDropdown
                       width: parent.width
-                      spacing: Style.spacing.xs
-                      Repeater {
-                        model: Model.VIRTUAL_SIZES
-                        Button {
-                          required property var modelData
-                          text: modelData.label
-                          fontSize: Style.font.caption
-                          foreground: root.foreground; fontFamily: root.fontFamily
-                          bordered: true
-                          active: root.display !== null && root.sizeOf(root.display) === modelData.value
-                          onClicked: if (root.display) root.setVirtualSize(root.display, modelData.value)
-                          onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vsize" } }
-                        }
-                      }
+                      label: "Device or size"
+                      options: Model.virtualPresetOptions()
+                      value: root.display && root.isVirtual ? root.presetOf(root.display) : ""
+                      placeholderText: "Search devices and sizes…"
+                      emptyText: "No match: choose Custom size"
+                      foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily
+                      hasCursor: root.focusArea === "inspector" && root.currentRow === "vsize"
+                      onChanged: function(v) { if (root.display) root.setVirtualPreset(root.display, v) }
+                      onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vsize" } }
                     }
                     Text {
                       textFormat: Text.PlainText
-                      text: "Any other size: omarchy-candela apply '{\"displays\":[{\"name\":\"" + (root.display ? root.display.name : "") + "\",\"mode\":\"1600x1200@60\"}]}'"
-                      color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WrapAnywhere; width: parent.width
+                      text: root.display ? root.sizeOf(root.display).replace("x", "×") + " pixels at " + Model.formatScale(root.scaleOf(root.display)) + "×, so it looks the size it does on the device." : ""
+                      color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width
+                    }
+                  }
+                }
+
+                InspectorRow {
+                  rowId: "vorient"
+                  visible: root.isVirtual
+                  Column {
+                    width: parent.width; spacing: Style.spacing.labelGap
+                    RowLabel { text: "Orientation" }
+                    ButtonGroup {
+                      options: [{ value: "landscape", label: "Landscape" }, { value: "portrait", label: "Portrait" }]
+                      value: root.display && root.isVirtual ? root.orientationOf(root.display) : "landscape"
+                      foreground: root.foreground; background: root.background; accent: root.accent; fontFamily: root.fontFamily
+                      focusable: false
+                      onChanged: function(v) { if (root.display) root.setOrientation(root.display, v) }
+                      onHovered: function(i, h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vorient" } }
+                    }
+                  }
+                }
+
+                Row {
+                  width: parent.width
+                  spacing: Style.spacing.xl
+                  visible: root.isVirtual && root.display !== null && root.presetOf(root.display) === "custom"
+                  InspectorRow {
+                    rowId: "vcustomw"
+                    width: (parent.width - parent.spacing) / 2
+                    NumberField {
+                      id: customWidthField
+                      label: "Width (pixels)"
+                      value: root.display && root.isVirtual ? root.pixelsOf(root.display).width : 1920
+                      from: 320; to: 8192; stepSize: 10
+                      fieldWidth: parent.width
+                      foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily
+                      hasCursor: root.focusArea === "inspector" && root.currentRow === "vcustomw"
+                      onModified: function(v) { if (root.display) root.setCustomSize(root.display, v, root.pixelsOf(root.display).height) }
+                      onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vcustomw" } }
+                    }
+                  }
+                  InspectorRow {
+                    rowId: "vcustomh"
+                    width: (parent.width - parent.spacing) / 2
+                    NumberField {
+                      id: customHeightField
+                      label: "Height (pixels)"
+                      value: root.display && root.isVirtual ? root.pixelsOf(root.display).height : 1080
+                      from: 240; to: 8192; stepSize: 10
+                      fieldWidth: parent.width
+                      foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily
+                      hasCursor: root.focusArea === "inspector" && root.currentRow === "vcustomh"
+                      onModified: function(v) { if (root.display) root.setCustomSize(root.display, root.pixelsOf(root.display).width, v) }
+                      onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vcustomh" } }
                     }
                   }
                 }
@@ -1439,6 +1521,7 @@ Item {
 
                 InspectorRow {
                   rowId: "rotation"
+                  visible: !root.isVirtual
                   Column {
                     width: parent.width; spacing: Style.spacing.labelGap
                     RowLabel { text: "Rotation" }

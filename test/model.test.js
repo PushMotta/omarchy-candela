@@ -458,6 +458,25 @@ test("a virtual display is beside when it shares an edge with a real one, apart 
   assert.deepEqual(M.virtualPositionFor(two, "VIRTUAL-1", "apart"), { x: 8726 + 320, y: 0 })
   assert.equal(M.virtualPlacement(realDesk.concat([{ name: "VIRTUAL-2", x: 7040, y: 0, width: 100, height: 100, virtual: true }, { name: "VIRTUAL-1", x: 7140, y: 0, width: 100, height: 100, virtual: true }]), "VIRTUAL-1"), "apart", "touching another virtual display is still apart")
   assert.deepEqual(M.rowFields("vsize").display, ["mode"])
-  assert.equal(M.VIRTUAL_SIZES.length, 6)
+  assert.equal(M.VIRTUAL_SIZES.length, 7)
   void withStage
 })
+
+test("device presets: every one has a source, a whole logical size, and is found again from its size", () => {
+  for (const p of M.virtualPresets()) {
+    assert.ok(p.width > p.height, p.label + " is listed in landscape")
+    assert.ok(Number.isInteger(p.width / p.scale) && Number.isInteger(p.height / p.scale), p.label + " has a whole logical size")
+    if (M.VIRTUAL_DEVICES.includes(p)) assert.match(p.source, /^https:\/\//, p.label + " cites its maker")
+  }
+  assert.equal(M.virtualPresetFor(2732, 2048, 2), "ipad-pro-12-9", "the first device with a size is the one found")
+  assert.equal(M.virtualPresetFor(2048, 2732, 2), "ipad-pro-12-9", "in either orientation")
+  assert.equal(M.virtualPresetFor(1600, 1200, 1), "custom")
+  assert.equal(M.virtualPresetFor(2732, 2048, 1), "custom", "the scale is part of the preset")
+  assert.equal(M.virtualModeFor(M.virtualPresetById("macbook-pro-14"), "landscape", 60), "3024x1964@60")
+  assert.equal(M.virtualModeFor(M.virtualPresetById("ipad-mini"), "portrait", 60), "1488x2266@60", "portrait swaps the sides")
+  assert.equal(M.virtualOrientation(1488, 2266), "portrait")
+  const opts = M.virtualPresetOptions()
+  assert.equal(opts[opts.length - 1].value, "custom")
+  assert.match(opts.find(o => o.value === "galaxy-tab-ultra").description, /2960×1848 · 2× · Samsung/)
+})
+
