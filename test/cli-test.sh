@@ -627,11 +627,17 @@ assert_contains "$(cat "$sandbox2/systemd-run.log")" "-o VIRTUAL-1 -S $sandbox2/
 assert_eq "$(stat -c %a "$sandbox2/runtime/omarchy-candela")" "700" "the control socket's directory is the user's alone"
 secret="$(run_cli "$sandbox2" virtual secret VIRTUAL-1)"
 assert_eq "$(jq -r .username <<<"$secret")" "candela" "secret gives the username"
-[[ $(jq -r .password <<<"$secret") =~ ^[A-Za-z0-9]{16}$ ]] || fail "a 16-character password" "$secret"
+[[ $(jq -r .password <<<"$secret") =~ ^[a-hjkmnp-z2-9]{4}(-[a-hjkmnp-z2-9]{4}){3}$ ]] || fail "a password typed without shift: four groups of four, no look-alikes" "$secret"
 pw1="$(jq -r .password <<<"$secret")"
 run_cli "$sandbox2" virtual view VIRTUAL-1 network off >/dev/null
 run_cli "$sandbox2" virtual view VIRTUAL-1 network on >/dev/null
 assert_eq "$(run_cli "$sandbox2" virtual secret VIRTUAL-1 | jq -r .password)" "$pw1" "the password is kept between starts"
+: > "$sandbox2/systemd-run.log"
+run_cli "$sandbox2" virtual view VIRTUAL-1 network on >/dev/null
+assert_not_contains "$(cat "$sandbox2/systemd-run.log")" "wayvnc" "asking again with nothing changed does not restart it, so no one is dropped"
+pw2="$(run_cli "$sandbox2" virtual secret VIRTUAL-1 --new | jq -r .password)"
+[[ $pw2 != "$pw1" ]] || fail "--new replaces the password"
+assert_contains "$(cat "$sandbox2/systemd-run.log")" "wayvnc" "and starts the server again so it takes effect"
 state="$(run_cli "$sandbox2" state)"
 assert_eq "$(jq -c '.virtual.displays["VIRTUAL-1"].network | [.on, .address, .port, .atLogin, .input]' <<<"$state")" '[true,"192.168.1.89",5901,false,false]' "state reports network viewing, watch-only"
 assert_eq "$(jq -r '.virtual.displays["VIRTUAL-1"].network.clients[0].address' <<<"$state")" "192.168.1.40" "and who is connected"

@@ -1571,7 +1571,7 @@ Item {
                     label: "On the network"
                     description: !root.virtualState.wayvnc ? "For a tablet or another computer. It needs wayvnc, which is not installed yet."
                       : root.virtualNetwork.on
-                        ? "RSA-AES with a username and password. TigerVNC, bVNC on Android and RealVNC connect; macOS Screen Sharing cannot, securely, so it is turned away. "
+                        ? "RSA-AES with a username and password. TigerVNC, bVNC on Android and RealVNC connect; macOS Screen Sharing cannot, securely, so it is turned away. The login must be finished within 30 seconds of connecting, so have the password ready. "
                           + (root.virtualNetwork.input ? "Viewers can use it." : "Watch-only while it sits apart, so a viewer can never leave your pointer out of reach: place it beside your displays to let them use it.")
                       : "Off. For a tablet or another computer on " + (((root.virtualState.addresses || [])[0] || {}).address || "your network") + "."
                     checked: root.virtualNetwork.on === true
@@ -1616,7 +1616,8 @@ Item {
                       value: root.virtualNetwork.address || ""
                       foreground: root.foreground; background: root.background; accent: root.accent; fontFamily: root.fontFamily
                       focusable: false
-                      onChanged: function(v) { if (root.display && root.service) root.service.virtualView(root.display.name, "network", true, ["--address", v]) }
+                      // Only a different address restarts the server, which drops whoever is connected.
+                      onChanged: function(v) { if (root.display && root.service && v !== root.virtualNetwork.address) root.service.virtualView(root.display.name, "network", true, ["--address", v]) }
                       onHovered: function(i, h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vaddress" } }
                     }
                   }

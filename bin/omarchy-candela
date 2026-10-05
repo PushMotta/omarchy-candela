@@ -124,7 +124,7 @@ Usage: omarchy-candela <command> [args]
   virtual remove NAME            Stop its viewers, then remove the virtual display
   virtual view NAME window on|off   (a live picture in a Candela window; view only)
   virtual view NAME network on|off [--address IP] [--port N] [--at-login yes|no]
-  virtual secret NAME            The username and password for network viewing, as JSON
+  virtual secret NAME [--new]    The username and password for network viewing, as JSON (--new replaces the password)
   virtual clients NAME           Who is connected over the network, as JSON
   virtual disconnect NAME ID
   virtual restore                Recreate kept virtual displays (the service runs this at start)
@@ -1321,11 +1321,28 @@ virtual_secret_dir() {
     ssh-keygen -q -m pem -t rsa -b 3072 -N "" -C "candela $1" -f "$dir/rsa_key.pem" >/dev/null 2>&1 || die "could not make the network key"
     rm -f -- "$dir/rsa_key.pem.pub"
   fi
-  if [[ ! -s $dir/secret ]]; then
-    ( umask 077; head -c 48 /dev/urandom | base64 -w0 | tr -dc 'A-Za-z0-9' | cut -c1-16 > "$dir/secret" )
-  fi
+  [[ -s $dir/secret ]] || virtual_new_secret "$dir"
   chmod 600 "$dir/rsa_key.pem" "$dir/secret"
   printf '%s' "$dir"
+}
+
+# neatvnc allows 30 seconds for the whole login (HANDSHAKE_TIMEOUT, not
+# configurable), and a tablet asks for the password inside it. So the
+# password is easy to type: four groups of four from lowercase letters and
+# digits without look-alikes (no 0 o 1 l i), no shift key, about 79 bits.
+virtual_new_secret() {
+  local dir="$1" alphabet=abcdefghjkmnpqrstuvwxyz23456789 raw out="" i
+  raw="$(od -An -tu1 -N64 /dev/urandom | tr -s ' ' '\n' | grep -v '^$')"
+  i=0
+  while IFS= read -r b; do
+    (( b >= 248 )) && continue            # 248 = 8 * 31: keep the choice uniform
+    out+="${alphabet:$(( b % 31 )):1}"
+    i=$(( i + 1 ))
+    (( i % 4 == 0 && i < 16 )) && out+="-"
+    (( i == 16 )) && break
+  done <<<"$raw"
+  (( i == 16 )) || die "could not make a password"
+  ( umask 077; printf '%s\n' "$out" > "$dir/secret" )
 }
 
 virtual_network_settings() {
@@ -1363,6 +1380,8 @@ virtual_view_network() {
   dir="$(virtual_secret_dir "$name")"
   pw="$(cat "$dir/secret")"
   conf="$dir/network.conf"
+  local before=""
+  [[ -f $conf ]] && before="$(cat "$conf"; jq -r '.input' "$dir/network.json" 2>/dev/null)"
   ( umask 077
     # RSA-AES with a username and password. Never relax_encryption (it lets
     # unencrypted Apple DH and DES in) and never a WebSocket listener: both
@@ -1376,6 +1395,13 @@ virtual_view_network() {
   # placed apart, so a viewer can never leave the cursor out of reach.
   local -a input=()
   virtual_is_beside "$name" || input=(-d)
+  # Restarting drops whoever is connected: only when something changed.
+  if [[ -n $before && $before == "$(cat "$conf"; (( ${#input[@]} )) && echo false || echo true)" ]] \
+     && unit_active "$(virtual_unit "$name" network)"; then
+    tmp="$(tmp_for "$dir/network.json")"
+    jq --argjson l "$([[ $at_login == yes ]] && echo true || echo false)" '.atLogin = $l' "$dir/network.json" > "$tmp" && mv "$tmp" "$dir/network.json"
+    return 0
+  fi
   spawn_unit "$(virtual_unit "$name" network)" "$WAYVNC" -C "$conf" -o "$name" -S "$ctl" -R "${input[@]}"
   wait_for_socket "$ctl" || die "wayvnc did not start for $name: journalctl --user -u $(virtual_unit "$name" network)"
   tmp="$(tmp_for "$dir/network.json")"
@@ -1439,6 +1465,16 @@ cmd_virtual() {
     secret)
       local name="${1:-}"
       is_virtual "$name" || die "no virtual display named $name"
+      if [[ ${2:-} == --new ]]; then
+        acquire_lock
+        mkdir -p "$VIRTUAL_DIR/$name" && chmod 700 "$VIRTUAL_DIR" "$VIRTUAL_DIR/$name"
+        virtual_new_secret "$VIRTUAL_DIR/$name"
+        # A running server keeps the old password until it starts again.
+        if unit_active "$(virtual_unit "$name" network)"; then
+          virtual_stop "$name" network
+          virtual_view_network "$name" on "" "" ""
+        fi
+      fi
       [[ -s $VIRTUAL_DIR/$name/secret ]] || die "$name has never been offered on the network"
       jq -nc --arg p "$(cat "$VIRTUAL_DIR/$name/secret")" '{username:"candela", password:$p}'
       ;;
