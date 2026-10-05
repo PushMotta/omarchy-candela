@@ -885,3 +885,25 @@ assert_contains "$(cat "$sandbox2/state/virtual/VIRTUAL-1/network.conf")" "passw
 assert_contains "$(cat "$sandbox2/systemctl.log")" "stop omarchy-candela-network-VIRTUAL-1.service" "the server is restarted for it"
 pass "a new password replaces the old one and restarts the server"
 
+
+# ---- the password and its code are never a process argument: any local
+# user can read a process's arguments in /proc (marketplace review, #10152)
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" virtual add extra >/dev/null
+run_cli "$sandbox2" virtual view VIRTUAL-1 network on >/dev/null
+realjq="$(command -v jq)"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/args.log"\nexec "%s" "$@"\n' "$sandbox2" "$realjq" > "$sandbox2/bin/jq"
+chmod +x "$sandbox2/bin/jq"
+for flags in "--qr" "--new --qr"; do
+  : > "$sandbox2/args.log"
+  # shellcheck disable=SC2086
+  out="$(run_cli "$sandbox2" virtual secret VIRTUAL-1 $flags)"
+  pw="$(cat "$sandbox2/state/virtual/VIRTUAL-1/secret")"
+  qr="$("$realjq" -r '.qr // ""' <<<"$out")"
+  assert_eq "$("$realjq" -r .password <<<"$out")" "$pw" "secret $flags gives the password"
+  [[ -n $qr ]] || fail "secret $flags gives the code"
+  [[ -s $sandbox2/args.log ]] || fail "the logging jq ran"
+  if grep -qF -- "$pw" "$sandbox2/args.log"; then fail "secret $flags passed the password as an argument"; fi
+  if grep -qF -- "$qr" "$sandbox2/args.log"; then fail "secret $flags passed the code as an argument"; fi
+done
+pass "the password and its QR code never appear in a process's arguments"

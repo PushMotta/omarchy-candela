@@ -1637,8 +1637,12 @@ cmd_virtual() {
         # into the login; through stdin, so it never shows in a process list.
         qr="$(printf '%s' "$(cat "$VIRTUAL_DIR/$name/secret")" | qrencode -t PNG -s 8 -m 2 -o - | base64 -w0)" || qr=""
       fi
-      jq -nc --arg p "$(cat "$VIRTUAL_DIR/$name/secret")" --arg qr "$qr" \
-        '{username:"candela", password:$p} + (if $qr == "" then {} else {qr:$qr} end)'
+      # Neither the password nor its code (which decodes to it) is ever an
+      # argument: any local user can read a process's arguments in /proc.
+      # jq reads the password from its 0600 file by path and the code on
+      # stdin, from printf, a shell builtin that starts no process.
+      printf '%s' "$qr" | jq -Rsc --rawfile p "$VIRTUAL_DIR/$name/secret" \
+        '{username:"candela", password:($p | rtrimstr("\n"))} + (if . == "" then {} else {qr:.} end)'
       ;;
     gather)
       local name="${1:-}"
