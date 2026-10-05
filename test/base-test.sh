@@ -106,7 +106,7 @@ EOF
   # The desk's addresses: loopback, the LAN, and libvirt's bridge.
   cat > "$dir/bin/ip" <<'EOF'
 #!/bin/bash
-printf '1: lo    inet 127.0.0.1/8 scope host lo\n2: enp5s0    inet 192.168.1.89/24 brd 192.168.1.255 scope global enp5s0\n4: virbr0    inet 192.168.122.1/24 brd 192.168.122.255 scope global virbr0\n'
+printf '1: lo    inet 127.0.0.1/8 scope host lo\n2: enp5s0    inet 192.168.1.89/24 brd 192.168.1.255 scope global enp5s0\n3: wlan0    inet 192.168.1.90/24 brd 192.168.1.255 scope global wlan0\n4: virbr0    inet 192.168.122.1/24 brd 192.168.122.255 scope global virbr0\n5: tailscale0    inet 100.64.0.7/32 scope global tailscale0\n'
 EOF
   cat > "$dir/bin/omarchy-notification-send" <<'EOF'
 #!/bin/bash
@@ -129,6 +129,8 @@ EOF
   echo '[]' > "$dir/virtual.json"
   # Omarchy's firewall: ufw on, incoming dropped, 5901 allowed from the LAN.
   mkdir -p "$dir/system-units" "$dir/etc/default" "$dir/etc/ufw"
+  # The links behind the addresses: wired, wireless, and a tunnel with no device.
+  mkdir -p "$dir/sysnet/enp5s0/device" "$dir/sysnet/wlan0/device" "$dir/sysnet/wlan0/wireless" "$dir/sysnet/tailscale0"
   touch "$dir/system-units/ufw.service"
   echo 'DEFAULT_INPUT_POLICY="DROP"' > "$dir/etc/default/ufw"
   printf '%s\n' '### tuple ### allow tcp 5901 0.0.0.0/0 any 192.168.1.0/24 in comment=43616e64656c61' \
@@ -147,6 +149,7 @@ run_cli() {
   OMARCHY_CANDELA_VERIFY_SECONDS="${OMARCHY_CANDELA_VERIFY_SECONDS:-0.5}" \
   OMARCHY_CANDELA_VNC_WAIT_SECONDS=0 \
   OMARCHY_CANDELA_UFW_DIR="$sandbox/etc" \
+  OMARCHY_CANDELA_SYS_NET="$sandbox/sysnet" \
   HOME="$sandbox" \
     "$ROOT/bin/omarchy-candela" "$@"
 }

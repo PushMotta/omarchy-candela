@@ -79,6 +79,7 @@ VIRTUAL_GAP=320                            # logical px between the desk and a d
 VNC_WAIT_SECONDS="${OMARCHY_CANDELA_VNC_WAIT_SECONDS:-3}"
 WAYVNC="${OMARCHY_CANDELA_WAYVNC:-wayvnc}"   # the tests name one that is missing
 UFW_DIR="${OMARCHY_CANDELA_UFW_DIR:-/etc}"   # the tests give one of their own
+SYS_NET="${OMARCHY_CANDELA_SYS_NET:-/sys/class/net}"   # and these
 REVERT_UNIT="omarchy-candela-revert"
 REVERT_SECONDS="${OMARCHY_CANDELA_REVERT_SECONDS:-15}"
 VERIFY_SECONDS="${OMARCHY_CANDELA_VERIFY_SECONDS:-3}"
@@ -1417,7 +1418,21 @@ virtual_lan_addresses() {
       return out "/" bits
     }
     { split($4, a, "/"); print a[1] "\t" $2 "\t" net(a[1], a[2]) }' \
-    | grep -vE $'\t(lo|virbr[0-9]*|docker[0-9]*|br-[0-9a-f]+|veth[0-9a-z]*)\t' || true
+    | grep -vE $'\t(lo|virbr[0-9]*|docker[0-9]*|br-[0-9a-f]+|veth[0-9a-z]*)\t' \
+    | while IFS=$'\t' read -r address interface network; do
+        printf '%s\t%s\t%s\t%s\n' "$address" "$interface" "$network" "$(virtual_interface_kind "$interface")"
+      done || true
+}
+
+# What kind of link an address is on, in words a person picks by: Wi-Fi,
+# Ethernet, Tailscale or VPN; otherwise the interface's own name.
+virtual_interface_kind() {
+  local interface="$1"
+  if [[ -d $SYS_NET/$interface/wireless ]]; then echo "Wi-Fi"
+  elif [[ $interface == tailscale* ]]; then echo "Tailscale"
+  elif [[ $interface =~ ^(wg|tun|tap|zt)[0-9a-z]* ]]; then echo "VPN"
+  elif [[ -e $SYS_NET/$interface/device ]]; then echo "Ethernet"
+  else echo "$interface"; fi
 }
 
 # Does the firewall let a client reach this port? Omarchy turns ufw on with
@@ -1809,7 +1824,7 @@ virtual_state_json() {
   local windows
   windows="$(virtual_window_counts "$live")"
   jq -c -n --argjson intent "$intent" --argjson views "$out" --argjson wayvnc "$wayvnc" --argjson windows "$windows" \
-        --argjson addresses "$(virtual_lan_addresses | jq -R -s -c 'split("\n") | map(select(. != "") | split("\t") | {address:.[0], interface:.[1], network:.[2]})')" "$JQ_VIRTUAL_DEFS"'
+        --argjson addresses "$(virtual_lan_addresses | jq -R -s -c 'split("\n") | map(select(. != "") | split("\t") | {address:.[0], interface:.[1], network:.[2], kind:.[3]})')" "$JQ_VIRTUAL_DEFS"'
     virtual_workspace_names($intent.virtual) as $ws
     | { wayvnc: $wayvnc, addresses: $addresses,
         displays: (($intent.virtual // {}) | with_entries(.value += {workspace: $ws[.key], windows: ($windows[.key] // 0)} + ($views[.key] // {}))) }'

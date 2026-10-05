@@ -951,6 +951,15 @@ Item {
     virtualSecret = null
     secretProc.running = true
   }
+  // A new password, shown at once: the server restarts with it, so anyone
+  // viewing is disconnected and has to log in again.
+  function newVirtualSecret(name) {
+    if (secretProc.running) return
+    secretProc.command = [root.cli, "virtual", "secret", name, "--new", "--qr"]
+    virtualSecretFor = name
+    virtualSecret = null
+    secretProc.running = true
+  }
 
   Process {
     id: virtualProc
@@ -975,6 +984,7 @@ Item {
   // is hidden again; it is never part of the state.
   Process {
     id: secretProc
+    onRunningChanged: if (!running) root.refresh()
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {

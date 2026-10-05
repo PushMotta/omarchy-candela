@@ -327,7 +327,9 @@ You see a virtual display in two ways:
   to be finished within 30 seconds of connecting, too short to type a
   password on a tablet, so *Show* also draws it as a QR code: scan it with
   the tablet's camera, copy it, then connect and paste it, and let the app
-  remember it. Omarchy's firewall drops incoming connections, so the port
+  remember it. *New password* replaces it, asking twice since it
+  disconnects anyone viewing. Each address is labelled Ethernet, Wi-Fi,
+  Tailscale or VPN, so the right one is easy to pick. Omarchy's firewall drops incoming connections, so the port
   must be allowed from your network; the inspector and `doctor` say when it
   is not, with the rule to add. Hyprland has one
   cursor, and a viewer's input moves it, so a display placed apart is

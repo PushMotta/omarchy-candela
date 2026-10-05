@@ -556,6 +556,15 @@ Item {
     { use: "stage", title: "Stage", caption: "A screen of an exact size, 1920×1080 to start, to share in a call or record. Choose it in the screen-share picker and watch it in Candela's window; Omarchy's own screen recording only sees it with its portal setting on. It sits apart, out of the mouse's way." },
     { use: "bench", title: "Test bench", caption: "See an app at a size or on a device you don't have: pick the device, watch it in Candela's window, and move the mouse onto it to use it. Nothing to install." } ]
   property string removeArmedFor: ""
+  // A new password disconnects whoever is viewing: asked twice, like Remove.
+  property string secretArmedFor: ""
+  Timer { id: secretArm; interval: 4000; onTriggered: root.secretArmedFor = "" }
+  function newSecret(d) {
+    if (!d || !service) return
+    if (secretArmedFor !== d.name) { secretArmedFor = d.name; secretArm.restart(); return }
+    secretArmedFor = ""
+    service.newVirtualSecret(d.name)
+  }
   Timer { id: removeArm; interval: 4000; onTriggered: root.removeArmedFor = "" }
 
   function sizeOf(d) { var m = Model.parseMode(modeOf(d)); return m ? m.width + "x" + m.height : "" }
@@ -710,7 +719,7 @@ Item {
       : ["mode", "refresh", "vrr", "scale", "rotation", "posx", "posy", "mirror", "enabled"]
     if (isVirtual) {
       if (!virtualState.wayvnc) list.push("vinstall")
-      if (virtualNetwork.on) list.push("vaddress", "vsecret", "vlogin")
+      if (virtualNetwork.on) list.push("vaddress", "vsecret", "vnewsecret", "vlogin")
       list.push("vremove")
     }
     if (caps.available) {
@@ -851,6 +860,7 @@ Item {
       case "vinstall": if (service) service.installWayvnc(); break
       case "vnetwork": if (service && virtualState.wayvnc && (enabledOf(d) || virtualNetwork.on)) service.virtualView(d.name, "network", !virtualNetwork.on); break
       case "vsecret": if (service) service.showVirtualSecret(d.name); break
+      case "vnewsecret": newSecret(d); break
       case "vlogin": if (service) service.virtualView(d.name, "network", true, ["--at-login", virtualNetwork.atLogin ? "no" : "yes"]); break
       case "vremove": removeVirtual(d); break
       case "icc": if (colourOf(d) !== "hdr") iccDropdown.toggle(); break   // disabled while the draft is in HDR
@@ -1859,7 +1869,7 @@ Item {
                     width: parent.width; spacing: Style.spacing.labelGap
                     RowLabel { text: "Address · port " + (root.virtualNetwork.port || "") }
                     ButtonGroup {
-                      options: (root.virtualState.addresses || []).map(function(a) { return { value: a.address, label: a.address + " · " + a.interface } })
+                      options: (root.virtualState.addresses || []).map(function(a) { return { value: a.address, label: a.address + " · " + (a.kind && a.kind !== a.interface ? a.kind + " (" + a.interface + ")" : a.interface) } })
                       value: root.virtualNetwork.address || ""
                       foreground: root.foreground; background: root.background; accent: root.accent; fontFamily: root.fontFamily
                       focusable: false
@@ -1924,6 +1934,36 @@ Item {
                         text: "Scan it with the tablet's camera and copy the password. Then connect, enter the username candela, paste it, and let the app remember it: the login must be finished within 30 seconds of connecting."
                         color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap
                       }
+                    }
+                  }
+                }
+
+                InspectorRow {
+                  rowId: "vnewsecret"
+                  visible: root.isVirtual && root.virtualNetwork.on === true
+                  Item {
+                    width: parent.width
+                    implicitHeight: Math.max(newSecretText.implicitHeight, newSecretButton.implicitHeight)
+                    readonly property bool armed: root.display !== null && root.secretArmedFor === root.display.name
+                    Text {
+                      id: newSecretText
+                      textFormat: Text.PlainText
+                      text: parent.armed ? "Anyone viewing is disconnected and has to log in again with the new one."
+                                         : "Replace the password, if it has been shared or seen."
+                      color: parent.armed ? root.urgent : root.dim
+                      font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap
+                      width: parent.width - newSecretButton.width - Style.spacing.md
+                      anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Button {
+                      id: newSecretButton
+                      text: parent.armed ? "Press again" : "New password"
+                      bordered: true
+                      foreground: parent.armed ? root.urgent : root.foreground; fontFamily: root.fontFamily
+                      hasCursor: root.focusArea === "inspector" && root.currentRow === "vnewsecret"
+                      anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                      onClicked: root.newSecret(root.display)
+                      onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vnewsecret" } }
                     }
                   }
                 }

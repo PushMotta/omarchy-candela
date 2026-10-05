@@ -595,7 +595,7 @@ assert_eq "$(jq -c '.virtual["VIRTUAL-1"]' "$sandbox2/state/intent.json")" '{"la
 state="$(run_cli "$sandbox2" state)"
 assert_eq "$(jq -r '.displays[] | select(.name == "VIRTUAL-1") | .virtual' <<<"$state")" "true" "state marks it virtual"
 assert_eq "$(jq -r '.virtual.displays["VIRTUAL-1"].workspace' <<<"$state")" "stage" "state names its workspace"
-assert_eq "$(jq -c '[.virtual.addresses[].address]' <<<"$state")" '["192.168.1.89"]' "only LAN addresses are offered, not loopback or the VM bridge"
+assert_eq "$(jq -c '[.virtual.addresses[].address]' <<<"$state")" '["192.168.1.89","192.168.1.90","100.64.0.7"]' "only LAN addresses are offered, not loopback or the VM bridge"
 pass "a virtual display is added apart, on its own workspace, without a countdown"
 
 # ---- a reload keeps it, and restore makes nothing twice
@@ -866,4 +866,22 @@ assert_eq "$(jq -c '[.[] | select(.monitor == 0) | .address] | sort' "$sandbox2/
 assert_contains "$(cat "$sandbox2/hyprctl.log")" 'hl.dsp.window.move({ workspace = "1", follow = false, window = "address:0xa1" })' "silently, by address"
 assert_eq "$(run_cli "$sandbox2" state | jq -r '.virtual.displays["VIRTUAL-1"].windows')" "0" "and none are left there"
 pass "windows on a virtual display are counted and can be brought back"
+
+# ---- each address says what kind of link it is on
+sandbox2="$(new_sandbox)"
+assert_eq "$(run_cli "$sandbox2" state | jq -c '[.virtual.addresses[] | "\(.address) \(.kind)"]')" '["192.168.1.89 Ethernet","192.168.1.90 Wi-Fi","100.64.0.7 Tailscale"]' "Ethernet, Wi-Fi and Tailscale, and never the VM bridge or loopback"
+pass "addresses are labelled by the kind of link"
+
+# ---- a new password: replaced, and the running server started again with it
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" virtual add extra >/dev/null
+run_cli "$sandbox2" virtual view VIRTUAL-1 network on >/dev/null
+old="$(cat "$sandbox2/state/virtual/VIRTUAL-1/secret")"
+: > "$sandbox2/systemctl.log"
+new="$(run_cli "$sandbox2" virtual secret VIRTUAL-1 --new | jq -r .password)"
+[[ -n $new && $new != "$old" ]] || fail "a new password is made"
+assert_eq "$new" "$(cat "$sandbox2/state/virtual/VIRTUAL-1/secret")" "and kept"
+assert_contains "$(cat "$sandbox2/state/virtual/VIRTUAL-1/network.conf")" "password=$new" "the server's config has it"
+assert_contains "$(cat "$sandbox2/systemctl.log")" "stop omarchy-candela-network-VIRTUAL-1.service" "the server is restarted for it"
+pass "a new password replaces the old one and restarts the server"
 
