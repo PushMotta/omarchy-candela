@@ -6,9 +6,9 @@ plugin for Hyprland 0.56+ with the Lua config.
 
 Two surfaces, one backend:
 
-- **Popup** in the bar: brightness, SDR white while in HDR, scale, one
-  `SDR · Wide · HDR` control gated by the panel's EDID, the display list,
-  Identify and Arrange. The bar icon itself takes the urgent colour while a
+- **Popup** in the bar: brightness, SDR white while in HDR, text size,
+  scale, one `SDR · Wide · HDR` control gated by the panel's EDID, the
+  display list, Identify and Arrange. The bar icon itself takes the urgent colour while a
   change is waiting to be kept, and the accent while any display is in HDR, so
   neither needs the popup open to be seen.
 - **Studio** overlay: arrangement canvas in logical pixels with snapping, the
@@ -18,6 +18,10 @@ Two surfaces, one backend:
   section (colour preset, mastering luminances, capability overrides,
   auto-HDR). A column that runs past its bottom edge says what is below it
   rather than hiding it behind a scrollbar that only appears once you scroll.
+- **Workspaces**, in the same studio: give each of Omarchy's ten workspaces a
+  home display. SUPER+6 then opens workspace 6 on the display you chose, a
+  display that connects takes its workspaces back, and the plan survives a
+  reboot. See [Workspaces](#workspaces).
 
 Every risky change is applied live and **reverts itself in 15 seconds unless
 kept**. The timer runs outside the shell, so a shell crash still reverts. The
@@ -195,6 +199,47 @@ the safety back on. Switching a display on is immediate, and the last enabled
 display cannot be switched off at all. In the studio, `Enabled` stages the
 change like every other field and needs `a` to apply.
 
+## Workspaces
+
+Omarchy opens a workspace on whichever display has focus. The studio's
+Workspaces section gives each workspace from 1 to 10 a home display instead:
+
+- **Plan**: `Off` (the default: nothing is written and nothing moves),
+  `Split` (contiguous runs, left to right: 1–5 and 6–0 on two displays),
+  `Alternate` (odd and even), or `Custom` (any edit to the pills).
+- **Lives on**: one pill per workspace, numbered as on the keyboard. ↵ or a
+  click makes the selected display its home, or clears it. Each block on the
+  canvas carries chips for the workspaces that live there; dragging a chip to
+  another block gives it that home.
+- **Shows when it lights up**: the workspace a display shows when it connects
+  or is switched on; by default its lowest-numbered one.
+
+What it does, as Hyprland 0.56 behaves:
+
+- A workspace with a home is created there, so SUPER+N opens on that display
+  and focus goes with it.
+- When any display connects, every workspace with a home on a connected
+  display goes back to it. A workspace you moved by hand with
+  SUPER+SHIFT+ALT+arrows stays until then.
+- A display that is unplugged or switched off hands its workspaces to another
+  display (Hyprland picks the first one that connected); they come back with it.
+  Its homes stay in the plan while it is gone.
+- A mirror shows another display's picture, so it cannot be a home. Setting
+  one moves its homes to the display it mirrors in the same change.
+
+A reload does not move workspaces that are already open, so applying a plan
+moves them itself, and the inspector names every move before you apply.
+Nothing in a plan can blank a screen, so a change that only touches the plan
+is kept at once, without the countdown; `r` or Revert undoes it, moving the
+workspaces back to where they were. A change that also touches a display keeps
+its countdown for everything.
+
+The rules are written into the layout file below with the same workspace text
+Omarchy's per-workspace layout toggle uses (`"3"`). Hyprland merges rules with
+the same workspace text field by field, so SUPER+L's layout and the plan's
+display live in one rule and neither undoes the other. Names, icons, apps per
+workspace and the bar's workspace widget are left alone.
+
 ## Command line
 
 Everything the UI does is a subcommand of `bin/omarchy-candela`. It is not
@@ -218,13 +263,18 @@ omarchy-candela icc list
 omarchy-candela recover                        # every display off? switch the built-in (or first) one back on
 omarchy-candela doctor                         # is the layout loaded, does the compositor agree, what could fight it
 omarchy-candela report                         # diagnostics for a bug report, as Markdown, safe to paste in public
+omarchy-candela apply '{"workspaces":{"homes":{"6":"DP-2","7":"DP-2"}}}'   # kept at once; revert undoes it
+omarchy-candela apply '{"workspaces":null}'    # plan off: rules removed, nothing moved
+omarchy-candela workspaces home                # send open workspaces home, bindable
 ```
 
 Change JSON accepts, per display: `mode`, `position`, `scale`, `transform`,
 `vrr`, `enabled`, `mirror`, `bitdepth`, `cm`, `sdr_eotf`, `sdrbrightness`,
 `sdrsaturation`, `sdr_min_luminance`, `sdr_max_luminance`, `min_luminance`,
 `max_luminance`, `max_avg_luminance`, `icc`, `supports_hdr`,
-`supports_wide_color`; and `global.cm_auto_hdr`. Everything is validated
+`supports_wide_color`; `global.cm_auto_hdr`; and `workspaces`, with `homes`
+(workspace `"1"`–`"10"` → display) and `shows` (display → workspace), where
+`null` removes an entry and `"workspaces":null` turns the plan off. Everything is validated
 against what `hl.monitor` accepts before anything is written, unknown keys are
 rejected at every level, and two rules hold on the merged result rather than
 just the change: an ICC profile and an HDR preset cannot coexist, and an HDR
@@ -237,7 +287,11 @@ mode. Set the mode you want instead.
 
 ## How it persists
 
-- `~/.local/state/omarchy/candela/intent.json` — what you chose, per connector.
+- `~/.local/state/omarchy/candela/intent.json` — what you chose, per connector,
+  and the workspace plan.
+- `~/.local/state/omarchy/candela/workspaces-undo.json` — the plan and
+  workspace positions a workspace-only change replaced, until anything else
+  is applied.
 - `~/.local/state/omarchy/candela/pending.json` — an applied-but-not-kept change with its expiry and transaction token.
 - `~/.local/state/omarchy/toggles/hypr/candela-pending.lua` — the pending
   change in the same form as the layout, loaded after it, for as long as the
@@ -246,7 +300,10 @@ mode. Set the mode you want instead.
   intent plus live geometry. Omarchy loads every file in that directory after
   your own `~/.config/hypr/monitors.lua`, so these rules win, and your file is
   never parsed or edited. Every connected display gets a full rule: mixing an
-  explicit position with Hyprland's auto placement moves displays.
+  explicit position with Hyprland's auto placement moves displays. A display
+  that is not connected keeps the rule it last had, word for word, so it comes
+  back the way you left it rather than at Hyprland's defaults; `doctor` lists
+  those. The workspace plan follows the monitor rules.
 
 `hyprctl reload` restores the kept configuration; that is the revert primitive.
 Because the pending change is on disk too, loaded after the layout, a reload
@@ -273,7 +330,8 @@ A display that is switched off keeps its mode, position and scale in intent,
 so it comes back where it was. Should every display ever be off, for instance
 a kept layout with one display off booted without the other attached, the
 service runs `recover`, which switches the built-in panel, or the first
-display, back on.
+display, back on. Hyprland draws to an invisible output named `FALLBACK`
+while no real display is on; Candela never counts it as a display.
 
 ## The built-in panel
 

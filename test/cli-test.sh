@@ -429,3 +429,151 @@ sed -i '/default.hypr.toggles/d' "$sandbox2/.config/hypr/hyprland.lua"
 if out="$(run_cli "$sandbox2" doctor)"; then fail "doctor exits 1 when the toggles are not required"; fi
 assert_contains "$out" "FAIL  $sandbox2/.config/hypr/hyprland.lua does not require" "doctor names the missing require"
 pass "doctor"
+
+# ---- every display off: Hyprland's FALLBACK output is not a display
+sandbox2="$(new_sandbox)"
+for f in monitors.json; do
+  jq 'map(.disabled = true | .width = 0 | .height = 0) + [{"name":"FALLBACK","description":"","make":"","model":"","serial":"","disabled":false,"focused":true,"width":1920,"height":1080,"refreshRate":60,"x":0,"y":0,"scale":1,"transform":0,"mirrorOf":"none","availableModes":[]}]' "$sandbox2/$f" > "$sandbox2/m.tmp" && mv "$sandbox2/m.tmp" "$sandbox2/$f"
+done
+state="$(run_cli "$sandbox2" state)"
+assert_eq "$(jq -r '[.displays[].name] | join(",")' <<<"$state")" "DP-1,DP-2" "FALLBACK is not listed as a display"
+assert_eq "$(jq -r '[.displays[] | select(.enabled)] | length' <<<"$state")" "0" "with every real display off, none is enabled"
+out="$(run_cli "$sandbox2" recover)"
+assert_eq "$out" "recovered DP-1" "recover is not fooled by FALLBACK"
+assert_not_contains "$(cat "$sandbox2/state/candela-layout.lua")" "FALLBACK" "no rule is written for FALLBACK"
+pass "Hyprland's FALLBACK output never counts as a display"
+
+# ---- a display that is not connected keeps its last rule
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" apply --now '{"displays":[{"name":"DP-2","bitdepth":10,"cm":"hdr","sdr_max_luminance":203}]}' >/dev/null
+dp2_rule="$(grep 'output = "DP-2"' "$sandbox2/state/candela-layout.lua")"
+for f in monitors.json monitors.pristine.json; do
+  jq 'map(select(.name != "DP-2"))' "$sandbox2/$f" > "$sandbox2/m.tmp" && mv "$sandbox2/m.tmp" "$sandbox2/$f"
+done
+run_cli "$sandbox2" apply --now '{"displays":[{"name":"DP-1","scale":2}]}' >/dev/null
+lua="$(cat "$sandbox2/state/candela-layout.lua")"
+assert_contains "$lua" "$dp2_rule" "the unplugged display's rule survives a keep, word for word"
+assert_contains "$lua" "-- Not connected now." "and the file says why it is there"
+assert_contains "$lua" 'output = "DP-1", mode = "3840x2560@59.98", position = "0x0", scale = 2' "the connected display gets the new rule"
+assert_eq "$(grep -c 'output = "DP-2"' <<<"$lua")" "1" "the kept rule is written once"
+out="$(run_cli "$sandbox2" doctor || true)"
+assert_contains "$out" "kept rules wait for displays not connected now: DP-2" "doctor names it"
+assert_not_contains "$(cat "$sandbox2/eval-last.txt")" 'output = "DP-2"' "nothing is sent live for a display that is not there"
+pass "a display that is not connected keeps its rule"
+
+# ---- workspace plan: a workspace-only change is kept at once and moves open workspaces home
+split='{"workspaces":{"homes":{"1":"DP-1","2":"DP-1","3":"DP-1","4":"DP-1","5":"DP-1","6":"DP-2","7":"DP-2","8":"DP-2","9":"DP-2","10":"DP-2"}}}'
+sandbox2="$(new_sandbox)"
+: > "$sandbox2/hyprctl.log"
+out="$(run_cli "$sandbox2" apply "$split")"
+assert_eq "$out" "kept" "a workspace-only change needs no countdown"
+[[ ! -e $sandbox2/state/pending.json ]] || fail "nothing is left pending"
+lua="$(cat "$sandbox2/state/candela-layout.lua")"
+assert_contains "$lua" 'hl.workspace_rule({ workspace = "1", monitor = "DP-1", default = true })' "first home on each display is shown on connect"
+assert_contains "$lua" 'hl.workspace_rule({ workspace = "2", monitor = "DP-1" })' "workspace text is the string form Omarchy's layout toggle uses"
+assert_contains "$lua" 'hl.workspace_rule({ workspace = "6", monitor = "DP-2", default = true })' "DP-2 shows 6 when it lights up"
+assert_contains "$lua" 'hl.workspace_rule({ workspace = "10", monitor = "DP-2" })' "workspace 10 is planned"
+assert_not_contains "$lua" "persistent" "no workspace is made persistent"
+assert_eq "$(jq -r '.[] | select(.id == 2) | .monitor' "$sandbox2/workspaces.json")" "DP-1" "open workspace 2 was sent home to DP-1"
+assert_eq "$(jq -r '.[] | select(.id == 1) | .monitor' "$sandbox2/workspaces.json")" "DP-1" "workspace 1 was already home"
+assert_eq "$(grep -c 'workspace.move' "$sandbox2/hyprctl.log")" "1" "only the workspace that was away is moved"
+assert_eq "$(jq -r '.[] | select(.workspaceString == "7") | .monitor' "$sandbox2/wsrules.json")" "DP-2" "the reload loaded the rules"
+[[ -s $sandbox2/state/workspaces-undo.json ]] || fail "the change can be undone"
+state="$(run_cli "$sandbox2" state)"
+assert_eq "$(jq -r '.workspaces.kept.homes["6"]' <<<"$state")" "DP-2" "state carries the kept plan"
+assert_eq "$(jq -r '.workspaces.open | length' <<<"$state")" "2" "state carries the open workspaces"
+assert_eq "$(jq -r '.workspaces.undo | type' <<<"$state")" "object" "state says an undo is available"
+pass "a workspace plan is kept at once and sends open workspaces home"
+
+# ---- revert undoes the plan and puts workspaces back
+out="$(run_cli "$sandbox2" revert)"
+assert_eq "$out" "reverted" "revert undoes the workspace change"
+assert_eq "$(jq -r '.workspaces // "off"' "$sandbox2/state/intent.json")" "off" "the plan is off again"
+assert_not_contains "$(cat "$sandbox2/state/candela-layout.lua")" "workspace_rule" "no rules are left"
+assert_eq "$(jq -r '.[] | select(.id == 2) | .monitor' "$sandbox2/workspaces.json")" "DP-2" "workspace 2 is back where it was"
+[[ ! -e $sandbox2/state/workspaces-undo.json ]] || fail "the undo is used once"
+assert_eq "$(run_cli "$sandbox2" revert)" "reverted" "a second revert has nothing to undo"
+assert_eq "$(jq -r '.workspaces // "off"' "$sandbox2/state/intent.json")" "off" "and changes nothing"
+pass "revert undoes a workspace plan"
+
+# ---- undo restores the previous plan exactly, not merged
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" apply '{"workspaces":{"homes":{"1":"DP-1","2":"DP-2"}}}' >/dev/null
+run_cli "$sandbox2" apply '{"workspaces":{"homes":{"3":"DP-2"},"shows":{"DP-2":"3"}}}' >/dev/null
+assert_contains "$(cat "$sandbox2/state/candela-layout.lua")" 'workspace = "3", monitor = "DP-2", default = true' "an explicit show wins over the lowest home"
+assert_contains "$(cat "$sandbox2/state/candela-layout.lua")" 'hl.workspace_rule({ workspace = "2", monitor = "DP-2" })' "2 is no longer DP-2's default"
+run_cli "$sandbox2" revert >/dev/null
+assert_eq "$(jq -c '.workspaces' "$sandbox2/state/intent.json")" '{"homes":{"1":"DP-1","2":"DP-2"}}' "the earlier plan is back as it was"
+pass "undo replaces the plan with the one before"
+
+# ---- a show follows its workspace: moving the home away drops it
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" apply '{"workspaces":{"homes":{"6":"DP-2","7":"DP-2"},"shows":{"DP-2":"7"}}}' >/dev/null
+run_cli "$sandbox2" apply '{"workspaces":{"homes":{"7":"DP-1"}}}' >/dev/null
+assert_eq "$(jq -c '.workspaces' "$sandbox2/state/intent.json")" '{"homes":{"6":"DP-2","7":"DP-1"}}' "DP-2 no longer shows a workspace that left it"
+run_cli "$sandbox2" apply '{"workspaces":{"homes":{"6":null,"7":null}}}' >/dev/null
+assert_eq "$(jq -r '.workspaces // "off"' "$sandbox2/state/intent.json")" "off" "removing the last home turns the plan off"
+pass "shows follow their workspaces; no homes is off"
+
+# ---- validation of the plan
+sandbox2="$(new_sandbox)"
+if run_cli "$sandbox2" apply '{"workspaces":{"homes":{"11":"DP-1"}}}' 2>/dev/null; then fail "workspace 11 rejected"; fi
+if run_cli "$sandbox2" apply '{"workspaces":{"homes":{"1":"FALLBACK"}}}' 2>/dev/null; then fail "FALLBACK rejected as a home"; fi
+if run_cli "$sandbox2" apply '{"workspaces":{"homes":{"1":"DP-1;x"}}}' 2>/dev/null; then fail "bad display name rejected"; fi
+if run_cli "$sandbox2" apply '{"workspaces":{"layouts":{}}}' 2>/dev/null; then fail "unknown workspaces key rejected"; fi
+if run_cli "$sandbox2" apply '{"workspaces":{"shows":{"DP-1":"0"}}}' 2>/dev/null; then fail "show must name workspace 1 to 10"; fi
+if run_cli "$sandbox2" apply '{"workspaces":[1]}' 2>/dev/null; then fail "workspaces must be an object"; fi
+run_cli "$sandbox2" apply "$split" >/dev/null
+if out="$(run_cli "$sandbox2" apply --now '{"displays":[{"name":"DP-2","mirror":"DP-1"}]}' 2>&1)"; then fail "a home cannot become a mirror"; fi
+assert_contains "$out" "DP-2 mirrors DP-1, so it cannot be the home of workspace" "the refusal says why"
+run_cli "$sandbox2" apply --now '{"displays":[{"name":"DP-2","mirror":"DP-1"}],"workspaces":{"homes":{"6":"DP-1","7":"DP-1","8":"DP-1","9":"DP-1","10":"DP-1"}}}' >/dev/null \
+  || fail "mirroring works when the same change moves the homes"
+pass "the plan is validated, and a mirror is never a home"
+
+# ---- a change to displays and workspaces together gets the countdown, and revert moves workspaces back
+sandbox2="$(new_sandbox)"
+out="$(run_cli "$sandbox2" apply '{"displays":[{"name":"DP-1","scale":2}],"workspaces":{"homes":{"2":"DP-1"}}}')"
+assert_contains "$out" "pending" "a change that touches a display keeps its countdown"
+assert_eq "$(jq -r '.[] | select(.id == 2) | .monitor' "$sandbox2/workspaces.json")" "DP-1" "the preview moved workspace 2"
+assert_contains "$(cat "$sandbox2/state/candela-pending.lua")" 'workspace = "2", monitor = "DP-1"' "the preview file carries the plan"
+assert_eq "$(jq -r '.workspacesBefore | map(select(.id == 2))[0].monitor' "$sandbox2/state/pending.json")" "DP-2" "the journal records where it was"
+run_cli "$sandbox2" revert >/dev/null
+assert_eq "$(jq -r '.[] | select(.id == 2) | .monitor' "$sandbox2/workspaces.json")" "DP-2" "revert puts workspace 2 back"
+assert_eq "$(jq length "$sandbox2/wsrules.json")" "0" "and the reload drops the preview's rules"
+[[ ! -e $sandbox2/state/workspaces-undo.json ]] || fail "a timed change leaves no undo"
+pass "a mixed change is timed, and revert puts the workspaces back"
+
+# ---- a move the compositor ignores undoes the change
+sandbox2="$(new_sandbox)"
+if out="$(FAKE_HYPRCTL_MOVE_IGNORED=1 run_cli "$sandbox2" apply "$split" 2>&1)"; then fail "an ignored move is not reported as kept"; fi
+assert_contains "$out" "the workspaces did not move, so it was undone: workspace 2 is on DP-2, wanted DP-1" "the failure names the workspace"
+assert_eq "$(jq -r '.workspaces // "off"' "$sandbox2/state/intent.json" 2>/dev/null || echo off)" "off" "nothing was kept"
+[[ ! -e $sandbox2/state/pending.json ]] || fail "nothing is left pending"
+pass "a workspace that does not move undoes the change"
+
+# ---- workspaces home, and homes on a display that is not connected
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" apply "$split" >/dev/null
+jq 'map(if .id == 2 then .monitor = "DP-2" else . end)' "$sandbox2/workspaces.json" > "$sandbox2/w.tmp" && mv "$sandbox2/w.tmp" "$sandbox2/workspaces.json"
+assert_eq "$(run_cli "$sandbox2" workspaces home)" "home" "workspaces home runs"
+assert_eq "$(jq -r '.[] | select(.id == 2) | .monitor' "$sandbox2/workspaces.json")" "DP-1" "a workspace moved by hand goes home"
+for f in monitors.json monitors.pristine.json; do
+  jq 'map(select(.name != "DP-2"))' "$sandbox2/$f" > "$sandbox2/m.tmp" && mv "$sandbox2/m.tmp" "$sandbox2/$f"
+done
+jq 'map(.monitor = "DP-1")' "$sandbox2/workspaces.json" > "$sandbox2/w.tmp" && mv "$sandbox2/w.tmp" "$sandbox2/workspaces.json"
+run_cli "$sandbox2" apply --now '{"displays":[{"name":"DP-1","scale":2}]}' >/dev/null
+assert_contains "$(cat "$sandbox2/state/candela-layout.lua")" 'hl.workspace_rule({ workspace = "6", monitor = "DP-2", default = true })' "homes on an unplugged display stay in the file"
+assert_eq "$(run_cli "$sandbox2" workspaces home)" "home" "nothing is sent to a display that is not there"
+out="$(run_cli "$sandbox2" doctor || true)"
+assert_contains "$out" "homes on DP-2, not connected now" "doctor says where those workspaces go"
+assert_contains "$out" "Hyprland's rules match it" "doctor checks the live rules"
+pass "workspaces home, and a plan that names an unplugged display"
+
+# ---- turning the plan off removes the rules and moves nothing
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" apply "$split" >/dev/null
+: > "$sandbox2/hyprctl.log"
+assert_eq "$(run_cli "$sandbox2" apply '{"workspaces":null}')" "kept" "off is kept at once"
+assert_not_contains "$(cat "$sandbox2/state/candela-layout.lua")" "workspace_rule" "off writes no rules"
+assert_not_contains "$(cat "$sandbox2/hyprctl.log")" "workspace.move" "off moves nothing"
+pass "the plan turns off"

@@ -10,6 +10,12 @@
 #   FAKE_HYPRCTL_TOGGLES_NOT_LOADED=1 reload reads no toggles files at all
 #   FAKE_HYPRCTL_PRESERVE_OMITTED=1   reload starts from current, non-pristine state
 #   FAKE_HYPRCTL_RELOAD_FAIL=1        reload fails before changing live state
+#   FAKE_HYPRCTL_MOVE_IGNORED=1       a workspace move answers ok and does nothing
+#
+# Workspaces follow Hyprland 0.56.2's rules as read in its source: an
+# hl.workspace_rule merges into an earlier rule with the same workspace text
+# (later fields win), a reload clears every rule and re-reads the files, and
+# neither moves a workspace that is already open; only a dispatched move does.
 
 dir="$FAKE_DIR"
 echo "$*" >> "$dir/hyprctl.log"
@@ -18,6 +24,27 @@ echo "$*" >> "$dir/hyprctl.log"
 rules_from() {
   grep -oE 'hl\.monitor\(\{.*\}\)' \
     | sed -E 's/^hl\.monitor\(\{ ?//; s/ ?\}\)$//; s/\[==\[([^]]*)\]==\]/"\1"/g; s/(^|, )([a-z_]+) = /\1"\2": /g; s/^/{/; s/$/}/'
+}
+
+# lua text on stdin → one JSON object per hl.workspace_rule
+workspace_rules_from() {
+  grep -oE 'hl\.workspace_rule\(\{.*\}\)' \
+    | sed -E 's/^hl\.workspace_rule\(\{ ?//; s/ ?\}\)$//; s/(^|, )([a-z_]+) = /\1"\2": /g; s/^/{/; s/$/}/'
+}
+
+# lua text on stdin, merged into wsrules.json the way replaceOrAdd does
+apply_workspace_rules() {
+  local rule
+  while IFS= read -r rule; do
+    [[ -n $rule ]] || continue
+    jq --argjson r "$rule" '
+      ($r | {workspaceString: .workspace, enabled: true}
+        + (if has("monitor") then {monitor} else {} end)
+        + (if has("default") then {default} else {} end)
+        + (if has("layout") then {layout} else {} end)) as $new
+      | (map(.workspaceString) | index($r.workspace)) as $i
+      | if $i == null then . + [$new] else .[$i] += ($new | del(.workspaceString)) end' "$dir/wsrules.json" > "$dir/wsrules.json.tmp" && mv "$dir/wsrules.json.tmp" "$dir/wsrules.json"
+  done < <(workspace_rules_from)
 }
 
 # lua text on stdin, applied rule by rule to monitors.json
@@ -73,6 +100,7 @@ case "$1 $2" in
       exit 7
     fi
     apply_rules <<<"$2"
+    apply_workspace_rules <<<"$2"
     if [[ $2 =~ cm_auto_hdr[[:space:]]*=[[:space:]]*([012]) ]]; then
       jq --argjson v "${BASH_REMATCH[1]}" '.cm_auto_hdr=$v' "$dir/global.json" > "$dir/global.json.tmp" && mv "$dir/global.json.tmp" "$dir/global.json"
     fi
@@ -82,11 +110,13 @@ case "$1 $2" in
     if [[ ${FAKE_HYPRCTL_RELOAD_FAIL:-} == 1 ]]; then echo "fake hyprctl: reload rejected" >&2; exit 1; fi
     [[ ${FAKE_HYPRCTL_PRESERVE_OMITTED:-} == 1 ]] || cp "$dir/monitors.pristine.json" "$dir/monitors.json"
     : > "$dir/probe.txt"
+    echo '[]' > "$dir/wsrules.json"
     if [[ ${FAKE_HYPRCTL_TOGGLES_NOT_LOADED:-} != 1 ]]; then
       # Sorted like require_all: candela-layout, candela-pending, internal-monitor-*.
       for f in "$dir/state/candela-layout.lua" "$dir/state/candela-pending.lua" "$dir/state/internal-monitor-disable.lua"; do
         [[ -f $f ]] || continue
         apply_rules < "$f"
+        apply_workspace_rules < "$f"
         sed -nE 's/^omarchy_candela_layout_probe = "([^"]+)"$/\1/p' "$f" >> "$dir/probe.txt"
       done
     fi
@@ -94,6 +124,18 @@ case "$1 $2" in
     ;;
   "configerrors "*|"configerrors") echo ok ;;
   "version "*|"version") echo "Hyprland 0.56.2 (fake)" ;;
-  "dispatch "*) echo ok ;;
+  "workspaces -j"|"workspaces ") cat "$dir/workspaces.json" ;;
+  "workspacerules -j"|"workspacerules ") cat "$dir/wsrules.json" ;;
+  "activeworkspace -j"|"activeworkspace ") jq '[.[] | select(.focused == true)][0].activeWorkspace // {id: 1}' "$dir/monitors.json" ;;
+  "dispatch "*)
+    if [[ $2 =~ hl\.dsp\.workspace\.move\(\{\ workspace\ =\ \"([^\"]+)\",\ monitor\ =\ \"([^\"]+)\"\ \}\) ]]; then
+      ws="${BASH_REMATCH[1]}" mon="${BASH_REMATCH[2]}"
+      if ! jq -e --arg w "$ws" 'any(.name == $w)' "$dir/workspaces.json" >/dev/null; then echo "Workspace not found"; exit 1; fi
+      if [[ ${FAKE_HYPRCTL_MOVE_IGNORED:-} != 1 ]]; then
+        jq --arg w "$ws" --arg m "$mon" 'map(if .name == $w then .monitor = $m else . end)' "$dir/workspaces.json" > "$dir/workspaces.json.tmp" && mv "$dir/workspaces.json.tmp" "$dir/workspaces.json"
+      fi
+    fi
+    echo ok
+    ;;
   *) echo "unhandled: $*" >&2; exit 1 ;;
 esac

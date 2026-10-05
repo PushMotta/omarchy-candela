@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import Quickshell
+import Quickshell.Hyprland
 import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
@@ -63,6 +64,8 @@ Item {
     targetScreen = chosen || (Quickshell.screens.length ? Quickshell.screens[0] : null)
     draft = ({})
     draftGlobal = ({})
+    draftPlan = undefined
+    wsPillIndex = 0
     advancedOpen = false
     helpOpen = false
     focusArea = "inspector"
@@ -128,7 +131,131 @@ Item {
   property var draftGlobalRevisions: ({})
   property var submittedGlobalRevisions: ({})
   property int editRevision: 0
-  readonly property bool draftDirty: Object.keys(draft).length > 0 || Object.keys(draftGlobal).length > 0
+  readonly property bool draftDirty: Object.keys(draft).length > 0 || Object.keys(draftGlobal).length > 0 || planDirty
+
+  // ---------------------------------------------------------- workspace plan
+  //
+  // The plan is one thing for the whole desk (a home display per workspace,
+  // and what each display shows when it lights up), so its draft is a single
+  // object rather than per-display fields. undefined is "not edited".
+  property var draftPlan: undefined
+  property int planRevision: 0
+  property int submittedPlanRevision: -1
+  property int wsPillIndex: 0
+
+  // Pending wins over kept, as for every other field.
+  readonly property var savedPlan: {
+    var w = service && service.state ? service.state.workspaces : null
+    var p = !w ? null : (hasPending ? w.pendingConfig : w.kept)
+    return { homes: (p && p.homes) || {}, shows: (p && p.shows) || {} }
+  }
+  readonly property var plan: draftPlan !== undefined ? draftPlan : savedPlan
+  readonly property bool planDirty: draftPlan !== undefined
+    && !(Model.samePlanHomes(draftPlan.homes, savedPlan.homes) && Model.samePlanHomes(Model.effectiveShows(draftPlan.homes, draftPlan.shows), Model.effectiveShows(savedPlan.homes, savedPlan.shows)))
+  readonly property bool planOn: Object.keys(plan.homes).length > 0
+  readonly property string planKind: Model.planKind(plan.homes, rects)
+
+  // Live from Hyprland, so the chips follow a workspace moved by hand while
+  // the studio is open.
+  readonly property var openWorkspaces: {
+    var out = [], values = Hyprland.workspaces.values
+    for (var i = 0; i < values.length; i++) {
+      var w = values[i]
+      if (!(w.id >= 1)) continue
+      out.push({ id: w.id, monitor: w.monitor ? String(w.monitor.name) : "", windows: w.toplevels ? w.toplevels.values.length : 0 })
+    }
+    return out
+  }
+  readonly property var shownWorkspaceIds: {
+    var out = [], mons = Hyprland.monitors.values
+    for (var i = 0; i < mons.length; i++) if (mons[i].activeWorkspace) out.push(mons[i].activeWorkspace.id)
+    return out
+  }
+  readonly property var planMovesNow: Model.planMoves(plan.homes, openWorkspaces, Model.planOrder(rects))
+  readonly property var savedMovesNow: Model.planMoves(savedPlan.homes, openWorkspaces, Model.planOrder(rects))
+  readonly property var planChips: {
+    var out = {}
+    if (!planOn) return out
+    for (var i = 0; i < displays.length; i++) out[displays[i].name] = Model.chipsFor(displays[i].name, plan.homes, openWorkspaces, shownWorkspaceIds)
+    return out
+  }
+  readonly property string planNote: {
+    var m = planMovesNow
+    if (!m.length) return ""
+    var one = m.length === 1
+    var lead = one ? "Workspace " + Model.workspaceLabel(m[0].id) + " is on " + m[0].from + " now."
+                   : "Workspaces " + Model.workspaceList(m.map(function(x) { return x.id })) + " are away from home."
+    return lead + (planDirty ? " Apply moves " + (one ? "it" : "them") + " home." : " Send home moves " + (one ? "it" : "them") + " back.")
+  }
+  readonly property bool displayCanBeHome: !!display && !mirrorOf(display)
+
+  function copyMap(m) { var o = {}; for (var k in (m || {})) o[k] = m[k]; return o }
+
+  function setPlan(homes, shows) {
+    draftPlan = { homes: homes, shows: shows || {} }
+    planRevision++
+    // Back to exactly what is saved is no edit at all.
+    if (!planDirty) draftPlan = undefined
+  }
+
+  // Off and the presets replace the plan; Custom from Off starts from where
+  // the open workspaces are now, and from a preset it changes nothing (any
+  // edit to the pills is what makes a plan custom).
+  function choosePlan(kind) {
+    if (kind === "custom") {
+      if (planKind !== "off") return
+      var homes = {}, usable = Model.planOrder(rects)
+      for (var i = 0; i < openWorkspaces.length; i++) {
+        var w = openWorkspaces[i]
+        if (w.id <= 10 && usable.indexOf(w.monitor) !== -1) homes[String(w.id)] = w.monitor
+      }
+      setPlan(homes, {})
+      return
+    }
+    setPlan(Model.presetPlan(kind, rects), {})
+  }
+
+  function toggleHome(d, id) {
+    if (!d || mirrorOf(d)) return
+    var homes = copyMap(plan.homes), key = String(id)
+    if (homes[key] === d.name) delete homes[key]
+    else homes[key] = d.name
+    setPlan(homes, copyMap(plan.shows))
+  }
+
+  function moveHome(id, name) {
+    var target = displayByName(name)
+    if (!target || mirrorOf(target)) return
+    var homes = copyMap(plan.homes)
+    homes[String(id)] = name
+    setPlan(homes, copyMap(plan.shows))
+  }
+
+  function setShow(d, id) {
+    if (!d) return
+    var shows = copyMap(plan.shows)
+    shows[d.name] = String(id)
+    setPlan(copyMap(plan.homes), shows)
+  }
+
+  // A mirror shows another display's picture, so its homes go with it to the
+  // display it mirrors, in the same change.
+  function setMirror(d, value) {
+    setField(d.name, "mirror", value)
+    if (value && Model.homesOn(plan.homes, d.name).length) setPlan(Model.rehomeFrom(plan.homes, d.name, value), copyMap(plan.shows))
+  }
+
+  function homesCaption(d) {
+    if (!d) return ""
+    if (mirrorOf(d)) return d.name + " mirrors " + mirrorOf(d) + ", so it shows " + mirrorOf(d) + "'s workspaces and cannot be a home."
+    var parts = [], others = {}
+    for (var k in plan.homes) if (plan.homes[k] !== d.name) { (others[plan.homes[k]] = others[plan.homes[k]] || []).push(Number(k)) }
+    for (var n in others) parts.push(Model.workspaceList(others[n]) + " live on " + n)
+    var line = parts.length ? parts.join(", ") + "." : ""
+    if (!enabledOf(d) && Model.homesOn(plan.homes, d.name).length) line += (line ? " " : "") + d.name + " is off, so its workspaces open on another display until it is on."
+    if (planDirty) line += (line ? " " : "") + "Apply: " + Model.planSummary(planKind, planMovesNow).replace(/^Plan [A-Za-z]+ · /, "") + "."
+    return line
+  }
 
   function setField(name, key, value) {
     var next = {}
@@ -183,6 +310,7 @@ Item {
 
   // Whether the selected display's draft touches this inspector row.
   function rowChanged(rowId) {
+    if (rowId.indexOf("ws") === 0) return rowId !== "wssend" && planDirty
     return !!display && Model.rowChanged(rowId, draft[display.name], draftGlobal)
   }
 
@@ -193,6 +321,8 @@ Item {
   function resetRow(rowId) {
     var d = display
     if (!d || applyInFlight || !rowChanged(rowId)) return
+    // The plan is one thing: putting any of its rows back puts it all back.
+    if (rowId.indexOf("ws") === 0) { draftPlan = undefined; return }
     var f = Model.rowFields(rowId)
     var before = null
     for (var i = 0; i < rects.length; i++) if (rects[i].name === d.name) before = rects[i]
@@ -339,6 +469,11 @@ Item {
       change.displays.push(entry)
     }
     if (Object.keys(draftGlobal).length) change.global = draftGlobal
+    // A change that only touches the plan carries no displays key: that is
+    // how the backend knows it can keep it at once, without a countdown.
+    if (planDirty) change.workspaces = Model.workspaceChange(savedPlan, draftPlan)
+    if (!change.displays.length) delete change.displays
+    submittedPlanRevision = planDirty ? planRevision : -1
     submittedDraft = draft
     submittedGlobal = draftGlobal
     submittedRevisions = draftRevisions
@@ -362,14 +497,20 @@ Item {
       var ng = {}
       for (var gk in root.draftGlobal) if (!root.submittedGlobalRevisions[gk] || root.draftGlobalRevisions[gk] !== root.submittedGlobalRevisions[gk]) ng[gk] = root.draftGlobal[gk]
       root.draft = next; root.draftGlobal = ng
+      if (root.submittedPlanRevision !== -1 && root.planRevision === root.submittedPlanRevision) root.draftPlan = undefined
       root.focusArea = "actions"; root.actionIndex = 1
     }
   }
 
+  // Revert, in order: a pending change; else the draft; else, when the last
+  // thing kept was a workspace plan (kept at once, with no countdown to
+  // revert from), that plan.
   function revertOrDiscard() {
     if (hasPending && service) { service.revert(); return }
+    if (!draftDirty && service && service.workspaceUndo) { service.revert(); return }
     draft = ({})
     draftGlobal = ({})
+    draftPlan = undefined
   }
 
   function moveDisplay(name, x, y) {
@@ -407,6 +548,7 @@ Item {
       ["h l  ← →", "adjust the row"],
       ["⇧ h l", "larger steps for position and luminance"],
       ["↵  space", "open a dropdown, edit a field, or toggle"],
+      ["↵ on a workspace", "make this display its home, or clear it"],
       ["⌫", "reset the row to what is kept"] ] },
     { title: "Canvas", keys: [
       ["arrows", "nudge 10 px, with ⇧ 100 px"],
@@ -414,7 +556,8 @@ Item {
       ["0", "move to the origin"],
       ["j k", "next and previous display"],
       ["⌫", "reset its position"],
-      ["drag with ⌥", "move without snapping"] ] },
+      ["drag with ⌥", "move without snapping"],
+      ["drag a workspace", "give it another home display"] ] },
     { title: "Actions and countdown", keys: [
       ["h l", "choose a button"],
       ["↵", "press it; Keep while a change is pending"],
@@ -426,7 +569,16 @@ Item {
     if (caps.available) {
       list.push("colour")
       if (display && colourOf(display) === "hdr") list.push("sdrwhite")
-      list.push("transfer", "icc", "advanced")
+      list.push("transfer", "icc")
+    }
+    list.push("wsplan")
+    if (planOn) {
+      list.push("wshomes")
+      if (display && Model.homesOn(plan.homes, display.name).length) list.push("wsshows")
+    }
+    if (!planDirty && savedMovesNow.length) list.push("wssend")
+    if (caps.available) {
+      list.push("advanced")
       if (advancedOpen) {
         list.push("preset", "saturation", "minlum", "maxlum", "avglum", "caphdr", "capwide", "autohdr")
       }
@@ -473,8 +625,19 @@ Item {
       case "posy": { var q = positionOf(d); moveDisplay(d.name, q.x, q.y + delta * step); break }
       case "mirror": {
         var m = [""].concat(displays.filter(function(o) { return o.name !== d.name }).map(function(o) { return o.name }))
-        setField(d.name, "mirror", cycle(m, mirrorOf(d), delta)); break
+        setMirror(d, cycle(m, mirrorOf(d), delta)); break
       }
+      case "wsplan": {
+        var kinds = ["off", "split", "alternate"]
+        if (planKind === "custom") kinds.push("custom")
+        choosePlan(cycle(kinds, planKind, delta)); break
+      }
+      case "wshomes": wsPillIndex = Math.max(0, Math.min(Model.WORKSPACE_IDS.length - 1, wsPillIndex + delta)); break
+      case "wsshows": {
+        var homes = Model.homesOn(plan.homes, d.name).map(String)
+        if (homes.length) setShow(d, cycle(homes, Model.effectiveShows(plan.homes, plan.shows)[d.name] || homes[0], delta)); break
+      }
+      case "wssend": break
       case "enabled": setField(d.name, "enabled", !enabledOf(d)); break
       case "colour": setColour(d, cycle(Model.offeredModes(d.capabilities, colourIntent(d)), colourOf(d), delta)); break
       case "sdrwhite": {
@@ -520,6 +683,8 @@ Item {
       case "refresh": refreshDropdown.toggle(); break
       case "enabled": setField(d.name, "enabled", !enabledOf(d)); break
       case "advanced": advancedOpen = !advancedOpen; break
+      case "wshomes": toggleHome(d, Model.WORKSPACE_IDS[wsPillIndex]); break
+      case "wssend": if (service) service.sendWorkspacesHome(); break
       case "icc": if (colourOf(d) !== "hdr") iccDropdown.toggle(); break   // disabled while the draft is in HDR
       case "posx": posXField.field.forceActiveFocus(); break
       case "posy": posYField.field.forceActiveFocus(); break
@@ -758,8 +923,11 @@ Item {
               accent: root.accent
               urgent: root.urgent
               fontFamily: root.fontFamily
+              chips: root.planChips
+              note: root.planNote
               onSelected: function(name) { root.selectedName = name; root.focusArea = "canvas" }
               onMoved: function(name, x, y) { root.moveDisplay(name, x, y) }
+              onChipDropped: function(workspace, name) { root.moveHome(workspace, name) }
             }
 
             // ----- panel identity, under the canvas
@@ -857,6 +1025,7 @@ Item {
                 { item: signalHeader, name: "signal" },
                 { item: geometryHeader, name: "geometry" },
                 { item: colourHeader, name: "colour" },
+                { item: workspacesHeader, name: "workspaces" },
                 { item: advancedSection, name: "advanced" }
               ]
             }
@@ -1025,7 +1194,7 @@ Item {
                       value: root.display ? root.mirrorOf(root.display) : ""
                       foreground: root.foreground; background: root.background; accent: root.accent; fontFamily: root.fontFamily
                       focusable: false
-                      onChanged: function(v) { if (root.display) root.setField(root.display.name, "mirror", v) }
+                      onChanged: function(v) { if (root.display) root.setMirror(root.display, v) }
                       onHovered: function(i, h) { if (h) { root.focusArea = "inspector"; root.currentRow = "mirror" } }
                     }
                   }
@@ -1147,6 +1316,125 @@ Item {
                     Text {
                       textFormat: Text.PlainText
                       text: parent.hdrDraft ? "Clear HDR to load an ICC profile." : "A profile forces the sRGB transfer and replaces the colour preset. HDR is unavailable while one is loaded."
+                      color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width
+                    }
+                  }
+                }
+
+                // ----- workspaces
+                PanelSeparator { foreground: root.foreground }
+                PanelSectionHeader { id: workspacesHeader; text: "WORKSPACES"; foreground: root.foreground; fontFamily: root.fontFamily }
+
+                InspectorRow {
+                  rowId: "wsplan"
+                  Column {
+                    width: parent.width; spacing: Style.spacing.labelGap
+                    RowLabel { text: "Plan" }
+                    ButtonGroup {
+                      options: [{ value: "off", label: "Off" }, { value: "split", label: "Split" }, { value: "alternate", label: "Alternate" }, { value: "custom", label: "Custom" }]
+                      value: root.planKind
+                      foreground: root.foreground; background: root.background; accent: root.accent; fontFamily: root.fontFamily
+                      focusable: false
+                      onChanged: function(v) { root.choosePlan(v) }
+                      onHovered: function(i, h) { if (h) { root.focusArea = "inspector"; root.currentRow = "wsplan" } }
+                    }
+                    Text {
+                      textFormat: Text.PlainText
+                      text: root.planOn
+                        ? "Each workspace has a home display. SUPER+N opens it there, and a display that connects takes its workspaces back."
+                        : "Workspaces open on whichever display has focus, as Omarchy does by default."
+                      color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width
+                    }
+                  }
+                }
+
+                InspectorRow {
+                  rowId: "wshomes"
+                  visible: root.planOn
+                  Column {
+                    width: parent.width; spacing: Style.spacing.labelGap
+                    Item {
+                      width: parent.width; implicitHeight: homesLabel.implicitHeight
+                      RowLabel { id: homesLabel; text: "Lives on " + (root.display ? root.display.name : ""); anchors.left: parent.left }
+                      Text {
+                        textFormat: Text.PlainText
+                        text: (root.display ? Model.homesOn(root.plan.homes, root.display.name).length : 0) + " of 10"
+                        color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true
+                        anchors.right: parent.right
+                      }
+                    }
+                    Grid {
+                      id: homesGrid
+                      width: parent.width
+                      columns: Model.WORKSPACE_IDS.length
+                      spacing: Style.spacing.xs
+                      readonly property real cellWidth: (width - spacing * (columns - 1)) / columns
+                      Repeater {
+                        model: Model.WORKSPACE_IDS
+                        Button {
+                          required property var modelData
+                          required property int index
+                          readonly property string home: root.plan.homes[String(modelData)] || ""
+                          readonly property bool here: root.display !== null && home === root.display.name
+                          width: homesGrid.cellWidth
+                          text: Model.workspaceLabel(modelData)
+                          fontSize: Style.font.caption
+                          foreground: root.foreground; fontFamily: root.fontFamily
+                          horizontalPadding: 0; verticalPadding: Style.spacing.controlPaddingY
+                          bordered: true
+                          active: here
+                          hasCursor: root.focusArea === "inspector" && root.currentRow === "wshomes" && root.wsPillIndex === index
+                          enabled: root.displayCanBeHome
+                          // Homed on another display: there, but quieter.
+                          opacity: !enabled ? 0.45 : (home !== "" && !here ? 0.6 : 1)
+                          tooltipText: home === "" ? "No home: opens where focus is" : (here ? "Lives here" : "Lives on " + home)
+                          onClicked: { root.wsPillIndex = index; if (root.display) root.toggleHome(root.display, modelData) }
+                          onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "wshomes"; root.wsPillIndex = index } }
+                        }
+                      }
+                    }
+                    Text {
+                      textFormat: Text.PlainText
+                      text: root.homesCaption(root.display)
+                      visible: text !== ""
+                      color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width
+                    }
+                  }
+                }
+
+                InspectorRow {
+                  rowId: "wsshows"
+                  visible: root.planOn && root.display !== null && Model.homesOn(root.plan.homes, root.display.name).length > 0
+                  Column {
+                    width: parent.width; spacing: Style.spacing.labelGap
+                    RowLabel { text: "Shows when it lights up" }
+                    ButtonGroup {
+                      options: root.display ? Model.homesOn(root.plan.homes, root.display.name).map(function(id) { return { value: String(id), label: Model.workspaceLabel(id) } }) : []
+                      value: root.display ? (Model.effectiveShows(root.plan.homes, root.plan.shows)[root.display.name] || "") : ""
+                      foreground: root.foreground; background: root.background; accent: root.accent; fontFamily: root.fontFamily
+                      focusable: false
+                      onChanged: function(v) { if (root.display) root.setShow(root.display, v) }
+                      onHovered: function(i, h) { if (h) { root.focusArea = "inspector"; root.currentRow = "wsshows" } }
+                    }
+                  }
+                }
+
+                InspectorRow {
+                  rowId: "wssend"
+                  visible: !root.planDirty && root.savedMovesNow.length > 0
+                  Column {
+                    width: parent.width; spacing: Style.spacing.labelGap
+                    Button {
+                      text: "Send open workspaces home"
+                      bordered: true
+                      foreground: root.foreground; fontFamily: root.fontFamily
+                      hasCursor: root.focusArea === "inspector" && root.currentRow === "wssend"
+                      onClicked: if (root.service) root.service.sendWorkspacesHome()
+                      onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "wssend" } }
+                    }
+                    Text {
+                      textFormat: Text.PlainText
+                      text: Model.planSummary(Model.planKind(root.savedPlan.homes, root.rects), root.savedMovesNow).replace(/^Plan [A-Za-z]+ · m/, "M") + ". The plan itself does not change."
                       color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width
                     }
                   }
@@ -1408,7 +1696,7 @@ Item {
               }
               Button {
                 text: root.draftDirty ? "Discard" : "Revert"; bordered: true
-                enabled: root.draftDirty || root.hasPending
+                enabled: root.draftDirty || root.hasPending || (root.service !== null && root.service.workspaceUndo)
                 opacity: enabled ? 1 : 0.45
                 foreground: root.foreground; fontFamily: root.fontFamily
                 hasCursor: root.focusArea === "actions" && root.actionIndex === 1

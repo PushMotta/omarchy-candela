@@ -368,6 +368,7 @@ function changeSummary(change) {
     parts.push(d.name + ": " + (fields.length ? fields.join(", ") : "settings"))
   })
   if (change.global) parts.push("Global colour settings")
+  if (change.workspaces !== undefined) parts.push(change.workspaces === null ? "Workspace plan off" : "Workspace plan")
   return parts.join(" · ") || "Display settings"
 }
 
@@ -588,6 +589,164 @@ function brightnessName(percent) {
   return "Night owl"
 }
 
+// ---------------------------------------------------------------- workspaces
+//
+// The plan is a home display per workspace, 1 to 10, keyed by the workspace
+// as a string ("1".."10") the way the backend and Hyprland's rules name it.
+// Presets only fill it in; nothing but the plan is stored.
+
+var WORKSPACE_IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+// Omarchy's keys and bar call workspace 10 "0".
+function workspaceLabel(id) {
+  return Number(id) === 10 ? "0" : String(id)
+}
+
+// Displays that can be a home, left to right and then top to bottom: on, and
+// not showing another display's picture.
+function planOrder(rects) {
+  return (rects || []).filter(function (r) { return !r.disabled && !r.mirrorOf })
+    .slice().sort(function (a, b) { return a.x !== b.x ? a.x - b.x : (a.y !== b.y ? a.y - b.y : (a.name < b.name ? -1 : 1)) })
+    .map(function (r) { return r.name })
+}
+
+// "split": contiguous runs, the first displays taking the remainder (two
+// displays 1-5 | 6-0, three 1-4 | 5-7 | 8-0). "alternate": round robin.
+function presetPlan(kind, rects) {
+  var order = planOrder(rects), homes = {}
+  if (!order.length || kind === "off") return homes
+  if (kind === "alternate") {
+    WORKSPACE_IDS.forEach(function (id, i) { homes[String(id)] = order[i % order.length] })
+    return homes
+  }
+  var base = Math.floor(WORKSPACE_IDS.length / order.length), extra = WORKSPACE_IDS.length % order.length, next = 0
+  order.forEach(function (name, i) {
+    var count = base + (i < extra ? 1 : 0)
+    for (var c = 0; c < count; c++) homes[String(WORKSPACE_IDS[next++])] = name
+  })
+  return homes
+}
+
+function samePlanHomes(a, b) {
+  var ka = Object.keys(a || {}), kb = Object.keys(b || {})
+  if (ka.length !== kb.length) return false
+  for (var i = 0; i < ka.length; i++) if ((a || {})[ka[i]] !== (b || {})[ka[i]]) return false
+  return true
+}
+
+// Which preset the plan is, if any. Anything else is "custom".
+function planKind(homes, rects) {
+  if (!homes || Object.keys(homes).length === 0) return "off"
+  if (planOrder(rects).length > 1 || Object.keys(homes).length === 10) {
+    if (samePlanHomes(homes, presetPlan("split", rects))) return "split"
+    if (samePlanHomes(homes, presetPlan("alternate", rects))) return "alternate"
+  }
+  return "custom"
+}
+
+function homesOn(homes, name) {
+  var out = []
+  for (var k in (homes || {})) if (homes[k] === name) out.push(Number(k))
+  return out.sort(function (a, b) { return a - b })
+}
+
+// What each display shows when it lights up: its chosen workspace while that
+// still lives there, else its lowest-numbered home. Same rule as the backend.
+function effectiveShows(homes, shows) {
+  var out = {}
+  for (var k in (homes || {})) {
+    var n = homes[k]
+    if (out[n] === undefined || Number(k) < Number(out[n])) out[n] = k
+  }
+  for (var d in (shows || {})) if (shows[d] && (homes || {})[shows[d]] === d) out[d] = shows[d]
+  return out
+}
+
+// The open workspaces that are away from a home they can go to. `open` is
+// [{id, monitor, windows}], `usable` the displays that can take them.
+function planMoves(homes, open, usable) {
+  var moves = []
+  ;(open || []).forEach(function (w) {
+    var id = Number(w.id)
+    if (!(id >= 1 && id <= 10)) return
+    var home = (homes || {})[String(id)]
+    if (!home || w.monitor === home || (usable || []).indexOf(home) === -1) return
+    moves.push({ id: id, from: w.monitor, to: home, windows: Number(w.windows) || 0 })
+  })
+  return moves.sort(function (a, b) { return a.id - b.id })
+}
+
+// "1–5", "6–0", "1, 3, 5": runs of three or more are ranges.
+function workspaceList(ids) {
+  var sorted = (ids || []).map(Number).sort(function (a, b) { return a - b }), parts = []
+  for (var i = 0; i < sorted.length; ) {
+    var j = i
+    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j] + 1) j++
+    if (j - i >= 2) parts.push(workspaceLabel(sorted[i]) + "–" + workspaceLabel(sorted[j]))
+    else for (var k = i; k <= j; k++) parts.push(workspaceLabel(sorted[k]))
+    i = j + 1
+  }
+  return parts.join(", ")
+}
+
+function planKindLabel(kind) {
+  return { off: "Off", split: "Split", alternate: "Alternate", custom: "Custom" }[kind] || "Custom"
+}
+
+// The action bar's sentence for a drafted plan.
+function planSummary(kind, moves) {
+  var head = "Plan " + planKindLabel(kind)
+  if (!moves || !moves.length) return head + " · no open workspace moves"
+  return head + " · " + moves.map(function (m) {
+    return "moves workspace " + workspaceLabel(m.id) + (m.windows ? " (" + m.windows + (m.windows === 1 ? " window)" : " windows)") : "")
+      + " from " + m.from + " to " + m.to
+  }).join(", ")
+}
+
+// The chips drawn on one display's block: each workspace that lives there,
+// then, faintly, any open workspace that is there now but lives elsewhere.
+function chipsFor(name, homes, open, shownIds) {
+  var byId = {}
+  ;(open || []).forEach(function (w) { byId[Number(w.id)] = w })
+  var shown = shownIds || []
+  var chips = homesOn(homes, name).map(function (id) {
+    var w = byId[id]
+    return { id: id, label: workspaceLabel(id), used: !!w && Number(w.windows) > 0, open: !!w,
+             shown: !!w && w.monitor === name && shown.indexOf(id) !== -1,
+             away: !!w && w.monitor !== name, where: w ? w.monitor : "", ghost: false }
+  })
+  ;(open || []).forEach(function (w) {
+    var id = Number(w.id)
+    if (!(id >= 1 && id <= 10) || w.monitor !== name) return
+    var home = (homes || {})[String(id)]
+    if (home && home !== name) chips.push({ id: id, label: workspaceLabel(id), used: Number(w.windows) > 0, open: true, shown: shown.indexOf(id) !== -1, away: false, where: name, home: home, ghost: true })
+  })
+  return chips
+}
+
+// A display set to mirror cannot be a home: its homes go to the display it
+// mirrors, in the same change.
+function rehomeFrom(homes, from, to) {
+  var out = {}
+  for (var k in (homes || {})) out[k] = homes[k] === from ? to : homes[k]
+  return out
+}
+
+// The change the backend needs to go from `kept` to `next`: every kept home
+// or show the draft dropped is sent as null, or the whole block as null when
+// the draft is off.
+function workspaceChange(kept, next) {
+  var nextHomes = (next && next.homes) || {}
+  if (!Object.keys(nextHomes).length) return null
+  var homes = {}, shows = {}
+  var keptHomes = (kept && kept.homes) || {}, keptShows = (kept && kept.shows) || {}, nextShows = (next && next.shows) || {}
+  for (var k in keptHomes) homes[k] = null
+  for (var k2 in nextHomes) homes[k2] = nextHomes[k2]
+  for (var s in keptShows) shows[s] = null
+  for (var s2 in nextShows) shows[s2] = nextShows[s2]
+  return { homes: homes, shows: shows }
+}
+
 function parseState(raw) {
   try {
     var s = JSON.parse(String(raw || ""))
@@ -609,6 +768,9 @@ if (typeof module !== "undefined") {
     logicalSize: logicalSize, rectOf: rectOf, overlaps: overlaps, boundsOf: boundsOf, snapRect: snapRect, anyOverlap: anyOverlap, layoutCaption: layoutCaption,
     arrangeable: arrangeable, snapTargets: snapTargets, withRect: withRect, dragPosition: dragPosition,
     reflowAfterResize: reflowAfterResize, placeOutsideOverlaps: placeOutsideOverlaps, snapBeside: snapBeside,
-    brightnessName: brightnessName, parseState: parseState, clamp: clamp, round2: round2
+    brightnessName: brightnessName, parseState: parseState, clamp: clamp, round2: round2,
+    WORKSPACE_IDS: WORKSPACE_IDS, workspaceLabel: workspaceLabel, planOrder: planOrder, presetPlan: presetPlan, samePlanHomes: samePlanHomes,
+    planKind: planKind, planKindLabel: planKindLabel, homesOn: homesOn, effectiveShows: effectiveShows, planMoves: planMoves, planSummary: planSummary,
+    chipsFor: chipsFor, rehomeFrom: rehomeFrom, workspaceChange: workspaceChange, workspaceList: workspaceList
   }
 }

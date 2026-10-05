@@ -98,6 +98,7 @@ Panel {
     if (displays.length > 1) list.push("chips")
     if (brightnessAvailable) list.push("brightness")
     if (colourMode === "hdr") list.push("sdrwhite")
+    if (textSizeAvailable) list.push("textsize")
     if (display && display.enabled) list.push("scale")
     if (caps.available && display && display.enabled) list.push("colour")
     if (displays.length > 1) list.push("displays")
@@ -116,11 +117,11 @@ Panel {
   }
 
   function sectionIsHorizontal(section) {
-    return section === "chips" || section === "scale" || section === "colour" || section === "pending" || section === "brightness" || section === "sdrwhite"
+    return section === "chips" || section === "scale" || section === "colour" || section === "pending" || section === "brightness" || section === "sdrwhite" || section === "textsize"
   }
 
   function sectionFirstIndex(section) {
-    if (section === "brightness" || section === "sdrwhite") return -1
+    if (section === "brightness" || section === "sdrwhite" || section === "textsize") return -1
     if (section === "chips") return Math.max(0, indexOfDisplay(selectedName))
     if (section === "scale") return Math.max(0, activeScaleIndex())
     if (section === "colour") return Math.max(0, offeredModes.indexOf(colourMode))
@@ -160,6 +161,7 @@ Panel {
   function moveCursorH(delta) {
     if (focusSection === "brightness") { adjustBrightness(delta * 5); return }
     if (focusSection === "sdrwhite") { adjustSdrWhite(delta * 10); return }
+    if (focusSection === "textsize") { adjustTextSize(delta); return }
     if (!sectionIsHorizontal(focusSection)) return
     var count = sectionCount(focusSection)
     if (count === 0) return
@@ -200,13 +202,16 @@ Panel {
     if (!sections.length) return
     if (sections.indexOf(focusSection) < 0) { focusSection = sections[0]; selectedIndex = sectionFirstIndex(focusSection); return }
     var count = sectionCount(focusSection)
-    if (focusSection === "brightness" || focusSection === "sdrwhite") { selectedIndex = -1; return }
+    if (focusSection === "brightness" || focusSection === "sdrwhite" || focusSection === "textsize") { selectedIndex = -1; return }
     if (count === 0) { focusSection = sections[0]; selectedIndex = sectionFirstIndex(focusSection); return }
     if (selectedIndex > count - 1) selectedIndex = count - 1
     if (selectedIndex < 0) selectedIndex = 0
   }
 
   function hoverInto(section, index) {
+    // A text size change reflows the popup under a still pointer; that is
+    // not the user pointing somewhere else.
+    if (reflowingText) return
     cursorActive = true
     focusSection = section
     selectedIndex = index
@@ -291,6 +296,62 @@ Panel {
 
   onFocusSectionChanged: disarmIfCursorMoved()
   onSelectedIndexChanged: disarmIfCursorMoved()
+
+  // ---------------------------------------------------------- text size
+  //
+  // Omarchy's own display popup has this, and Candela's replaces it, so it
+  // carries it too: one desktop-wide setting (shell, GTK apps, terminals)
+  // through Omarchy's own command, on the same stops. Hidden where that
+  // command does not exist.
+  readonly property var textSizeStops: [9, 10, 11, 12, 14, 16, 20]
+  property int textSizePreviewIndex: -1
+  property bool textSizeAvailable: false
+  property bool reflowingText: false
+
+  function nearestTextStop(px) {
+    var best = 0, bestDist = 1e9
+    for (var i = 0; i < textSizeStops.length; i++) {
+      var d = Math.abs(textSizeStops[i] - px)
+      if (d < bestDist) { bestDist = d; best = i }
+    }
+    return best
+  }
+  function currentTextIndex() { return textSizePreviewIndex >= 0 ? textSizePreviewIndex : nearestTextStop(Style.font.baseSize) }
+  function displayedTextPx() { return textSizePreviewIndex >= 0 ? textSizeStops[textSizePreviewIndex] : Style.font.baseSize }
+  function setTextSize(px) {
+    textSizeProc.command = ["omarchy-display-text-size", String(px)]
+    if (!textSizeProc.running) textSizeProc.running = true
+  }
+  function adjustTextSize(delta) {
+    var idx = Math.max(0, Math.min(textSizeStops.length - 1, currentTextIndex() + delta))
+    reflowingText = true; reflowSettle.restart()
+    textSizePreviewIndex = idx
+    setTextSize(textSizeStops[idx])
+  }
+
+  Process {
+    id: textSizeProc
+    stdout: StdioCollector { waitForEnd: true }
+  }
+  Process {
+    id: textSizeProbe
+    command: ["bash", "-c", "command -v omarchy-display-text-size"]
+    running: true
+    onExited: function(exitCode) { root.textSizeAvailable = exitCode === 0 }
+  }
+  Timer {
+    id: reflowSettle
+    interval: 300
+    onTriggered: root.reflowingText = false
+  }
+  // Once the shell's base size catches up with the choice, follow it again.
+  Connections {
+    target: Style
+    function onFontBaseSizeChanged() {
+      root.reflowingText = true; reflowSettle.restart()
+      if (root.textSizePreviewIndex >= 0 && root.nearestTextStop(Style.font.baseSize) === root.textSizePreviewIndex) root.textSizePreviewIndex = -1
+    }
+  }
 
   function identify() { if (service) service.identify() }
 
@@ -510,6 +571,7 @@ Panel {
         markers: [
           { item: brightnessHeader, name: "brightness" },
           { item: sdrHeader, name: "sdr white" },
+          { item: textSizeHeader, name: "text size" },
           { item: scaleHeader, name: "scale" },
           { item: colourHeader, name: "colour" },
           { item: displaysHeader, name: "displays" },
@@ -712,6 +774,49 @@ Panel {
               wrapMode: Text.WordWrap
               width: parent.width - Style.space(12)
               x: Style.space(6)
+            }
+          }
+
+          // ---------- Text size (every display) ----------
+          PanelSeparator { visible: root.textSizeAvailable; foreground: root.fg }
+
+          Column {
+            visible: root.textSizeAvailable
+            width: parent.width
+            spacing: Style.spacing.md
+
+            Item {
+              width: parent.width
+              implicitHeight: Math.max(textSizeHeader.implicitHeight, textSizeValue.implicitHeight)
+              PanelSectionHeader { id: textSizeHeader; text: "TEXT SIZE"; foreground: root.fg; fontFamily: root.fam; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter }
+              Text {
+                id: textSizeValue
+                textFormat: Text.PlainText
+                text: (textSizeSlider.dragging ? root.textSizeStops[Math.round(textSizeSlider.liveValue)] : root.displayedTextPx()) + " px · every display"
+                color: Qt.darker(root.fg, 1.4)
+                font.family: root.fam; font.pixelSize: Style.font.caption; font.bold: true
+                anchors.right: parent.right; anchors.rightMargin: Style.space(6); anchors.verticalCenter: parent.verticalCenter
+              }
+            }
+
+            CursorSurface {
+              id: textSizeRow
+              width: parent.width
+              height: textSizeSlider.implicitHeight + Style.spacing.controlGap
+              hasCursor: root.cursorActive && root.focusSection === "textsize"
+              onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(textSizeRow)
+              foreground: root.fg
+              outline: true
+              PanelSlider {
+                id: textSizeSlider
+                bar: root.bar
+                anchors.fill: parent; anchors.leftMargin: Style.space(6); anchors.rightMargin: Style.space(6)
+                minimum: 0; maximum: root.textSizeStops.length - 1; step: 1; integer: true
+                tickCount: root.textSizeStops.length
+                value: root.currentTextIndex()
+                onReleased: function(v) { root.textSizePreviewIndex = Math.round(v); root.setTextSize(root.textSizeStops[Math.round(v)]) }
+              }
+              HoverHandler { onHoveredChanged: if (hovered) root.hoverInto("textsize", -1) }
             }
           }
 

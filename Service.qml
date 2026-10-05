@@ -62,6 +62,9 @@ Item {
     else if (!hasPending && operationPhase === "previewing") operationPhase = "idle"
   }
   readonly property int revertSeconds: state && state.revertSeconds ? Number(state.revertSeconds) : 15
+  // A workspace-only change is kept at once; while this is set, `revert`
+  // undoes it.
+  readonly property bool workspaceUndo: !!(state && state.workspaces && state.workspaces.undo)
   property int now: Math.floor(Date.now() / 1000)
   readonly property int pendingRemaining: hasPending ? Math.max(0, Number(pending.expires) - now) : 0
 
@@ -191,7 +194,13 @@ Item {
       if (!existing) { existing = { name: nd.name }; displays.push(existing); byName[nd.name] = existing }
       for (var k2 in nd) existing[k2] = nd[k2]
     }
-    var merged = { displays: displays }
+    // No displays key at all when neither side names one: a change without
+    // it that only touches the plan is kept at once by the backend.
+    var merged = displays.length ? { displays: displays } : {}
+    // The plan arrives whole (every dropped entry already null), so the
+    // later one replaces the earlier rather than merging into it.
+    if (incoming.workspaces !== undefined) merged.workspaces = incoming.workspaces
+    else if (base.workspaces !== undefined) merged.workspaces = base.workspaces
     if (base.global || incoming.global) {
       var g = {}
       for (var gk in base.global) g[gk] = base.global[gk]
@@ -264,6 +273,26 @@ Item {
     if (operationPhase === "failed") operationPhase = hasPending ? "previewing" : "idle"
   }
 
+
+  function sendWorkspacesHome() {
+    if (workspacesHomeProc.running) return
+    workspacesHomeProc.running = true
+  }
+
+  Process {
+    id: workspacesHomeProc
+    command: [root.cli, "workspaces", "home"]
+    property int lastExitCode: -1
+    stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector { id: workspacesHomeErr; waitForEnd: true }
+    onExited: function(exitCode) { workspacesHomeProc.lastExitCode = exitCode }
+    onRunningChanged: {
+      if (running) return
+      if (workspacesHomeProc.lastExitCode !== 0) root.failOperation("workspaces", String(workspacesHomeErr.text || "").trim() || "Could not move the workspaces home")
+      else root.succeedOperation("workspaces")
+      root.refresh()
+    }
+  }
 
   function setColourMode(name, mode) {
     var d = displayByName(name)

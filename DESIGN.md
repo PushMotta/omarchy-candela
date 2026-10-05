@@ -49,6 +49,7 @@ Sections, top to bottom:
 - **Hero.** Selected display: name + connector, meta line with mode, refresh, scale and colour state, e.g. `3840×2560 · 60 Hz · 1.6× · SDR 8-bit`. Trailing: a display chip strip when more than one display is present (select which display the popup controls; defaults to the focused one).
 - **Brightness.** Backlight or DDC/CI, 1–100 %, wheel on the bar icon still works. Hidden when no backlight and no DDC.
 - **SDR white.** Visible only in HDR mode. Slider in cd/m² from 80 to the panel's sustained full-field luminance, with notches at 100, 203 (reference, labelled), 300. Drives `sdr_max_luminance`.
+- **Text size.** The built-in popup has it and this one replaces it, so it carries it: Omarchy's `omarchy-display-text-size` on the same stops (9–20 px), labelled as applying to every display, hidden when that command is missing. *(1.2)*
 - **Scale.** Existing preset pills, per selected display, clean-scale corrected.
 - **Colour.** ButtonGroup `SDR · Wide · HDR`, only the options the EDID supports. Caption under it states the resulting output, e.g. `10-bit · BT.2020 PQ · SDR white 203 cd/m²` or `8-bit · sRGB`.
 - **Displays.** One row per display: enabled state, mirror badge, focused dot. Clicking a row selects that display; the power control at its end switches it. Switching off arms and asks for a confirming press, because it blanks a screen the user may be reading; switching on is immediate. Last enabled display cannot be disabled.
@@ -84,7 +85,8 @@ overlap: the others have no independent position.
 2. **Signal.** Mode dropdown (all `availableModes`), VRR `Off · On · Fullscreen`.
 3. **Geometry.** Scale pills, rotation `0° · 90° · 180° · 270°`, position X/Y number fields, mirror-of dropdown, enabled toggle.
 4. **Colour.** Mode `SDR · Wide · HDR`; SDR white slider (cd/m²); SDR saturation; SDR transfer `Default · Gamma 2.2 · sRGB`; ICC profile picker (searchable, lists `~/.local/share/icc`, `~/.color/icc`, `/usr/share/color/icc`). Caption when an ICC is set: "ICC forces the sRGB transfer and replaces the colour preset. HDR is unavailable while a profile is loaded."
-5. **Advanced** (collapsed). Preset override (`auto · srgb · dcip3 · dp3 · adobe · wide · edid · hdr · hdredid`), luminance overrides min / max / average (blank = from EDID, shows the EDID value as placeholder), capability overrides `supports_hdr` / `supports_wide_color` (`Auto · Force on · Force off`), `sdrbrightness` multiplier, and the global switch "Auto HDR for fullscreen content" (`render:cm_auto_hdr`).
+5. **Workspaces** *(1.2, §11)*. Plan `Off · Split · Alternate · Custom`; "Lives on <display>": one pill per workspace 1–0, ↵ makes this display its home or clears it; "Shows when it lights up": the display's homes; "Send open workspaces home" when the kept plan and the desk disagree. The canvas blocks carry chips for the workspaces that live there, and dragging a chip to another block re-homes it.
+6. **Advanced** (collapsed). Preset override (`auto · srgb · dcip3 · dp3 · adobe · wide · edid · hdr · hdredid`), luminance overrides min / max / average (blank = from EDID, shows the EDID value as placeholder), capability overrides `supports_hdr` / `supports_wide_color` (`Auto · Force on · Force off`), `sdrbrightness` multiplier, and the global switch "Auto HDR for fullscreen content" (`render:cm_auto_hdr`).
 
 **Action bar.** `Identify`, `Revert` (to persisted), `Apply`. After Apply of a risky change the bar becomes: `Keep these settings? · Reverting in 15 s · [Keep] [Revert]`. While that strip is up the bar has exactly two keyboard targets, Revert and Keep, with the cursor on Keep; ↵ acts on the highlighted one, `r` and Esc revert. The normal three-target mapping returns when the strip goes. Keyboard hints in caption size at the far left: `j/k move · h/l adjust · ⇥ canvas/inspector · ↵ apply · esc close`.
 
@@ -110,6 +112,7 @@ omarchy-candela identify [connector]
 omarchy-candela hdr <on|off|wide> [--display DP-2] [--sdr-white 203]
 omarchy-candela edid <connector>       # parsed capabilities as JSON
 omarchy-candela icc list
+omarchy-candela workspaces home        # send open workspaces home under the kept plan
 ```
 
 ## 4. Colour model
@@ -199,6 +202,10 @@ The pending change is written beside it as `candela-pending.lua`, in the same fo
 
 A display switched off keeps its live mode, position, scale and rotation in intent at the moment it goes off, so its rule brings it back where it was rather than at "preferred" and 0x0, which is what its live geometry reads once it is off.
 
+A display that is not connected keeps the rule the kept file last gave it, word for word, under a comment that says why. A change cannot name a display that is not there, so that rule is still what was chosen; generating rules from connected displays only would drop it on the next keep and bring the display back at Hyprland's defaults, an HDR panel in SDR. *(1.2)*
+
+The workspace plan (§11) follows the monitor rules in the same file.
+
 Alternative considered: a managed block inside `monitors.lua` with a Lua-aware writer (PR #7340 does this well). Rejected for v1: touching the user's file is the thing that produced #6673-class bugs, and generation is testable byte for byte.
 
 ### 6.4 Identity
@@ -212,6 +219,8 @@ Primary key: connector name. Stored alongside: make, model, serial, EDID hash. W
 The timer runs `revert --expired --token <token>`. A token that no longer matches the pending file marks a stale timer and does nothing, so the fallback timer, which cannot be cancelled, can never revert a newer change. `keep` and `apply --now` commit intent, regenerate the Lua, reload and check `hyprctl configerrors` through one shared path, so the persisted file is validated the same way whichever door it came in by. Every mutating command holds the lock, and every state write goes through a private temp file and an atomic rename.
 
 After the chunk is accepted, apply reads the compositor back for up to three seconds, comparing every field the intent names against what hyprctl reports (position and mode are skipped on a mirror, cm only for presets Hyprland echoes verbatim, scale to hyprctl's two decimals), and unwinds a change Hyprland accepted but did not land on, naming the field. `keep` and `apply --now` do the same after their reload, after `hyprctl configerrors` and after asserting the layout probe; a revert that does not restore the kept state exits non-zero and says why.
+
+Hyprland adds a headless output named `FALLBACK` whenever the last real display is removed or switched off (`state/FallbackState.cpp`). It is enabled, so counting it would make "every display is off" false in exactly the case below. The backend drops it from every reading of the displays, and `doctor` says when it is present. *(1.2)*
 
 The backend refuses a change that would leave no display enabled, so the CLI is not a way round the popup's rule. Should every display ever be off anyway, most likely a kept layout with one display off booted without the other attached, the service runs `recover`, which switches the built-in panel, or the first display, back on. One attempt per dark spell, so a rescue the compositor refuses cannot loop.
 
@@ -233,7 +242,7 @@ So the panel's off state is that toggle: switching the panel off writes the same
 |---|---|
 | Popup + Studio surfaces, all sections in §3 | Saved profiles (docked / undocked) with auto-switch on hotplug and lid |
 | SDR / Wide / HDR mapping, SDR white, saturation, EOTF, ICC, luminance and capability overrides | HDR test patterns (WS-0 charts) rendered by the shell for probe measurement |
-| Mode, VRR, scale, rotation, position with snapping, mirror, enable | Workspace-to-display planner |
+| Mode, VRR, scale, rotation, position with snapping, mirror, enable | ~~Workspace-to-display planner~~ moved to 1.2 (§11) |
 | Identify, apply/revert countdown, CLI | Colour-correct screenshots under HDR (separate track, WS-1) |
 | Hotplug refresh, every-screen pending strip, readback, load probe, `doctor`, `recover` | Chromium / Electron HDR guidance |
 
@@ -269,3 +278,48 @@ Later tests the same evening (3 Sep 2026):
 
 - **PR #7340**: good ideas worth crediting — EDID-gated HDR switch, SDR white capped at sustained luminance, overlap tidy before rotation, Lua-aware writer. Different decisions here: three-state colour mode instead of a switch, generated file instead of editing monitors.lua, revert timer outside the shell.
 - **Omarchy's own monitor scripts** (`omarchy-hyprland-monitor-clamshell`, `-internal`, `-watch`, `omarchy-hw-recover-internal-monitor`): the built-in panel's owner on every Omarchy machine. Read for §6.7; coexisted with, never replaced.
+
+## 11. Workspace planner (1.2)
+
+Design review 02 (5 October 2026, source `design/workspace-planner-review.html`) put eight decisions; all eight recommendations were approved the same day.
+
+### 11.1 Decisions
+
+1. **Off until the user turns it on.** No rules and no moves until a plan is chosen; a display Candela has not seen never gets one.
+2. **The plan is stored, not a preset name.** `intent.workspaces = {homes: {"1".."10": display}, shows: {display: workspace}}`. Presets only fill `homes`, so nothing has to guess what a preset means for a display that appears later.
+3. **Displays are named by connector**, like the monitor rules. Both MateViews report the same description, and Hyprland matches `desc:` by prefix and takes the first display that connected, so a description cannot tell them apart. `desc:` can come with saved profiles.
+4. **No persistent workspaces.** Each display's lowest-numbered home (or its chosen one) gets `default = true`. With a home set, SUPER+N already opens in the right place; persistent empty workspaces would add stops to SUPER+TAB and the bar cannot show them.
+5. **A workspace-only change has no countdown.** Nothing in a plan can blank a screen. It is kept at once, and `revert` undoes it once (plan and placement) until anything else is applied. A change that also touches a display keeps the countdown for everything.
+6. **Applying a plan moves open workspaces home**, the inspector naming every move first.
+7. **An inspector section after Colour, plus chips on the canvas.** The popup is unchanged.
+8. **1.2 = the planner + rules kept for unplugged displays (§6.3) + `FALLBACK` (§6.5) + text size (§3.1).**
+
+### 11.2 How Hyprland 0.56.2 treats workspaces
+
+Read in the v0.56.2 source (`src/`), and exercised against the test compositor; on hardware only as far as §11.5 says.
+
+- `hl.workspace_rule` merges into an earlier enabled rule with the same workspace text, field by field, later wins; `monitor` is only copied when non-empty (`config/shared/workspace/WorkspaceRuleManager.cpp:25-32`). Omarchy's layout toggle writes `{ workspace = "3", layout = "scrolling" }` from `~/.local/state/omarchy/workspace-layouts/`, loaded after the toggles directory, so writing the same text (`"3"`) makes the two one rule. For the same reason Candela never calls `set_enabled(false)` on its rule: it would switch Omarchy's layout off too. Removing a plan is a reload.
+- A workspace is created on its rule's monitor (`state/WorkspaceState.cpp:58-64`); `focus{workspace=N}` then moves focus there.
+- A reload clears every rule and re-reads the files, and moves no open workspace (`config/lua/ConfigManager.cpp:700, 850`). Candela moves them with `hl.dsp.workspace.move`, the focused one last because its focus and pointer follow it.
+- On any monitor connect, every workspace whose rule names a connected monitor is moved there (`output/Monitor.cpp:118`, `state/WorkspacePlacementController.cpp:130-149`). A workspace moved by hand goes home at the next connect.
+- On disconnect, and on `disabled = true`, which takes the same path (`config/shared/monitor/MonitorRuleManager.cpp:183-187`), workspaces go to the first other monitor in connect order (`output/Monitor.cpp:421-427`).
+- When a visible workspace moves away, its old monitor gets the lowest free id not bound to another monitor (`state/WorkspacePlacementController.cpp:257-291`).
+
+### 11.3 Backend
+
+- `merge_intent` validates the block (workspaces 1–10, display names, never `FALLBACK`), merges it like display fields (`null` removes an entry, the whole block `null` turns the plan off), drops a show whose workspace left that display, and turns an empty plan off. `apply` refuses a home that is, or is becoming, a mirror.
+- `generate_lua` appends one `hl.workspace_rule({ workspace = "N", monitor = "…"[, default = true] })` per home after the monitor rules, in both the file and the live chunk.
+- `apply` records the open workspaces' placement in the journal (`workspacesBefore`) before anything moves, then after the chunk lands and is read back, moves the open workspaces home and reads `workspaces -j` back. A workspace that does not move unwinds the whole change.
+- `keep` and `apply --now` also compare `workspacerules -j` with the plan after the reload.
+- `revert`, the watchdog, and a failed keep put workspaces back from `workspacesBefore` after the reload. Best effort: a workspace closed since, or whose display has gone, is left where it is.
+- A workspace-only change is kept at once and records `workspaces-undo.json` (the plan it replaced, and the placement); a plain `revert` with nothing pending applies it back, replacing rather than merging, and restores the placement.
+- `state` carries `workspaces: {kept, pendingConfig, open, undo}`; `workspaces home` moves open workspaces home under the kept (or pending) plan; `doctor` checks the live rules against the plan and lists homes on displays not connected.
+
+### 11.4 Studio
+
+The plan's draft is one object (`draftPlan`), not per-display fields; the changed-row mark covers all three rows, and ⌫ on any of them drops the plan draft. Live workspace positions come from Quickshell's Hyprland module, so chips follow a workspace moved by hand while the studio is open. Choosing Custom from Off starts from where the open workspaces are; from a preset it changes nothing. Setting a mirror moves that display's homes to the display it mirrors in the same draft.
+
+### 11.5 What is verified
+
+Suite: the generator byte for byte, validation, merge, undo, mixed changes with revert, a move the compositor ignores, homes on an unplugged display, and the Model's presets, kinds, moves and chips. The test compositor follows the source as read in §11.2. Hardware and the live shell: not yet tested when this was written.
+

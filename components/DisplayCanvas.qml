@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Shapes
 import Quickshell
 import qs.Commons
 import qs.Ui
@@ -8,6 +9,10 @@ import "../Model.js" as Model
 // and nudgeable with the keyboard; edges snap to neighbours; overlap paints
 // the offending blocks urgent. The canvas never writes anywhere: it emits
 // `moved` and the studio decides what to do with it.
+//
+// With a workspace plan, each block also carries chips for the workspaces
+// that live there. Dragging a chip onto another block emits `chipDropped`;
+// what that means is the studio's business too.
 Item {
   id: root
 
@@ -30,6 +35,10 @@ Item {
   property real panY: 0
   property bool snapBypass: false
   property bool reducedMotion: false
+  // { displayName: [{ id, label, used, shown, away, ghost, where, home }] }
+  property var chips: ({})
+  // A second caption line, for what the plan is about to do.
+  property string note: 
   function fit() { zoom = 1; panX = 0; panY = 0 }
   function zoomIn() { zoom = Math.min(4, zoom * 1.2) }
   function zoomOut() { zoom = Math.max(0.5, zoom / 1.2) }
@@ -59,6 +68,24 @@ Item {
 
   signal selected(string name)
   signal moved(string name, int x, int y)
+  signal chipDropped(int workspace, string name)
+
+  // A chip in flight: which workspace, the pointer in canvas coordinates,
+  // and the block under it.
+  property int chipDragId: 0
+  property string chipDragLabel: ""
+  property real chipDragX: 0
+  property real chipDragY: 0
+  readonly property string chipDropName: {
+    if (root.chipDragId === 0) return ""
+    for (var i = root.rects.length - 1; i >= 0; i--) {
+      var r = root.rects[i]
+      if (r.disabled || r.mirrorOf) continue
+      var x = root.toPixelX(r.x), y = root.toPixelY(r.y)
+      if (root.chipDragX >= x && root.chipDragX <= x + r.width * root.factor && root.chipDragY >= y && root.chipDragY <= y + r.height * root.factor) return r.name
+    }
+    return ""
+  }
 
   readonly property var bounds: Model.boundsOf(root.rects)
   readonly property real padding: Style.space(28)
@@ -202,6 +229,8 @@ Item {
       readonly property bool isSelected: disp.name !== "" && disp.name === root.selectedName
       readonly property bool isDragging: disp.name !== "" && root.draggingName === disp.name
       readonly property bool isOverlapping: root.overlap !== null && (root.overlap[0] === disp.name || root.overlap[1] === disp.name)
+      readonly property bool isDropTarget: root.chipDropName !== "" && root.chipDropName === disp.name
+      readonly property var blockChips: root.chips[disp.name] || []
 
       visible: disp.name !== ""
       x: isDragging ? root.toPixelX(root.dragLogX) : Math.round(root.toPixelX(disp.x))
@@ -216,7 +245,7 @@ Item {
         : Util.alpha(root.foreground, 0.06)
       borderSpec: isOverlapping
         ? Border.flat(root.urgent, Math.max(1, Style.space(2)))
-        : (isSelected
+        : (isSelected || isDropTarget
           ? Border.flat(root.accent, Math.max(1, Style.space(2)))
           : Border.controlSpec("normal", root.foreground, root.accent))
 
@@ -294,6 +323,7 @@ Item {
       }
 
       Text {
+        id: infoText
         anchors.left: parent.left
         anchors.bottom: parent.bottom
         anchors.margins: Style.space(10)
@@ -375,6 +405,135 @@ Item {
         }
         onCanceled: { armed = false; dragName = ""; root.draggingName = ""; root.guides = [] }
       }
+
+      // The workspaces that live on this display, drawn over the block's own
+      // mouse area so that pressing a chip never starts moving the display.
+      Flow {
+        z: 2
+        visible: block.blockChips.length > 0 && block.height > Style.space(44)
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: infoText.visible ? infoText.top : parent.bottom
+        anchors.leftMargin: Style.space(10)
+        anchors.rightMargin: Style.space(10)
+        anchors.bottomMargin: infoText.visible ? Style.space(8) : Style.space(10)
+        spacing: Style.space(4)
+
+        Repeater {
+          model: block.blockChips
+
+          Item {
+            id: chip
+            required property var modelData
+            readonly property bool dashed: modelData.away || modelData.ghost
+            width: Style.space(20)
+            height: Style.space(20)
+            // Here now but living elsewhere: drawn faintly where it is.
+            opacity: modelData.ghost ? 0.55 : 1
+
+            Rectangle {
+              anchors.fill: parent
+              radius: Style.cornerRadius > 0 ? Style.space(4) : 0
+              color: chip.modelData.used ? Util.alpha(root.foreground, 0.18) : "transparent"
+              border.width: chip.dashed || chip.modelData.used ? 0 : 1
+              border.color: Util.alpha(root.foreground, 0.4)
+            }
+            // Away from home: a dashed outline, dotted for the faint copy.
+            Shape {
+              anchors.fill: parent
+              visible: chip.dashed
+              ShapePath {
+                strokeColor: Util.alpha(root.foreground, 0.75)
+                strokeWidth: 1
+                strokeStyle: ShapePath.DashLine
+                dashPattern: chip.modelData.ghost ? [1, 2] : [3, 2]
+                fillColor: "transparent"
+                startX: 0.5; startY: 0.5
+                PathLine { x: chip.width - 0.5; y: 0.5 }
+                PathLine { x: chip.width - 0.5; y: chip.height - 0.5 }
+                PathLine { x: 0.5; y: chip.height - 0.5 }
+                PathLine { x: 0.5; y: 0.5 }
+              }
+            }
+            Text {
+              anchors.centerIn: parent
+              textFormat: Text.PlainText
+              text: chip.modelData.label
+              color: chip.modelData.used || chip.modelData.away ? root.foreground : Qt.darker(root.foreground, 1.4)
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
+            // On screen now.
+            Rectangle {
+              visible: chip.modelData.shown
+              anchors.horizontalCenter: parent.horizontalCenter
+              anchors.top: parent.bottom
+              anchors.topMargin: Style.space(2)
+              width: parent.width - Style.space(6)
+              height: Math.max(2, Style.space(2))
+              radius: height / 2
+              color: root.accent
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: root.chipDragId !== 0 ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+              property real pressX: 0
+              property real pressY: 0
+              property bool armed: false
+              onPressed: function(mouse) {
+                root.selected(block.disp.name)
+                var p = mapToItem(root, mouse.x, mouse.y)
+                pressX = p.x; pressY = p.y
+                armed = false
+              }
+              onPositionChanged: function(mouse) {
+                var p = mapToItem(root, mouse.x, mouse.y)
+                if (!armed) {
+                  if (Math.abs(p.x - pressX) < root.dragStartThreshold && Math.abs(p.y - pressY) < root.dragStartThreshold) return
+                  armed = true
+                  root.chipDragId = chip.modelData.id
+                  root.chipDragLabel = chip.modelData.label
+                }
+                root.chipDragX = p.x
+                root.chipDragY = p.y
+              }
+              onReleased: {
+                var target = root.chipDropName
+                var id = root.chipDragId
+                armed = false
+                root.chipDragId = 0
+                if (id !== 0 && target !== "") root.chipDropped(id, target)
+              }
+              onCanceled: { armed = false; root.chipDragId = 0 }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // The chip being dragged, under the pointer.
+  Rectangle {
+    z: 5
+    visible: root.chipDragId !== 0
+    width: Style.space(22)
+    height: width
+    x: root.chipDragX - width / 2
+    y: root.chipDragY - height / 2
+    radius: Style.cornerRadius > 0 ? Style.space(4) : 0
+    color: Util.alpha(root.accent, 0.35)
+    border.color: root.accent
+    border.width: 1
+    Text {
+      anchors.centerIn: parent
+      textFormat: Text.PlainText
+      text: root.chipDragLabel
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      font.bold: true
     }
   }
 
@@ -392,7 +551,25 @@ Item {
     Rectangle { x: 0; y: -5; width: 1; height: 11; color: Util.alpha(root.foreground, 0.5) }
   }
 
+  // At the top: the layout fills the canvas down to the caption, and the
+  // top edge has the same padding with nothing on it.
   Text {
+    anchors.left: parent.left
+    anchors.top: parent.top
+    anchors.margins: Style.space(12)
+    visible: root.note !== ""
+    textFormat: Text.PlainText
+    text: root.note
+    color: root.foreground
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+    font.bold: true
+    elide: Text.ElideRight
+    width: parent.width - Style.space(24)
+  }
+
+  Text {
+    id: layoutCaptionText
     anchors.left: parent.left
     anchors.bottom: parent.bottom
     anchors.margins: Style.space(12)

@@ -1,0 +1,583 @@
+<title>Candela Workspace Planner</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;700&display=swap">
+<style>
+  /* Layout: the review-01 page, a long single column of boards, each a mockup in the shell's own tokens beside its callouts. */
+  :root {
+    --ground: #EDEEEA;
+    --ground-2: #E4E6E1;
+    --ink: #1E2320;
+    --ink-2: #5F655F;
+    --rule: #D3D6D0;
+    --page-accent: #3D5A4C;
+    --note: #B86A14;
+    --note-ink: #FFFFFF;
+    --frame: #DADDD6;
+    --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --head: "Manrope", "IBM Plex Sans", system-ui, sans-serif;
+    --mono: "JetBrains Mono", "JetBrainsMono Nerd Font", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #161816; --ground-2: #1D201D; --ink: #E6E8E3; --ink-2: #9AA09B;
+      --rule: #2A2E2B; --page-accent: #8FB8A2; --note: #E0913A; --note-ink: #161816; --frame: #242825;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #161816; --ground-2: #1D201D; --ink: #E6E8E3; --ink-2: #9AA09B;
+    --rule: #2A2E2B; --page-accent: #8FB8A2; --note: #E0913A; --note-ink: #161816; --frame: #242825;
+    color-scheme: dark;
+  }
+
+  body { background: var(--ground); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.5; }
+  * { box-sizing: border-box; }
+  .wrap { max-width: 1240px; margin: 0 auto; padding-block: 40px 80px; padding-inline: 28px; }
+  @media (max-width: 600px) { .wrap { padding-inline: 16px; } }
+  h1, h2, h3 { font-family: var(--head); letter-spacing: -0.02em; text-wrap: balance; margin: 0; }
+  h1 { font-size: 44px; font-weight: 800; line-height: 1.05; }
+  h2 { font-size: 24px; font-weight: 700; margin-top: 8px; }
+  h3 { font-size: 16px; font-weight: 700; }
+  p { margin: 0; max-width: 68ch; }
+  .eyebrow { font-family: var(--sans); font-weight: 600; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); }
+  .dek { font-size: 18px; color: var(--ink); max-width: 62ch; margin-top: 14px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 18px; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .meta b { color: var(--ink); font-weight: 600; }
+  section { margin-top: 56px; padding-top: 28px; border-top: 1px solid var(--rule); }
+  section > .eyebrow { margin-bottom: 6px; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 28px; margin-top: 18px; }
+  .cols > div { min-width: 0; }
+  .cols p { font-size: 15px; color: var(--ink); }
+  .cols p + p { margin-top: 8px; }
+  .cols h3 { margin-bottom: 6px; }
+  a { color: var(--page-accent); }
+  code { font-family: var(--mono); font-size: 0.88em; background: var(--ground-2); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+  pre { font-family: var(--mono); font-size: 13px; line-height: 1.55; background: var(--ground-2); border: 1px solid var(--rule); padding: 14px 16px; margin: 14px 0 0; overflow-x: auto; }
+  pre .c { color: var(--ink-2); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14px; margin-top: 16px; }
+  th, td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-weight: 600; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); }
+  td code { font-size: 12px; }
+  td .src { display: block; margin-top: 4px; font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
+  .tablewrap { overflow-x: auto; }
+  .tablewrap table { min-width: 760px; }
+  .tag-new { display: inline-block; font: 600 11px var(--sans); letter-spacing: 0.04em; text-transform: uppercase; color: var(--note); border: 1px solid currentColor; padding: 0 5px; margin-left: 6px; vertical-align: 1px; }
+
+  /* ---------------------------------------------------------- theme switch */
+  .switcher { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin-top: 18px; padding: 12px 14px; background: var(--ground-2); border: 1px solid var(--rule); }
+  .switcher .lbl { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
+  .seg { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--rule); }
+  .seg button { font: 500 13px var(--sans); background: transparent; color: var(--ink); border: 0; border-right: 1px solid var(--rule); padding: 6px 12px; cursor: pointer; }
+  .seg button:last-child { border-right: 0; }
+  .seg button[aria-pressed="true"] { background: var(--page-accent); color: var(--ground); }
+  .seg button:focus-visible { outline: 2px solid var(--note); outline-offset: -2px; }
+  .switcher .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; border: 1px solid var(--rule); }
+
+  /* ------------------------------------------------------------ boards */
+  .board { margin-top: 22px; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 28px; align-items: start; }
+  .board.single { grid-template-columns: minmax(0, 1fr); }
+  @media (max-width: 900px) { .board { grid-template-columns: minmax(0, 1fr); } }
+  .frame { position: relative; background: var(--frame); border: 1px solid var(--rule); padding: 28px; overflow-x: auto; }
+  .frame.desktop { padding: 0; }
+  .callouts { font-size: 14px; }
+  .callouts h3 { margin-bottom: 10px; }
+  .callouts ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  .callouts li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; align-items: start; }
+  .callouts li p { color: var(--ink); }
+  .pin, .callouts .n { width: 22px; height: 22px; border-radius: 50%; background: var(--note); color: var(--note-ink); font: 700 12px/22px var(--sans); text-align: center; }
+  .pin { position: absolute; z-index: 5; box-shadow: 0 0 0 2px var(--frame); }
+  .frame-cap { margin-top: 12px; font-size: 13px; }
+  .states { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 22px; margin-top: 22px; }
+  .states .frame { padding: 22px; }
+
+  /* ====================================================== mock: shell tokens */
+  .mock {
+    --m-bg: #222222; --m-fg: #c2c2b0; --m-accent: #78824b; --m-urgent: #685742; --m-muted: #666666;
+    --m-radius: 0px; --m-pill: 0px;
+    --m-dim: color-mix(in srgb, var(--m-fg) 71%, var(--m-bg));
+    --m-dim2: color-mix(in srgb, var(--m-fg) 62%, var(--m-bg));
+    --m-fill-normal: color-mix(in srgb, var(--m-fg) 4%, transparent);
+    --m-fill-hover: color-mix(in srgb, var(--m-fg) 8%, transparent);
+    --m-fill-selected: color-mix(in srgb, var(--m-fg) 18%, transparent);
+    --m-border-normal: color-mix(in srgb, var(--m-fg) 40%, transparent);
+    --m-border-hover: color-mix(in srgb, var(--m-fg) 25%, transparent);
+    --m-sep: color-mix(in srgb, var(--m-fg) 12%, transparent);
+    font-family: var(--mono); font-size: 12px; line-height: 1.25; color: var(--m-fg);
+  }
+  .mock[data-mtheme="tokyo-night"] { --m-bg: #1a1b26; --m-fg: #a9b1d6; --m-accent: #7aa2f7; --m-urgent: #f7768e; --m-muted: #414868; }
+  .mock[data-mtheme="catppuccin-latte"] { --m-bg: #eff1f5; --m-fg: #4c4f69; --m-accent: #1e66f5; --m-urgent: #d20f39; --m-muted: #acb0be; }
+  .mock[data-mtheme="rose-pine"] { --m-bg: #faf4ed; --m-fg: #575279; --m-accent: #56949f; --m-urgent: #b4637a; --m-muted: #cecacd; }
+  .mock[data-mtheme="vantablack"] { --m-bg: #000000; --m-fg: #ffffff; --m-accent: #8d8d8d; --m-urgent: #a4a4a4; --m-muted: #7a7a7a; }
+  .mock[data-rounded="true"] { --m-radius: 8px; --m-pill: 999px; }
+  .mock * { box-sizing: border-box; }
+  .mock .t-small { font-size: 11px; } .mock .t-title { font-size: 14px; } .mock .t-heading { font-size: 16px; }
+  .mock .dim { color: var(--m-dim); }
+  .mock .bold { font-weight: 700; }
+  .mock .sec { font-size: 10px; font-weight: 700; color: var(--m-dim); text-transform: uppercase; padding-top: 2px; }
+  .mock .sep { height: 1px; background: var(--m-sep); }
+  .mock .row-h { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .mock .val { font-size: 10px; font-weight: 700; color: var(--m-dim); font-variant-numeric: tabular-nums; }
+  .pills { display: grid; gap: 3px; }
+  .pill { font-size: 10px; text-align: center; padding: 6px 4px; border: 1px solid var(--m-border-normal); border-radius: var(--m-radius); background: transparent; }
+  .pill.on { background: var(--m-fill-selected); border-color: transparent; }
+  .pill.hot { background: var(--m-fill-hover); border-color: var(--m-border-hover); }
+  .group { display: flex; gap: 6px; }
+  .group .pill { flex: 1; font-size: 12px; padding: 6px 8px; }
+  .caption { font-size: 10px; color: var(--m-dim2); line-height: 1.45; }
+  .field { display: grid; gap: 5px; }
+  .field .lab { font-size: 10px; font-weight: 700; color: var(--m-dim); }
+  .field .box { height: 28px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border: 1px solid var(--m-border-normal); border-radius: var(--m-radius); background: var(--m-fill-normal); font-size: 12px; }
+  .field .box svg { width: 10px; height: 10px; stroke: var(--m-fg); fill: none; stroke-width: 1.6; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .cursor-row { padding: 6px; margin: -6px; border-radius: var(--m-radius); }
+  .cursor-row.hot { background: var(--m-fill-hover); box-shadow: inset 0 0 0 1px var(--m-border-hover); }
+  .lrow { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: center; padding: 8px 6px; border-radius: var(--m-radius); }
+  .lrow svg { width: 16px; height: 16px; stroke: var(--m-fg); fill: none; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+
+  /* workspace pills: one per workspace, 1 to 0 as on the keyboard */
+  .wsp { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 3px; }
+  .wsp .pill { font-size: 12px; font-weight: 700; padding: 5px 0 4px; display: grid; gap: 1px; }
+  .wsp .pill small { font-size: 8px; font-weight: 700; color: var(--m-dim2); letter-spacing: 0; }
+  .wsp .pill.else { color: var(--m-dim2); border-style: dashed; }
+  .wsp .pill.off { opacity: .45; }
+
+  /* studio */
+  .studio-scrim { background: color-mix(in srgb, var(--m-bg) 50%, transparent); padding: 34px; min-width: 1000px; }
+  .studio { width: 1100px; max-width: 100%; margin: 0 auto; background: var(--m-bg); border: 2px solid var(--m-accent); border-radius: var(--m-radius); padding: 18px; display: grid; grid-template-rows: auto 1fr auto; gap: 14px; }
+  .studio .head { display: flex; justify-content: space-between; align-items: baseline; }
+  .studio .body { display: grid; grid-template-columns: minmax(0, 58fr) minmax(360px, 42fr); gap: 18px; min-height: 0; }
+  .canvas { position: relative; border: 1px solid var(--m-sep); border-radius: var(--m-radius);
+    background-image: radial-gradient(color-mix(in srgb, var(--m-fg) 16%, transparent) 1px, transparent 1.2px); background-size: 24px 24px; background-position: 12px 12px; height: 330px; }
+  .disp { position: absolute; border: 1px solid var(--m-border-normal); background: color-mix(in srgb, var(--m-fg) 6%, var(--m-bg)); border-radius: var(--m-radius); padding: 10px 12px; display: flex; flex-direction: column; justify-content: space-between; }
+  .disp.sel { border: 2px solid var(--m-accent); background: color-mix(in srgb, var(--m-fg) 10%, var(--m-bg)); }
+  .disp .name { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .disp .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--m-accent); }
+  .disp .sub { font-size: 10px; color: var(--m-dim); margin-top: 4px; }
+  .disp .badge { font-size: 10px; font-weight: 700; border: 1px solid var(--m-border-normal); padding: 1px 5px; border-radius: var(--m-radius); }
+  .canvas-cap { position: absolute; left: 12px; right: 12px; bottom: 10px; font-size: 10px; color: var(--m-dim); font-variant-numeric: tabular-nums; line-height: 1.5; }
+  .canvas-cap b { color: var(--m-fg); }
+
+  /* chips: the plan drawn on each block */
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip { position: relative; width: 22px; height: 22px; display: grid; place-items: center; font-size: 11px; font-weight: 700; border: 1px solid var(--m-border-normal); border-radius: var(--m-radius); color: var(--m-dim2); }
+  .chip.used { color: var(--m-fg); background: var(--m-fill-selected); border-color: transparent; }
+  .chip.shown::after { content: ""; position: absolute; left: 3px; right: 3px; bottom: -4px; height: 2px; background: var(--m-accent); border-radius: 1px; }
+  .chip.away { border-style: dashed; color: var(--m-fg); }
+  .chip.away::before { content: "↗"; position: absolute; top: -9px; right: -7px; font-size: 9px; color: var(--m-fg); }
+  .chip.ghost { border-style: dotted; opacity: .7; }
+
+  .inspector { display: grid; gap: 12px; align-content: start; min-width: 0; position: relative; }
+  .fold { font-size: 10px; color: var(--m-dim); display: flex; align-items: center; gap: 8px; }
+  .fold::before { content: ""; height: 1px; flex: 0 0 18px; background: var(--m-sep); }
+  .ws-sec { display: grid; gap: 12px; padding: 10px; margin: -10px; border: 1px dashed color-mix(in srgb, var(--m-accent) 70%, transparent); border-radius: var(--m-radius); }
+
+  .actions { display: flex; justify-content: space-between; align-items: center; gap: 18px; border-top: 1px solid var(--m-sep); padding-top: 12px; }
+  .actions .hint { font-size: 10px; color: var(--m-dim); line-height: 1.5; }
+  .actions .hint b { color: var(--m-fg); }
+  .btns { display: flex; gap: 8px; flex: none; }
+  .btn { font-size: 12px; padding: 6px 12px; border: 1px solid var(--m-border-normal); border-radius: var(--m-radius); }
+  .btn.primary { background: var(--m-fill-selected); border-color: transparent; font-weight: 700; }
+
+  /* preset diagrams */
+  .preset { display: grid; gap: 10px; }
+  .preset .desk { display: flex; gap: 6px; align-items: flex-start; }
+  .preset .scr { flex: 1; border: 1px solid var(--m-border-normal); border-radius: var(--m-radius); padding: 8px; display: grid; gap: 8px; background: color-mix(in srgb, var(--m-fg) 5%, var(--m-bg)); min-height: 70px; align-content: space-between; }
+  .preset .scr .nm { font-size: 10px; font-weight: 700; color: var(--m-dim); }
+  .legend { display: grid; gap: 10px; }
+  .legend .it { display: grid; grid-template-columns: 30px 1fr; gap: 10px; align-items: center; }
+
+  .decisions ol { margin: 14px 0 0; padding-left: 22px; display: grid; gap: 14px; max-width: 76ch; }
+  .decisions li strong { font-weight: 600; }
+  .decisions .rec { display: block; margin-top: 3px; font-size: 14px; color: var(--ink-2); }
+  .decisions .rec b { color: var(--page-accent); font-weight: 600; }
+  .small { font-size: 13px; color: var(--ink-2); }
+  .facts-note { margin-top: 12px; font-size: 13px; color: var(--ink-2); max-width: 80ch; }
+  @media (prefers-reduced-motion: no-preference) { .seg button { transition: background-color .12s; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Design review 02 · 5 October 2026 · for Candela 1.2</div>
+    <h1 style="margin-top:10px">Workspace planner</h1>
+    <p class="dek">Give each of Omarchy's ten workspaces a home display. SUPER+6 then opens on the display you chose, and the plan survives reboots and docking. Candela does nothing else with workspaces.</p>
+    <div class="meta">
+      <span><b>Target</b> Omarchy 4.0.4 · Hyprland 0.56.2 (Lua)</span>
+      <span><b>Ships</b> in 1.2, with the three fixes from the comparison</span>
+      <span><b>Hyprland behaviour</b> read in the v0.56.2 source, not yet run on this desk</span>
+      <span><b>Status</b> awaiting your decisions before code</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="eyebrow">Scope</div>
+    <div class="cols">
+      <div>
+        <h3>What it does</h3>
+        <p>It gives each workspace from 1 to 10 a home display, and gives each display the workspace it shows when it lights up. Both are written as Hyprland workspace rules into <code>candela-layout.lua</code>, the file Candela already owns, and they go through the same apply, keep and revert as everything else.</p>
+      </div>
+      <div>
+        <h3>What it leaves alone</h3>
+        <p>It doesn't touch names, icons, apps per workspace, overviews or the bar's workspace widget. Omarchy's SUPER+L layout toggle keeps working on top of the plan. The marketplace already has dozens of plugins for those things.</p>
+      </div>
+      <div>
+        <h3>Why it belongs in Candela</h3>
+        <p>Where workspaces live depends on the arrangement. It changes when a display is switched off, mirrored or unplugged, so it needs the same transaction. Candela also tells these two MateViews apart, which a rule based on the display description can't do here.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">What Hyprland already does</div>
+    <h2>The plan changes less than you might expect</h2>
+    <p class="small" style="margin-top:8px">Each row was read in the Hyprland v0.56.2 source (paths under <code>src/</code>). None of it has been run on this desk yet; the test plan below does that.</p>
+    <div class="tablewrap"><table>
+      <tr><th style="width:24%">Situation</th><th style="width:38%">Today, with no plan</th><th>With a plan</th></tr>
+      <tr>
+        <td>SUPER+6 and workspace 6 doesn't exist yet</td>
+        <td>It is created on the focused display.</td>
+        <td><b>It is created on its home display, and focus and the pointer move there.</b><span class="src">state/WorkspaceState.cpp:58-64 · config/shared/actions/ConfigActions.cpp:951-975</span></td>
+      </tr>
+      <tr>
+        <td>A display is unplugged or switched off</td>
+        <td>Its workspaces move to the first other display in connect order, which isn't necessarily the nearest or the focused one.</td>
+        <td>Same. Hyprland decides this and the plan can't change it.<span class="src">output/Monitor.cpp:421-427, 464-468</span></td>
+      </tr>
+      <tr>
+        <td>That display comes back</td>
+        <td>Workspaces return to the display they were last on, but only within this session.</td>
+        <td><b>Every workspace with a home there returns, after a reboot as well.</b> This happens whenever any display connects.<span class="src">output/Monitor.cpp:118, 323-339 · state/WorkspacePlacementController.cpp:130-149</span></td>
+      </tr>
+      <tr>
+        <td>Hyprland reloads with a changed plan</td>
+        <td>Nothing happens.</td>
+        <td>Workspaces that are already open don't move; only new ones follow the plan. <b>Candela has to move the open ones itself.</b><span class="src">config/lua/ConfigManager.cpp:850 · config/supplementary/propRefresher/PropRefresher.cpp:116-129</span></td>
+      </tr>
+      <tr>
+        <td>You move a workspace with SUPER+SHIFT+ALT+arrow</td>
+        <td>It stays where you put it.</td>
+        <td>It stays until the next display connects, then it goes home.</td>
+      </tr>
+      <tr>
+        <td>A display lights up</td>
+        <td>It shows whatever it showed before, or the next free workspace.</td>
+        <td>It shows its <code>default</code> workspace, unless it remembers another one from earlier in this session.<span class="src">output/Monitor.cpp:367-372, 1290-1330</span></td>
+      </tr>
+    </table></div>
+    <p class="facts-note">Most of the value is in rows one and three: new workspaces open in the right place, and placement survives reboots and docks. Within a session, a display coming back already gets its workspaces back today.</p>
+  </section>
+
+  <section>
+    <div class="eyebrow">Mockups</div>
+    <h2>A section in the inspector, and the plan drawn on the canvas</h2>
+    <p class="small" style="margin-top:8px">The workspaces are this desk's as of today: 1 on DP-1 with four windows, and 2 on DP-2 with one. The plan shown is <i>Split</i>, which homes 1–5 on DP-1 and 6–0 on DP-2. Switch the theme to check that nothing is hard-coded.</p>
+    <div class="switcher" role="group" aria-label="Preview theme">
+      <span class="lbl">Preview theme</span>
+      <div class="seg" id="themeSeg">
+        <button type="button" data-t="miasma" aria-pressed="true"><span class="swatch" style="background:#78824b"></span>miasma</button>
+        <button type="button" data-t="tokyo-night" aria-pressed="false"><span class="swatch" style="background:#7aa2f7"></span>tokyo-night</button>
+        <button type="button" data-t="catppuccin-latte" aria-pressed="false"><span class="swatch" style="background:#1e66f5"></span>catppuccin-latte</button>
+        <button type="button" data-t="rose-pine" aria-pressed="false"><span class="swatch" style="background:#56949f"></span>rose-pine</button>
+        <button type="button" data-t="vantablack" aria-pressed="false"><span class="swatch" style="background:#8d8d8d"></span>vantablack</button>
+      </div>
+      <span class="lbl">Corners</span>
+      <div class="seg" id="roundSeg">
+        <button type="button" data-r="false" aria-pressed="true">square</button>
+        <button type="button" data-r="true" aria-pressed="false">rounded</button>
+      </div>
+    </div>
+
+    <!-- ============================================================ BOARD A -->
+    <h3 style="margin-top:34px">A · Studio, DP-2 selected, the Split plan drafted</h3>
+    <p class="small" style="margin-top:4px">The rest of the Studio is unchanged. The new section sits after Colour, so on this card the inspector is shown scrolled to it.</p>
+    <div class="board single">
+      <div class="frame desktop mock" data-mtheme="miasma" data-rounded="false">
+        <div class="studio-scrim">
+          <div class="studio">
+            <div class="head">
+              <div class="t-heading bold">Candela</div>
+              <div class="caption">2 displays · edited</div>
+            </div>
+            <div class="body">
+              <div>
+                <div class="canvas">
+                  <span class="pin" style="top:10px;left:10px">1</span>
+                  <div class="disp" style="left:40px;top:44px;width:300px;height:200px">
+                    <div>
+                      <div class="name">DP-1</div>
+                      <div class="sub">MateView · 3840×2560 · 60 Hz · 1.6×</div>
+                    </div>
+                    <div class="chips" aria-label="Workspaces homed on DP-1">
+                      <span class="chip used shown" title="1 · 4 windows · shown now">1</span>
+                      <span class="chip used away" title="2 · 1 window · on DP-2 now">2</span>
+                      <span class="chip">3</span><span class="chip">4</span><span class="chip">5</span>
+                    </div>
+                  </div>
+                  <div class="disp sel" style="left:340px;top:44px;width:300px;height:200px">
+                    <div>
+                      <div class="name"><span class="dot"></span>DP-2</div>
+                      <div class="sub">MateView · 3840×2560 · 60 Hz · 1.6×</div>
+                    </div>
+                    <div class="chips" aria-label="Workspaces homed on DP-2">
+                      <span class="chip">6</span><span class="chip">7</span><span class="chip">8</span><span class="chip">9</span><span class="chip">0</span>
+                      <span class="chip ghost" style="margin-left:10px" title="2 is here now">2</span>
+                    </div>
+                  </div>
+                  <div class="canvas-cap">DP-1 at 0, 0 · DP-2 at 2400, 0 · logical px<br><b>Workspace 2 is on DP-2 now.</b> Apply moves it home to DP-1.</div>
+                </div>
+                <div style="margin-top:14px">
+                  <div class="t-title bold">DP-2 · Huawei MateView</div>
+                  <div class="caption" style="margin-top:3px">The serial is blank and the description matches DP-1's, so the plan names this display by its connector.</div>
+                </div>
+              </div>
+
+              <div class="inspector">
+                <div class="fold">Signal, geometry and colour above</div>
+                <div class="field"><span class="lab">SDR transfer</span><div class="group"><span class="pill on">Default</span><span class="pill">2.2</span><span class="pill">sRGB</span></div></div>
+
+                <div class="sep"></div>
+                <div class="ws-sec">
+                  <span class="pin" style="top:-11px;left:-34px">2</span>
+                  <span class="sec">Workspaces</span>
+                  <div class="field">
+                    <span class="lab">Plan</span>
+                    <div class="group"><span class="pill">Off</span><span class="pill on">Split</span><span class="pill">Alternate</span><span class="pill">Custom</span></div>
+                  </div>
+                  <div class="field cursor-row hot" style="position:relative">
+                    <span class="pin" style="top:2px;left:-34px">3</span>
+                    <div class="row-h"><span class="lab">Lives on DP-2</span><span class="val">5 of 10</span></div>
+                    <div class="wsp">
+                      <span class="pill else">1<small>DP-1</small></span><span class="pill else">2<small>DP-1</small></span><span class="pill else">3<small>DP-1</small></span><span class="pill else">4<small>DP-1</small></span><span class="pill else">5<small>DP-1</small></span>
+                      <span class="pill on">6<small>&nbsp;</small></span><span class="pill on hot">7<small>&nbsp;</small></span><span class="pill on">8<small>&nbsp;</small></span><span class="pill on">9<small>&nbsp;</small></span><span class="pill on">0<small>&nbsp;</small></span>
+                    </div>
+                  </div>
+                  <div class="two">
+                    <div class="field" style="position:relative">
+                      <span class="pin" style="top:-4px;left:-34px">4</span>
+                      <span class="lab">Shows when it lights up</span>
+                      <div class="box"><span>6</span><svg viewBox="0 0 10 10"><path d="M2 4l3 3 3-3"/></svg></div>
+                    </div>
+                    <div class="field">
+                      <span class="lab">Open workspaces</span>
+                      <div class="box"><span>Send home</span><span class="dim">1 away</span></div>
+                    </div>
+                  </div>
+                  <div class="caption">SUPER+6 to SUPER+0 open here. A workspace you move by hand goes home the next time a display connects.</div>
+                </div>
+
+                <div class="sep"></div>
+                <div class="lrow"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>Advanced · preset, luminance and capability overrides, auto-HDR</span><span class="dim">›</span></div>
+              </div>
+            </div>
+
+            <div class="actions" style="position:relative">
+              <span class="pin" style="top:10px;left:-34px">5</span>
+              <span class="hint"><b>Plan Split · moves workspace 2 (1 window) from DP-2 to DP-1 · applies at once, Revert puts it back</b><br>j/k move · h/l walk · ↵ toggle · ⇥ canvas ⇄ inspector · a apply · r revert · ? keys · esc close</span>
+              <div class="btns"><span class="btn">Identify</span><span class="btn">Revert</span><span class="btn primary">Apply</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="callouts" style="margin-top:18px">
+      <ol style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+        <li><span class="n">1</span><p><b>Chips on each block show the plan.</b> A filled chip has windows, an underline means it's on screen now, and a dashed chip is away from home: 2 belongs to DP-1 but is on DP-2. Dragging a chip to another block changes its home. The caption says what Apply will move.</p></li>
+        <li><span class="n">2</span><p><b>One section, after Colour.</b> The colour controls stay where they are, and the fold hint names Workspaces when the section is below the fold. The popup doesn't change.</p></li>
+        <li><span class="n">3</span><p><b>A pill per workspace, numbered as on the keyboard.</b> h/l walk the pills and ↵ moves that workspace's home to this display. A pill homed elsewhere is dashed and names its display. Changing pills by hand turns the plan to Custom.</p></li>
+        <li><span class="n">4</span><p><b>What the display shows when it lights up.</b> This lists only its own homes and defaults to the first. <i>Send home</i> moves every open workspace that's away, at once, without changing the plan.</p></li>
+        <li><span class="n">5</span><p><b>The summary names every move before you press Apply.</b> Applying the plan on this desk would take the window on DP-2 to DP-1, and the summary says so. There is no countdown, because nothing in a plan can blank a screen (decision 5).</p></li>
+      </ol>
+    </div>
+
+    <!-- ============================================================ BOARD B -->
+    <h3 style="margin-top:44px">B · The presets</h3>
+    <p class="small" style="margin-top:4px">Displays are ordered left to right by position, then top to bottom. A preset just fills in the plan; the plan itself is what Candela stores. Laptop panels and mirrors follow the same rules as any other display.</p>
+    <div class="states">
+      <div class="frame mock" data-mtheme="miasma" data-rounded="false">
+        <div class="preset">
+          <div class="row-h"><span class="t-title bold">Split</span><span class="val">recommended first pick</span></div>
+          <div class="desk">
+            <div class="scr"><span class="nm">DP-1</span><div class="chips"><span class="chip used">1</span><span class="chip">2</span><span class="chip">3</span><span class="chip">4</span><span class="chip">5</span></div></div>
+            <div class="scr"><span class="nm">DP-2</span><div class="chips"><span class="chip">6</span><span class="chip">7</span><span class="chip">8</span><span class="chip">9</span><span class="chip">0</span></div></div>
+          </div>
+          <div class="caption">Contiguous runs. The left hand reaches its own display's workspaces. With three displays it's 1–4, 5–7, 8–0.</div>
+        </div>
+      </div>
+      <div class="frame mock" data-mtheme="miasma" data-rounded="false">
+        <div class="preset">
+          <div class="row-h"><span class="t-title bold">Alternate</span><span class="val">odd · even</span></div>
+          <div class="desk">
+            <div class="scr"><span class="nm">DP-1</span><div class="chips"><span class="chip used">1</span><span class="chip">3</span><span class="chip">5</span><span class="chip">7</span><span class="chip">9</span></div></div>
+            <div class="scr"><span class="nm">DP-2</span><div class="chips"><span class="chip used">2</span><span class="chip">4</span><span class="chip">6</span><span class="chip">8</span><span class="chip">0</span></div></div>
+          </div>
+          <div class="caption">Neighbouring numbers sit on neighbouring displays. Today's 1-and-2 arrangement on this desk already fits it, so applying it moves nothing.</div>
+        </div>
+      </div>
+      <div class="frame mock" data-mtheme="miasma" data-rounded="false">
+        <div class="preset">
+          <div class="row-h"><span class="t-title bold">Custom</span><span class="val">any edit</span></div>
+          <div class="desk">
+            <div class="scr"><span class="nm">DP-1</span><div class="chips"><span class="chip used">1</span><span class="chip">2</span><span class="chip">3</span></div></div>
+            <div class="scr"><span class="nm">DP-2</span><div class="chips"><span class="chip used">4</span></div></div>
+          </div>
+          <div class="caption">A workspace with no home is left to Hyprland. Here 5 to 0 open wherever focus is, as they do today.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================ BOARD C -->
+    <h3 style="margin-top:44px">C · Small states</h3>
+    <div class="states">
+      <div class="frame mock" data-mtheme="miasma" data-rounded="false">
+        <div class="legend">
+          <div class="it"><span class="chip used shown">1</span><span class="caption">Has windows and is on screen now</span></div>
+          <div class="it"><span class="chip used">3</span><span class="caption">Has windows, hidden</span></div>
+          <div class="it"><span class="chip">4</span><span class="caption">Empty or not created yet. Hyprland creates it on first use, so the two look the same.</span></div>
+          <div class="it"><span class="chip used away">2</span><span class="caption">Away from home. Apply or <i>Send home</i> brings it back.</span></div>
+          <div class="it"><span class="chip ghost">2</span><span class="caption">The same workspace, drawn faintly where it is now</span></div>
+        </div>
+        <div class="frame-cap" style="color:var(--m-dim)">Chip states on the canvas</div>
+      </div>
+      <div class="frame mock" data-mtheme="miasma" data-rounded="false">
+        <div class="field">
+          <span class="lab">Lives on DP-2</span>
+          <div class="wsp">
+            <span class="pill off">1</span><span class="pill off">2</span><span class="pill off">3</span><span class="pill off">4</span><span class="pill off">5</span><span class="pill off">6</span><span class="pill off">7</span><span class="pill off">8</span><span class="pill off">9</span><span class="pill off">0</span>
+          </div>
+          <div class="caption">DP-2 mirrors DP-1, so it shows DP-1's workspaces. Setting the mirror moved its homes to DP-1 in the same change.</div>
+        </div>
+        <div class="frame-cap" style="color:var(--m-dim)">A mirror can't be a home</div>
+      </div>
+      <div class="frame mock" data-mtheme="miasma" data-rounded="false">
+        <div class="preset">
+          <div class="desk">
+            <div class="scr"><span class="nm">DP-1</span><div class="chips"><span class="chip used shown">1</span><span class="chip">2</span><span class="chip">3</span><span class="chip">4</span><span class="chip">5</span><span class="chip used ghost">7</span></div></div>
+            <div class="scr" style="border-style:dashed;opacity:.6"><span class="nm">DP-2 · not connected</span><div class="chips"><span class="chip">6</span><span class="chip used away">7</span><span class="chip">8</span><span class="chip">9</span><span class="chip">0</span></div></div>
+          </div>
+          <div class="caption">DP-2's homes stay in the file while it's gone. Hyprland parked 7 on DP-1 and brings it back when DP-2 connects.</div>
+        </div>
+        <div class="frame-cap" style="color:var(--m-dim)">A display in the plan is unplugged</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">How it is written</div>
+    <h2>Rules in the layout file, and moves Candela makes itself</h2>
+    <div class="cols">
+      <div>
+        <h3>Intent</h3>
+        <p>The intent file gets a <code>workspaces</code> block with a home for each workspace and the workspace each display shows when it lights up. Without the block, the plan is Off. Presets only fill in the homes, so Off can never switch itself back on, and a display Candela hasn't seen before never gets a plan nobody gave it.</p>
+      </div>
+      <div>
+        <h3>Same rule as Omarchy's</h3>
+        <p>Hyprland merges rules whose workspace text matches exactly into one, field by field (<code>WorkspaceRuleManager.cpp:25-32</code>). Candela writes <code>workspace = "3"</code> in the same form as Omarchy's layout toggle, so <code>layout = "scrolling"</code> and <code>monitor = "DP-2"</code> become one rule and both apply.</p>
+        <p>Because of that merge, Candela never disables its rule. Switching off the shared rule would switch off Omarchy's layout too. Removing a plan reloads Hyprland, which is how Candela reverts already.</p>
+      </div>
+      <div>
+        <h3>Moves after the reload</h3>
+        <p>A reload doesn't move open workspaces, so Candela does: one <code>hl.dispatch(hl.dsp.workspace.move{…})</code> for each open workspace that is away from a home that's connected. Moving the workspace you're looking at takes focus and the pointer with it, so that move goes last. Candela then reads back <code>workspacerules -j</code> and <code>workspaces -j</code>, the same way it checks a display change.</p>
+      </div>
+    </div>
+<pre><span class="c">-- appended to candela-layout.lua after the monitor rules (Split, this desk)</span>
+hl.workspace_rule({ workspace = "1", monitor = "DP-1", default = true })
+hl.workspace_rule({ workspace = "2", monitor = "DP-1" })
+<span class="c">-- … 3 to 5 on DP-1</span>
+hl.workspace_rule({ workspace = "6", monitor = "DP-2", default = true })
+<span class="c">-- … 7 to 10 on DP-2</span></pre>
+<pre><span class="c">$ omarchy-candela apply '{"workspaces":{"homes":{"6":"DP-2","7":"DP-2"}}}'</span>
+<span class="c">$ omarchy-candela apply '{"workspaces":null}'</span>          <span class="c"># Off: rules gone, nothing moved</span>
+<span class="c">$ omarchy-candela workspaces home</span>                     <span class="c"># send every open workspace home, bindable</span>
+<span class="c">$ omarchy-candela state | jq .workspaces</span>               <span class="c"># plan, and where each open one is now</span></pre>
+    <div class="cols" style="margin-top:26px">
+      <div>
+        <h3>Revert</h3>
+        <p>The pending record also stores where each open workspace was before the change. Revert reloads, which removes the rules, and then moves each workspace back. The move-back is required, because the reload alone leaves them where the plan put them.</p>
+      </div>
+      <div>
+        <h3>Validation</h3>
+        <p>Homes are workspaces 1 to 10. The display named must be one Candela knows. It can't be a mirror or Hyprland's <code>FALLBACK</code> output. A display can only show a workspace that is homed on it. <code>merge_intent</code> rejects anything else, so the CLI follows the same rules as the Studio.</p>
+      </div>
+      <div>
+        <h3>Displays that aren't connected</h3>
+        <p>Today the generator writes rules only for connected displays (<code>bin/omarchy-candela:351</code>), so keeping a change while DP-2 is unplugged drops DP-2's rules. That is fix 1 for 1.2. The planner depends on it, because DP-2's homes have to stay in the file while DP-2 is gone.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Edge cases</div>
+    <div class="tablewrap"><table>
+      <tr><th style="width:26%">Case</th><th>What happens</th></tr>
+      <tr><td>The two MateViews</td><td>Both report <code>Huawei Technologies Co. Inc. MateView</code>. Hyprland matches <code>desc:</code> by prefix and takes the first display that connected, so a description can't tell them apart. The plan names connectors, as the monitor rules already do.</td></tr>
+      <tr><td>Switched off through Candela</td><td>Hyprland treats this exactly like an unplug, and switching it back on like a connect (<code>MonitorRuleManager.cpp:183-187</code>). Workspaces park on another display and come home.</td></tr>
+      <tr><td>Set to mirror</td><td>A mirror shows another display's picture, so it can't be a home. Its homes move to the display it mirrors as part of the same change, and the summary says so.</td></tr>
+      <tr><td>Laptop lid</td><td>Omarchy's clamshell script switches the panel off, which takes the unplug path. The laptop's workspaces park on the external display and come back when the lid opens. <i>Not testable here: no laptop.</i></td></tr>
+      <tr><td>Virtual displays (1.3)</td><td>Creating one counts as a display connecting, so it pulls every planned workspace home. A virtual display can also become the parking place when another display unplugs, which would hide workspaces on a screen nobody can see. 1.3 has to handle both.</td></tr>
+      <tr><td>Your own workspace rules</td><td>You have none today. A rule with the same workspace text merges, and Candela's value wins because its file loads later. <code>doctor</code> reports a workspace whose live rule names a different display from the plan.</td></tr>
+      <tr><td>Above 10, named and special workspaces</td><td>Not in the plan; Hyprland handles them as it does today.</td></tr>
+      <tr><td>The bar</td><td>Omarchy's workspace widget is the same on every bar: it shows 1–5 plus any open 6–10 and highlights only the focused workspace. The plan doesn't change that, and changing it is a bar plugin's job. <code>state</code> exposes the plan so such a plugin could read it.</td></tr>
+    </table></div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Test plan</div>
+    <div class="cols">
+      <div><h3>Suite</h3><p>Node: presets for one to four displays, ordering by position, chip states, Custom detection. CLI with the fake hyprctl: the generated Lua byte for byte, validation, revert moving workspaces back, and homes kept for an unplugged display.</p></div>
+      <div><h3>On this desk, with your go-ahead</h3><p>No display mode changes, but your windows will move between DP-1 and DP-2. Steps: apply Split, keep it, reload, check SUPER+7 opens on DP-2, then revert and check workspace 2 comes back. Switching DP-2 off and on through Candela is a display change, so it gets the warning first.</p></div>
+      <div><h3>Yours by hand</h3><p>Unplugging a cable with a plan on, the Studio interactions, and a reboot to check the plan holds.</p></div>
+    </div>
+  </section>
+
+  <section class="decisions">
+    <div class="eyebrow">Decisions needed</div>
+    <h2>Eight calls before code</h2>
+    <ol>
+      <li><strong>Off until you turn it on.</strong> No rules are written and nothing moves until a plan is chosen, and a new display never gets one automatically.
+        <span class="rec"><b>Recommend: yes.</b></span></li>
+      <li><strong>What gets stored.</strong> Either the plan itself (a home per workspace), with presets that only fill it in, or a preset name that Candela expands each time.
+        <span class="rec"><b>Recommend: store the plan.</b> A stored preset name has to guess what to do when a display appears, and that guessing is where these features misbehave.</span></li>
+      <li><strong>How a display is named.</strong> By connector (<code>DP-1</code>), as the monitor rules already are, or by <code>desc:</code> when the description is unique.
+        <span class="rec"><b>Recommend: connector now.</b> On this desk a description can't work, so it's best introduced with saved profiles.</span></li>
+      <li><strong>Persistent workspaces.</strong> None, the first per display, or all planned ones.
+        <span class="rec"><b>Recommend: none.</b> Use <code>default</code> for the first per display instead. With a home set, SUPER+N already opens in the right place. Persistent empty workspaces would add stops to SUPER+TAB, and the bar can't tell them apart from closed ones.</span></li>
+      <li><strong>No countdown for a workspace-only change.</strong> It applies and is kept at once, and Revert puts back the previous plan and placement. A change that also touches a display keeps the 15 s countdown for everything.
+        <span class="rec"><b>Recommend: yes.</b> The countdown exists for changes that can blank a screen, and a plan can't.</span></li>
+      <li><strong>Apply moves open workspaces home.</strong> The summary names every move first. The alternative leaves open workspaces where they are until the next display connects.
+        <span class="rec"><b>Recommend: move them.</b> Otherwise the canvas shows a plan the desk doesn't match.</span></li>
+      <li><strong>Where it lives.</strong> An inspector section after Colour, plus chips on the canvas, with the popup unchanged. Or a separate Workspaces mode in the Studio.
+        <span class="rec"><b>Recommend: section and chips.</b> It keeps the keyboard row model and adds no new mode to learn.</span></li>
+      <li><strong>What 1.2 contains.</strong> The planner, plus the three fixes: rules kept for unplugged displays, the <code>FALLBACK</code> check, and the text size slider.
+        <span class="rec"><b>Recommend: yes, released after 1.1.0.</b></span></li>
+    </ol>
+  </section>
+
+  <p class="small" style="margin-top:48px">Once these are decided, the approved version goes into <code>DESIGN.md</code> (§3.2 inspector, §6 architecture, §7 scope), and design review 01 stays as it is.</p>
+</div>
+
+<script>
+  (function () {
+    var mocks = document.querySelectorAll('.mock');
+    function setAll(attr, value, seg) {
+      mocks.forEach(function (m) { m.setAttribute(attr, value); });
+      seg.querySelectorAll('button').forEach(function (b) {
+        var key = attr === 'data-mtheme' ? b.dataset.t : b.dataset.r;
+        b.setAttribute('aria-pressed', key === value ? 'true' : 'false');
+      });
+      try { localStorage.setItem('planner-review-' + attr, value); } catch (e) {}
+    }
+    var themeSeg = document.getElementById('themeSeg');
+    var roundSeg = document.getElementById('roundSeg');
+    themeSeg.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b) return; setAll('data-mtheme', b.dataset.t, themeSeg);
+    });
+    roundSeg.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b) return; setAll('data-rounded', b.dataset.r, roundSeg);
+    });
+    try {
+      var t = localStorage.getItem('planner-review-data-mtheme');
+      var r = localStorage.getItem('planner-review-data-rounded');
+      if (t && themeSeg.querySelector('[data-t="' + t + '"]')) setAll('data-mtheme', t, themeSeg);
+      if (r === 'true' || r === 'false') setAll('data-rounded', r, roundSeg);
+    } catch (e) {}
+  })();
+</script>

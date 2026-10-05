@@ -347,3 +347,87 @@ test("snap beside puts a display flush against its nearest neighbour, centred", 
   const off = [Object.assign({}, rects[0], { disabled: true }), small[1]]
   assert.equal(M.snapBeside(off, "DP-2", "right"), null, "an off display is not an anchor")
 })
+
+// ---------------------------------------------------------------- workspaces
+
+const desk = [
+  { name: "DP-2", x: 2400, y: 0, disabled: false, mirrorOf: "" },
+  { name: "DP-1", x: 0, y: 0, disabled: false, mirrorOf: "" }
+]
+
+test("presets order displays left to right and fill workspaces 1 to 0", () => {
+  const split = M.presetPlan("split", desk)
+  assert.deepEqual(M.homesOn(split, "DP-1"), [1, 2, 3, 4, 5])
+  assert.deepEqual(M.homesOn(split, "DP-2"), [6, 7, 8, 9, 10])
+  const alternate = M.presetPlan("alternate", desk)
+  assert.deepEqual(M.homesOn(alternate, "DP-1"), [1, 3, 5, 7, 9])
+  assert.deepEqual(M.homesOn(alternate, "DP-2"), [2, 4, 6, 8, 10])
+  const three = desk.concat([{ name: "HDMI-A-1", x: 4800, y: 0, disabled: false, mirrorOf: "" }])
+  const split3 = M.presetPlan("split", three)
+  assert.deepEqual(M.homesOn(split3, "DP-1"), [1, 2, 3, 4])
+  assert.deepEqual(M.homesOn(split3, "DP-2"), [5, 6, 7])
+  assert.deepEqual(M.homesOn(split3, "HDMI-A-1"), [8, 9, 10])
+  // An off display and a mirror cannot be homes.
+  const withMirror = desk.concat([{ name: "HDMI-A-1", x: 0, y: 1600, disabled: false, mirrorOf: "DP-1" }, { name: "eDP-1", x: -1000, y: 0, disabled: true, mirrorOf: "" }])
+  assert.deepEqual(M.planOrder(withMirror), ["DP-1", "DP-2"])
+  assert.deepEqual(M.presetPlan("off", desk), {})
+})
+
+test("the plan kind is read back from the homes", () => {
+  assert.equal(M.planKind({}, desk), "off")
+  assert.equal(M.planKind(M.presetPlan("split", desk), desk), "split")
+  assert.equal(M.planKind(M.presetPlan("alternate", desk), desk), "alternate")
+  const edited = Object.assign({}, M.presetPlan("split", desk), { "6": "DP-1" })
+  assert.equal(M.planKind(edited, desk), "custom")
+  assert.equal(M.planKind({ "1": "DP-1" }, desk), "custom")
+})
+
+test("each display shows its chosen workspace while it lives there, else its lowest", () => {
+  const split = M.presetPlan("split", desk)
+  assert.deepEqual(M.effectiveShows(split, {}), { "DP-1": "1", "DP-2": "6" })
+  assert.deepEqual(M.effectiveShows(split, { "DP-2": "8" }), { "DP-1": "1", "DP-2": "8" })
+  assert.deepEqual(M.effectiveShows(split, { "DP-2": "3" }), { "DP-1": "1", "DP-2": "6" })
+})
+
+test("moves, summary and chips describe this desk under Split", () => {
+  const split = M.presetPlan("split", desk)
+  const open = [{ id: 1, monitor: "DP-1", windows: 4 }, { id: 2, monitor: "DP-2", windows: 1 }]
+  const moves = M.planMoves(split, open, ["DP-1", "DP-2"])
+  assert.deepEqual(moves, [{ id: 2, from: "DP-2", to: "DP-1", windows: 1 }])
+  assert.equal(M.planSummary("split", moves), "Plan Split · moves workspace 2 (1 window) from DP-2 to DP-1")
+  assert.equal(M.planSummary("alternate", M.planMoves(M.presetPlan("alternate", desk), open, ["DP-1", "DP-2"])), "Plan Alternate · no open workspace moves")
+  assert.deepEqual(M.planMoves(split, open, ["DP-1"]), [{ id: 2, from: "DP-2", to: "DP-1", windows: 1 }])
+  assert.deepEqual(M.planMoves({ "1": "DP-2" }, open, ["DP-1"]), [], "nothing goes to a display that cannot take it")
+
+  const dp1 = M.chipsFor("DP-1", split, open, [1, 2])
+  assert.deepEqual(dp1.map(c => c.label), ["1", "2", "3", "4", "5"])
+  assert.equal(dp1[0].shown, true)
+  assert.equal(dp1[0].used, true)
+  assert.equal(dp1[1].away, true)
+  assert.equal(dp1[1].where, "DP-2")
+  assert.equal(dp1[2].open, false)
+  const dp2 = M.chipsFor("DP-2", split, open, [1, 2])
+  assert.deepEqual(dp2.map(c => c.label), ["6", "7", "8", "9", "0", "2"])
+  assert.equal(dp2[5].ghost, true)
+  assert.equal(dp2[5].home, "DP-1")
+  assert.equal(M.workspaceLabel(10), "0")
+})
+
+test("a mirror's homes move to the display it mirrors, and the change nulls what the draft dropped", () => {
+  const split = M.presetPlan("split", desk)
+  assert.deepEqual(M.homesOn(M.rehomeFrom(split, "DP-2", "DP-1"), "DP-1"), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+  const kept = { homes: { "1": "DP-1", "2": "DP-2" }, shows: { "DP-2": "2" } }
+  assert.deepEqual(M.workspaceChange(kept, { homes: { "1": "DP-1" } }), { homes: { "1": "DP-1", "2": null }, shows: { "DP-2": null } })
+  assert.equal(M.workspaceChange(kept, { homes: {} }), null)
+  assert.equal(M.workspaceChange(null, null), null)
+  assert.equal(M.changeSummary({ workspaces: null }), "Workspace plan off")
+  assert.equal(M.changeSummary({ workspaces: { homes: {} } }), "Workspace plan")
+})
+
+test("workspace lists read the way the keyboard numbers them", () => {
+  assert.equal(M.workspaceList([1, 2, 3, 4, 5]), "1–5")
+  assert.equal(M.workspaceList([6, 7, 8, 9, 10]), "6–0")
+  assert.equal(M.workspaceList([1, 3, 5]), "1, 3, 5")
+  assert.equal(M.workspaceList([1, 2, 4]), "1, 2, 4")
+  assert.equal(M.workspaceList([]), "")
+})

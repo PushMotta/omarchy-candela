@@ -80,6 +80,14 @@ EOF
   cp "$source" "$dir/monitors.json"
   cp "$source" "$dir/monitors.pristine.json"
   printf '%s\n' '{"cm_auto_hdr":1,"cm_sdr_eotf":"default"}' > "$dir/global.json"
+  # The open workspaces on this desk on 5 October 2026: 1 on DP-1 with four
+  # windows, 2 on DP-2 with one. The laptop has one, on its panel.
+  if [[ $fixture == laptop ]]; then
+    printf '%s\n' '[{"id":1,"name":"1","monitor":"eDP-1","windows":2}]' > "$dir/workspaces.json"
+  else
+    printf '%s\n' '[{"id":1,"name":"1","monitor":"DP-1","windows":4},{"id":2,"name":"2","monitor":"DP-2","windows":1}]' > "$dir/workspaces.json"
+  fi
+  echo '[]' > "$dir/wsrules.json"
   echo "$dir"
 }
 
