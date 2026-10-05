@@ -549,7 +549,7 @@ Item {
   // "custom" is chosen, not only matched: picking it shows the fields even
   // while the size still happens to be a preset's.
   property bool customSizeChosen: false
-  function presetOf(d) {
+  function virtualPresetOf(d) {
     if (customSizeChosen) return "custom"
     var p = pixelsOf(d)
     return Model.virtualPresetFor(p.width, p.height, scaleOf(d))
@@ -658,7 +658,7 @@ Item {
 
   readonly property var rows: {
     var list = isVirtual
-      ? ["vsize", "vorient"].concat(display && presetOf(display) === "custom" ? ["vcustomw", "vcustomh"] : [])
+      ? ["vsize", "vorient"].concat(display && virtualPresetOf(display) === "custom" ? ["vcustomw", "vcustomh"] : [])
           .concat(["vrefresh", "scale", "posx", "posy", "vplace", "enabled", "vwindow", "vnetwork"])
       : ["mode", "refresh", "vrr", "scale", "rotation", "posx", "posy", "mirror", "enabled"]
     if (isVirtual) {
@@ -732,7 +732,7 @@ Item {
         if (homes.length) setShow(d, cycle(homes, Model.effectiveShows(plan.homes, plan.shows)[d.name] || homes[0], delta)); break
       }
       case "wssend": break
-      case "vsize": setVirtualPreset(d, cycle(Model.virtualPresetOptions().map(function(o) { return o.value }), presetOf(d), delta)); break
+      case "vsize": setVirtualPreset(d, cycle(Model.virtualPresetOptions().map(function(o) { return o.value }), virtualPresetOf(d), delta)); break
       case "vorient": setOrientation(d, orientationOf(d) === "landscape" ? "portrait" : "landscape"); break
       case "vcustomw": { var pw = pixelsOf(d); setCustomSize(d, pw.width + delta * (big ? 100 : 10), pw.height); break }
       case "vcustomh": { var ph = pixelsOf(d); setCustomSize(d, ph.width, ph.height + delta * (big ? 100 : 10)); break }
@@ -1347,7 +1347,7 @@ Item {
                       width: parent.width
                       label: "Device or size"
                       options: Model.virtualPresetOptions()
-                      value: root.display && root.isVirtual ? root.presetOf(root.display) : ""
+                      value: root.display && root.isVirtual ? root.virtualPresetOf(root.display) : ""
                       placeholderText: "Search devices and sizes…"
                       emptyText: "No match: choose Custom size"
                       foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily
@@ -1383,7 +1383,7 @@ Item {
                 Row {
                   width: parent.width
                   spacing: Style.spacing.xl
-                  visible: root.isVirtual && root.display !== null && root.presetOf(root.display) === "custom"
+                  visible: root.isVirtual && root.display !== null && root.virtualPresetOf(root.display) === "custom"
                   InspectorRow {
                     rowId: "vcustomw"
                     width: (parent.width - parent.spacing) / 2
