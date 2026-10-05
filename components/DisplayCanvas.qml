@@ -234,6 +234,26 @@ Item {
       readonly property bool isOverlapping: root.overlap !== null && (root.overlap[0] === disp.name || root.overlap[1] === disp.name)
       readonly property bool isDropTarget: root.chipDropName !== "" && root.chipDropName === disp.name
       readonly property var blockChips: root.chips[disp.name] || []
+      // Chips get the room between the name and the bottom edge, never the
+      // name's: they shrink to fit (24 down to 16), and if they still do not,
+      // the size caption gives them its room. Seen on the desk with four
+      // displays, where DP-2's second row of chips covered its name.
+      readonly property real chipTop: titleColumn.y + titleColumn.height + Style.space(6)
+      function chipRows(size) {
+        var per = Math.max(1, Math.floor((width - Style.space(20) + Style.space(4)) / (size + Style.space(4))))
+        return Math.ceil(blockChips.length / per)
+      }
+      function chipFit(room) {
+        for (var s = 24; s >= 16; s -= 2) {
+          var size = Style.space(s)
+          if (chipRows(size) * (size + Style.space(4)) - Style.space(4) <= room) return size
+        }
+        return 0
+      }
+      readonly property real roomWithInfo: height - chipTop - Style.space(18) - infoText.implicitHeight
+      readonly property real roomWithoutInfo: height - chipTop - Style.space(10)
+      readonly property bool infoShown: height > Style.space(56) && (blockChips.length === 0 || chipFit(roomWithInfo) > 0)
+      readonly property real chipSize: blockChips.length === 0 ? 0 : chipFit(infoShown ? roomWithInfo : roomWithoutInfo)
 
       visible: disp.name !== ""
       x: isDragging ? root.toPixelX(root.dragLogX) : Math.round(root.toPixelX(disp.x))
@@ -338,6 +358,7 @@ Item {
       }
 
       Column {
+        id: titleColumn
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.margins: Style.space(10)
@@ -394,7 +415,7 @@ Item {
         anchors.bottom: parent.bottom
         anchors.margins: Style.space(10)
         width: parent.width - Style.space(20) - (removeBox.visible ? removeBox.width + Style.space(6) : 0)
-        visible: parent.height > Style.space(56)
+        visible: block.infoShown
         Repeater {
           model: [(block.disp.model ? block.disp.model + " · " : "") + block.disp.mode + " · " + block.disp.scale + "×",
                   block.disp.width + "×" + block.disp.height + " logical"]
@@ -482,7 +503,7 @@ Item {
       // mouse area so that pressing a chip never starts moving the display.
       Flow {
         z: 2
-        visible: block.blockChips.length > 0 && block.height > Style.space(44)
+        visible: block.chipSize > 0
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: infoText.visible ? infoText.top : parent.bottom
@@ -498,8 +519,8 @@ Item {
             id: chip
             required property var modelData
             readonly property bool dashed: modelData.away || modelData.ghost
-            width: Style.space(24)
-            height: Style.space(24)
+            width: block.chipSize
+            height: block.chipSize
             // Here now but living elsewhere: drawn faintly where it is.
             opacity: modelData.ghost ? 0.55 : 1
 
@@ -533,7 +554,7 @@ Item {
               text: chip.modelData.label
               color: chip.modelData.used || chip.modelData.away ? root.foreground : Qt.darker(root.foreground, 1.4)
               font.family: root.fontFamily
-              font.pixelSize: Style.font.bodySmall
+              font.pixelSize: Math.min(Style.font.bodySmall, Math.round(block.chipSize * 0.55))
               font.bold: true
             }
             // On screen now.
