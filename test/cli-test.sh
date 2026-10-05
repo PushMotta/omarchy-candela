@@ -872,7 +872,7 @@ sandbox2="$(new_sandbox)"
 assert_eq "$(run_cli "$sandbox2" state | jq -c '[.virtual.addresses[] | "\(.address) \(.kind)"]')" '["192.168.1.89 Ethernet","192.168.1.90 Wi-Fi","100.64.0.7 Tailscale"]' "Ethernet, Wi-Fi and Tailscale, and never the VM bridge or loopback"
 pass "addresses are labelled by the kind of link"
 
-# ---- a new password: replaced, and the running server started again with it
+# ---- a new password replaces the old one, and a running server starts again with it
 sandbox2="$(new_sandbox)"
 run_cli "$sandbox2" virtual add extra >/dev/null
 run_cli "$sandbox2" virtual view VIRTUAL-1 network on >/dev/null
