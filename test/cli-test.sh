@@ -770,3 +770,59 @@ run_cli "$sandbox2" apply --now '{"displays":[{"name":"DP-2","enabled":false}]}'
 run_cli "$sandbox2" apply '{"displays":[{"name":"DP-2","enabled":true}]}' >/dev/null || fail "switching a real display on is refused"
 assert_eq "$(jq -r '.[] | select(.name == "DP-2") | .disabled' "$sandbox2/monitors.json")" "false" "a real display comes back on too, in its preview"
 pass "a display switched off comes back on"
+# ---- Hyprland's hl.monitor keeps the fields a rule leaves out (the fake
+# merges rules the same way), so a display switched off, or set to mirror,
+# stays so in a live change unless the rule says otherwise. Every path that
+# brings one back without a reload first:
+mon() { jq -r --arg n "$2" ".[] | select(.name == \$n) | .$3" "$1/monitors.json"; }
+
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" apply --now '{"displays":[{"name":"DP-2","enabled":false}]}' >/dev/null
+assert_eq "$(mon "$sandbox2" DP-2 disabled)" "true" "DP-2 is kept off"
+run_cli "$sandbox2" apply '{"displays":[{"name":"DP-2","enabled":true}]}' >/dev/null || fail "switching it on is refused"
+assert_eq "$(mon "$sandbox2" DP-2 disabled)" "false" "it is on in the preview"
+run_cli "$sandbox2" keep >/dev/null
+assert_eq "$(mon "$sandbox2" DP-2 disabled)" "false" "and stays on once kept"
+pass "a display kept off comes back on, in a preview and once kept"
+
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" apply --now '{"displays":[{"name":"DP-2","enabled":false}]}' >/dev/null
+run_cli "$sandbox2" apply --now '{"displays":[{"name":"DP-2","enabled":true}]}' >/dev/null || fail "switching it on at once is refused"
+assert_eq "$(mon "$sandbox2" DP-2 disabled)" "false" "on at once"
+pass "a display kept off comes back on at once"
+
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" apply '{"displays":[{"name":"DP-2","enabled":false}]}' >/dev/null
+assert_eq "$(mon "$sandbox2" DP-2 disabled)" "true" "off in the preview"
+run_cli "$sandbox2" revert >/dev/null
+assert_eq "$(mon "$sandbox2" DP-2 disabled)" "false" "and on again after revert"
+pass "reverting a preview that switched a display off brings it back"
+
+# recover: DP-2 kept off, then DP-1 switched off by something other than
+# Candela, so every display is dark and the rescue has a rule to undo.
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" apply --now '{"displays":[{"name":"DP-2","enabled":false}]}' >/dev/null
+FAKE_DIR="$sandbox2" bash "$ROOT/test/fake-hyprctl.sh" eval 'hl.monitor({ output = "DP-1", disabled = true })' >/dev/null
+assert_eq "$(mon "$sandbox2" DP-1 disabled)" "true" "every display is off"
+assert_eq "$(run_cli "$sandbox2" recover 2>&1 | tail -1)" "recovered DP-1" "recover answers"
+assert_eq "$(mon "$sandbox2" DP-1 disabled)" "false" "and DP-1 is on again"
+pass "recover switches a display back on when every one is off"
+
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" apply --now '{"displays":[{"name":"DP-2","mirror":"DP-1"}]}' >/dev/null
+assert_eq "$(mon "$sandbox2" DP-2 mirrorOf)" "0" "DP-2 is kept mirroring DP-1, which Hyprland reports by its id"
+assert_eq "$(run_cli "$sandbox2" state | jq -r '.displays[] | select(.name == "DP-2") | .mirrorOf')" "DP-1" "and the state names it"
+run_cli "$sandbox2" apply '{"displays":[{"name":"DP-2","mirror":""}]}' >/dev/null || fail "ending the mirror is refused"
+assert_eq "$(mon "$sandbox2" DP-2 mirrorOf)" "none" "the mirror ends in the preview"
+assert_contains "$(cat "$sandbox2/eval-last.txt")" 'output = "DP-2", disabled = false, mode' "the rule says the display is on"
+assert_contains "$(cat "$sandbox2/eval-last.txt")" 'mirror = ""' "and that it mirrors nothing"
+run_cli "$sandbox2" keep >/dev/null
+assert_eq "$(mon "$sandbox2" DP-2 mirrorOf)" "none" "and once kept"
+pass "a kept mirror can be ended"
+
+# A rule the user's own config gives a display Candela has no say on is
+# left alone: no "on", no "no mirror" for it.
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" apply --now '{"displays":[{"name":"DP-2","scale":2}]}' >/dev/null
+assert_not_contains "$(grep '"DP-1"' "$sandbox2/state/candela-layout.lua")" "mirror" "no mirror field for a display intent says nothing about"
+pass "displays intent says nothing about get no mirror field"

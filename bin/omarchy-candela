@@ -189,14 +189,21 @@ read_json_arg() {
   fi
 }
 
+# Hyprland 0.56.2 reports a mirror by the mirrored output's id ("0"), not
+# its name (HyprCtl.cpp; seen on the desk 5 October 2026). Intent, rules and
+# the panel all name outputs, so the id becomes a name wherever the list is
+# read.
+JQ_MIRROR_NAMES='. as $all | map((.mirrorOf // "none" | tostring) as $of | .mirrorOf = (if $of == "none" then "none"
+  else ([$all[] | select((.id | tostring) == $of)][0].name // $of) end))'
+
 # Hyprland adds a headless output named FALLBACK when the last real display
 # goes away or is switched off, so that it has something to render to. It is
 # not a display anyone can see: counted as one, it would make "every display
 # is off" look false in exactly the case recover exists for.
 live_json() {
-  local out
-  out="$(run_bounded hyprctl monitors all -j 2>/dev/null)" || die "hyprctl is not answering within ${COMMAND_SECONDS}s"
-  jq -c 'map(select(.name != "FALLBACK"))' <<<"$out"
+  local raw
+  raw="$(run_bounded hyprctl monitors all -j 2>/dev/null)" || die "hyprctl is not answering within ${COMMAND_SECONDS}s"
+  jq -c "$JQ_MIRROR_NAMES"' | map(select(.name != "FALLBACK"))' <<<"$raw"
 }
 
 # Open numbered workspaces and where they are. Special workspaces have
@@ -475,9 +482,11 @@ generate_lua() {
           end
         else
           # hl.monitor starts from the earlier rule for the output and keeps
-          # every field this one leaves out, so a display switched off stays
-          # off unless its rule says otherwise (Hyprland 0.56.2,
-          # LuaBindingsConfigRules.cpp; seen on the desk 5 October 2026).
+          # every field this one leaves out (Hyprland 0.56.2,
+          # LuaBindingsConfigRules.cpp; seen on the desk 5 October 2026). A
+          # display switched off would stay off, and a mirror stay a mirror,
+          # unless the rule says otherwise: so it always says it is on, and
+          # says "no mirror" whenever intent does.
           ([ "output = \($d.name | lua_str)",
              "disabled = false",
              "mode = \(($i.mode // mode_of($d)) | lua_str)",
@@ -487,7 +496,7 @@ generate_lua() {
            + ([ "vrr","mirror","bitdepth","cm","sdr_eotf","sdrbrightness","sdrsaturation",
                 "sdr_min_luminance","sdr_max_luminance","min_luminance","max_luminance","max_avg_luminance",
                 "icc","supports_hdr","supports_wide_color" ]
-              | map(. as $k | select($i[$k] != null and ($k != "mirror" or $i[$k] != "") and ($k != "icc" or $i[$k] != "")) | "\($k) = \($i[$k] | lua_val($k))")))
+              | map(. as $k | select($i[$k] != null and ($k != "icc" or $i[$k] != "")) | "\($k) = \($i[$k] | lua_val($k))")))
           | "hl.monitor({ " + join(", ") + " })"
         end;
     def carried:
@@ -568,7 +577,7 @@ verify_live() {
     # Measured on the desk (9 September 2026): the eval returns in ~5 ms and
     # the modeset shows up as the next readback blocking 0.2-0.4 s. A poll
     # that times out during a slower modeset is retried until the deadline.
-    if ! live="$(run_bounded hyprctl monitors all -j 2>/dev/null)"; then
+    if ! live="$(run_bounded hyprctl monitors all -j 2>/dev/null)" || ! live="$(jq -c "$JQ_MIRROR_NAMES" <<<"$live" 2>/dev/null)"; then
       (( $(now_ms) >= deadline )) && { printf 'hyprctl is not answering'; return 1; }
       sleep 0.2; continue
     fi

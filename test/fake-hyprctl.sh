@@ -64,7 +64,8 @@ apply_rules() {
     jq -c --argjson r "$rule" '.[$r.output] = $r' "$dir/monrules.json" > "$dir/monrules.json.tmp" && mv "$dir/monrules.json.tmp" "$dir/monrules.json"
     jq --argjson r "$rule" --arg ignore_scale "${FAKE_HYPRCTL_IGNORE_SCALE:-}" --slurpfile pristine "$dir/monitors.pristine.json" '
       def r2: (. * 100 | round) / 100;
-      map(if .name != $r.output then . else
+      . as $all
+      | map(if .name != $r.output then . else
         if $r.disabled == true then .disabled = true | .width = 0 | .height = 0 | .x = 0 | .y = 0
         else
           ([$pristine[0][] | select(.name == $r.output)][0]) as $p
@@ -79,7 +80,9 @@ apply_rules() {
              else . end)
           | (if ($r.scale | type) == "number" and $ignore_scale != "1" then .scale = ($r.scale | r2) else . end)
           | (if $r.transform != null then .transform = $r.transform else . end)
-          | (if $r|has("mirror") then .mirrorOf = (if $r.mirror == "" then "none" else $r.mirror end) else . end)
+          # Hyprland reports a mirror by the mirrored output'"'"'s id, as a
+          # string ("0"), not by its name (HyprCtl.cpp, 0.56.2; on the desk).
+          | (if $r|has("mirror") then .mirrorOf = (if $r.mirror == "" then "none" else (([$all[] | select(.name == $r.mirror)][0].id // $r.mirror) | tostring) end) else . end)
           | (if $r|has("bitdepth") then .currentFormat = (if $r.bitdepth == 10 then "XBGR2101010" else "XRGB8888" end) else . end)
           | (if $r|has("cm") then .colorManagementPreset = $r.cm else . end)
           | (if $r|has("sdr_max_luminance") then .sdrMaxLuminance = $r.sdr_max_luminance else . end)

@@ -274,6 +274,12 @@ Later tests the same evening (3 Sep 2026):
 - **Toggles load in sorted filename order** (`find | sort` in `require_all.lua`): `candela-layout` < `candela-pending` < `internal-monitor-*`.
 - **The every-screen strip and keep with the studio open were seen live** (screenshots of both screens, no shell warnings); the built-in panel paths, `recover` at boot and the strip's keyboard are covered by the sandbox only.
 
+Found on 5 October 2026 (1.1.1), each seen on the desk and read in the 0.56.2 source:
+
+- **`hl.monitor` starts from the earlier rule for the same output** (`LuaBindingsConfigRules.cpp`) and keeps every field a new call leaves out, until a reload clears all rules. After `disabled = true`, a rule without `disabled` left DP-2 off; `disabled = false` brought it back. A mirror stayed a mirror the same way until `mirror = ""`. So every rule for a display that is on says `disabled = false`, and says `mirror = ""` when intent has no mirror. 1.1.0 left both out: a display it switched off could not be switched on again without a reload, a mirror could not be ended, and `recover` could not light the display it chose. Revert and keep always reload first, so they were never affected. The test compositor merges rules the same way now.
+- **`mirrorOf` is the mirrored output's id, as a string** (`"0"`), not its name (`HyprCtl.cpp`). The list is read through one translation to names, or every mirror would fail its own check ("DP-2 mirrors 0, wanted DP-1").
+- **`FALLBACK` appears as an enabled output when every real display is off.** Counted as a display, it made "every display is off" false in the one case `recover` is for; `live_json` leaves it out. `recover` then lit DP-1 with both MateViews dark.
+
 ## 10. Prior art, read but not copied
 
 - **PR #7340**: good ideas worth crediting — EDID-gated HDR switch, SDR white capped at sustained luminance, overlap tidy before rotation, Lua-aware writer. Different decisions here: three-state colour mode instead of a switch, generated file instead of editing monitors.lua, revert timer outside the shell.
