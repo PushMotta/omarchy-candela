@@ -73,6 +73,7 @@ VIRTUAL_RE='^VIRTUAL-[0-9]+$'
 VIRTUAL_DIR="$STATE_DIR/virtual"          # per display: wayvnc configs, key, password (0700)
 VIRTUAL_GAP=320                            # logical px between the desk and a display placed apart
 VNC_WAIT_SECONDS="${OMARCHY_CANDELA_VNC_WAIT_SECONDS:-3}"
+WAYVNC="${OMARCHY_CANDELA_WAYVNC:-wayvnc}"   # the tests name one that is missing
 REVERT_UNIT="omarchy-candela-revert"
 REVERT_SECONDS="${OMARCHY_CANDELA_REVERT_SECONDS:-15}"
 VERIFY_SECONDS="${OMARCHY_CANDELA_VERIFY_SECONDS:-3}"
@@ -121,13 +122,14 @@ Usage: omarchy-candela <command> [args]
   workspaces home                Move every open workspace that is away from its home display back home
   virtual add <extra|stage|bench> [--size WxH] [--refresh HZ] [--scale S] [--beside NAME|--apart] [--label TEXT]
   virtual remove NAME            Stop its viewers, then remove the virtual display
-  virtual view NAME window on|off
+  virtual view NAME window on|off   (a live picture in a Candela window; view only)
   virtual view NAME network on|off [--address IP] [--port N] [--at-login yes|no]
   virtual secret NAME            The username and password for network viewing, as JSON
   virtual clients NAME           Who is connected over the network, as JSON
   virtual disconnect NAME ID
   virtual restore                Recreate kept virtual displays (the service runs this at start)
   virtual guard                  Move workspaces parked on a virtual display to a real one
+  virtual install                Install wayvnc (for network viewing) with Omarchy's installer, in a terminal
 
 Change JSON shape (any subset per display):
   {"displays":[{"name":"DP-2","bitdepth":10,"cm":"hdr","sdr_max_luminance":203}],
@@ -1041,6 +1043,15 @@ cmd_apply() {
   if (( now )); then
     cmd_keep
     if (( at_once )) && [[ ${CANDELA_NO_UNDO:-} != 1 ]]; then write_undo "$previous" "$ws_before"; fi
+    # Moving a display that is on the network can move it beside or apart,
+    # which decides whether its viewers may take input: start it again.
+    local vname
+    while IFS= read -r vname; do
+      [[ -n $vname ]] || continue
+      if unit_active "$(virtual_unit "$vname" network)"; then
+        ( virtual_view_network "$vname" on "" "" "" ) || echo "omarchy-candela: $vname could not be offered on the network again" >&2
+      fi
+    done < <(jq -r --arg vre "$VIRTUAL_RE" '[.displays // [] | .[] | select(.position != null) | .name | select(test($vre))] | unique | .[]' <<<"$change")
     return 0
   fi
 
@@ -1193,45 +1204,30 @@ cmd_workspaces() {
 # ---------------------------------------------------------------- virtual displays
 #
 # A virtual display is a Hyprland headless output named VIRTUAL-n that this
-# tool creates and owns. It is seen through wayvnc, in two ways, each its own
-# wayvnc process run as a user unit: "window", a server on a socket in the
-# runtime directory with no password (the directory is the user's alone),
-# opened in a VNC viewer on this desk; and "network", a server on one LAN
-# address behind a username, a generated password and an RSA key (RSA-AES).
-# wayvnc never reads ~/.config/wayvnc/config here: each server gets a config
-# of its own. And wayvnc carries on serving the previous output, a real
-# display, when its own goes away, so every path that removes a virtual
-# display stops its servers first.
+# tool creates and owns. It is seen in two ways. "window" is the shell's own
+# live picture of it (Quickshell's screen capture, in a Candela window): no
+# VNC, nothing on any socket, and nothing to install. "network" is wayvnc on
+# one LAN address behind a username, a generated password and an RSA key
+# (RSA-AES), for a tablet or another computer; wayvnc is the one package this
+# needs, and `virtual install` offers Omarchy's installer for it.
+#
+# Hyprland has one cursor, and a VNC viewer's input moves it. A display
+# placed apart is past a gap the pointer cannot cross, so input from a viewer
+# could leave the cursor on a screen nobody can see, out of the mouse's
+# reach. Network viewing of a display placed apart is therefore view-only
+# (wayvnc -d); a display beside the desk takes input.
+#
+# wayvnc never reads ~/.config/wayvnc/config here: it gets a config of its
+# own. And wayvnc carries on serving the previous output, a real display,
+# when its own goes away, so every path that removes a virtual display stops
+# its server first.
 
 is_virtual() { [[ $1 =~ $VIRTUAL_RE ]]; }
 virtual_run_dir() { printf '%s/omarchy-candela' "${XDG_RUNTIME_DIR:-/run/user/$UID}"; }
-virtual_unit() { printf 'omarchy-candela-%s-%s' "$2" "$1"; }   # NAME kind: window, viewer, network
+virtual_unit() { printf 'omarchy-candela-%s-%s' "$2" "$1"; }   # NAME kind: network
 
 need_wayvnc() {
-  command -v wayvnc >/dev/null 2>&1 || die "wayvnc is not installed: install the wayvnc package to see virtual displays"
-}
-
-# The first VNC viewer that opens a Unix socket by its path and never asks
-# the server to resize: wlvncc (native Wayland) only follows the server's
-# size, and TigerVNC is told not to ask. A virtual display keeps the size it
-# was given, and wayvnc runs with resizing off (-R), because with it on it
-# would resize the output to the viewer's window and move it to 0,0; but
-# then neatvnc half-accepts a client's resize request and the next frame
-# lands outside the size the client was told. gvncviewer always asks, so it
-# is not offered (seen on the desk, 5 October 2026).
-virtual_viewer() {
-  local v
-  for v in wlvncc vncviewer; do
-    command -v "$v" >/dev/null 2>&1 && { echo "$v"; return 0; }
-  done
-  return 1
-}
-
-virtual_viewer_command() {
-  case "$1" in
-    vncviewer) printf '%s\n' vncviewer -RemoteResize=0 "$2" ;;
-    *) printf '%s\n' "$1" "$2" ;;
-  esac
+  command -v "$WAYVNC" >/dev/null 2>&1 || die "wayvnc is not installed: install the wayvnc package to see virtual displays"
 }
 
 # Run a command as a transient user unit, replacing one of the same name;
@@ -1266,10 +1262,25 @@ virtual_stop() {
 }
 
 virtual_stop_all() {
-  virtual_stop "$1" viewer
-  virtual_stop "$1" window
   virtual_stop "$1" network
-  rm -f -- "$(virtual_run_dir)/$1.vnc"
+  run_bounded omarchy-shell -q "$PLUGIN_ID" preview "$1" off >/dev/null 2>&1 || true
+}
+
+# Beside: sharing an edge with a real display that is on, so the pointer can
+# always come back from it.
+virtual_is_beside() {
+  live_json | jq -e --arg n "$1" --arg vre "$VIRTUAL_RE" '
+    def lw: (if ((.transform // 0) % 2) == 1 then .height else .width end) / .scale;
+    def lh: (if ((.transform // 0) % 2) == 1 then .width else .height end) / .scale;
+    def box: {x, y, w: (lw | round), h: (lh | round)};
+    ([.[] | select(.name == $n)][0] // null) as $v
+    | if $v == null then false else
+        ($v | box) as $a
+        | [ .[] | select(.disabled != true and .width > 0 and ((.mirrorOf // "none") == "none") and (.name | test($vre) | not)) | box ]
+        | any(. as $b
+            | ((($a.x + $a.w == $b.x) or ($b.x + $b.w == $a.x)) and $a.y < $b.y + $b.h and $b.y < $a.y + $a.h)
+              or ((($a.y + $a.h == $b.y) or ($b.y + $b.h == $a.y)) and $a.x < $b.x + $b.w and $b.x < $a.x + $a.w))
+      end' >/dev/null 2>&1
 }
 
 # Rules for it are already loaded (the layout file carries them); this only
@@ -1322,28 +1333,10 @@ virtual_network_settings() {
   if [[ -s $f ]]; then cat "$f"; else echo '{}'; fi
 }
 
+# The window view belongs to the shell; this asks it.
 virtual_view_window() {
-  local name="$1" mode="$2" run sock ctl conf viewer
-  if [[ $mode == off ]]; then
-    virtual_stop "$name" viewer
-    virtual_stop "$name" window
-    rm -f -- "$(virtual_run_dir)/$name.vnc"
-    return 0
-  fi
-  need_wayvnc
-  viewer="$(virtual_viewer)" || die "no VNC viewer to show it in a window: install the tigervnc package (or wlvncc from the AUR)"
-  run="$(virtual_run_dir)"
-  mkdir -p "$run" && chmod 700 "$run"
-  sock="$run/$name.vnc"; ctl="$run/$name-window.ctl"
-  mkdir -p "$VIRTUAL_DIR/$name" && chmod 700 "$VIRTUAL_DIR" "$VIRTUAL_DIR/$name"
-  conf="$VIRTUAL_DIR/$name/window.conf"
-  printf 'enable_auth=false\n' > "$conf"
-  rm -f -- "$sock"
-  spawn_unit "$(virtual_unit "$name" window)" wayvnc -C "$conf" -o "$name" -S "$ctl" -R "unix:$sock"
-  wait_for_socket "$sock" || die "wayvnc did not start for $name: journalctl --user -u $(virtual_unit "$name" window)"
-  local -a viewer_cmd
-  mapfile -t viewer_cmd < <(virtual_viewer_command "$viewer" "$sock")
-  spawn_unit "$(virtual_unit "$name" viewer)" "${viewer_cmd[@]}"
+  run_bounded omarchy-shell "$PLUGIN_ID" preview "$1" "$2" >/dev/null 2>&1 \
+    || die "the Candela plugin is not running, and the window view is drawn by it"
 }
 
 virtual_view_network() {
@@ -1378,26 +1371,43 @@ virtual_view_network() {
       "$pw" "$dir/rsa_key.pem" "$address" "$port" > "$conf" )
   ctl="$(virtual_run_dir)/$name-network.ctl"
   mkdir -p "$(virtual_run_dir)" && chmod 700 "$(virtual_run_dir)"
-  spawn_unit "$(virtual_unit "$name" network)" wayvnc -C "$conf" -o "$name" -S "$ctl" -R
+  # -R: never let a client resize the output (with it, wayvnc resizes any
+  # output to the client's window and moves it to 0,0). -d: watch-only when
+  # placed apart, so a viewer can never leave the cursor out of reach.
+  local -a input=()
+  virtual_is_beside "$name" || input=(-d)
+  spawn_unit "$(virtual_unit "$name" network)" "$WAYVNC" -C "$conf" -o "$name" -S "$ctl" -R "${input[@]}"
   wait_for_socket "$ctl" || die "wayvnc did not start for $name: journalctl --user -u $(virtual_unit "$name" network)"
   tmp="$(tmp_for "$dir/network.json")"
   jq -n --arg a "$address" --argjson p "$port" --argjson l "$([[ $at_login == yes ]] && echo true || echo false)" \
-    '{address:$a, port:$p, atLogin:$l}' > "$tmp" && mv "$tmp" "$dir/network.json"
+    --argjson i "$( (( ${#input[@]} )) && echo false || echo true)" \
+    '{address:$a, port:$p, atLogin:$l, input:$i}' > "$tmp" && mv "$tmp" "$dir/network.json"
 }
 
-# Where a new virtual display goes, in logical px: flush right of a real
-# display (beside), or past the right edge of the whole desk with a gap the
-# pointer cannot cross (apart).
+# Where a new virtual display goes, in logical px. Beside: flush against a
+# real display, trying right of the rightmost, then below it, then left of
+# the leftmost, and taking the first place nothing else occupies. Apart: past
+# the right edge of everything, with a gap the pointer cannot cross.
 virtual_position() {
-  local live="$1" beside="$2" width="$3"
-  jq -r -n --argjson live "$live" --arg beside "$beside" --arg vre "$VIRTUAL_RE" --argjson gap "$VIRTUAL_GAP" '
+  local live="$1" beside="$2" width="$3" height="$4"
+  jq -r -n --argjson live "$live" --arg beside "$beside" --arg vre "$VIRTUAL_RE" --argjson gap "$VIRTUAL_GAP" \
+        --argjson w "$width" --argjson h "$height" '
     def lw: (if ((.transform // 0) % 2) == 1 then .height else .width end) / .scale | round;
-    [ $live[] | select(.disabled != true and .width > 0) ] as $on
-    | ($on | map(.x + lw) | max // 0) as $right
-    | if $beside != "" then
-        ([$on[] | select(.name == $beside)][0]) as $d
-        | if $d == null then error("no such display: " + $beside) else "\($d.x + ($d | lw))x\($d.y)" end
-      else "\($right + $gap)x0" end'
+    def lh: (if ((.transform // 0) % 2) == 1 then .width else .height end) / .scale | round;
+    [ $live[] | select(.disabled != true and .width > 0) | {name, x, y, w: lw, h: lh, virtual: (.name | test($vre))} ] as $on
+    | [ $on[] | select(.virtual | not) ] as $real
+    | ($on | map(.x + .w) | max // 0) as $right
+    | def free($c): all($on[]; ($c.x + $w <= .x or .x + .w <= $c.x or $c.y + $h <= .y or .y + .h <= $c.y));
+      if $beside == "" then "\($right + $gap)x0"
+      else
+        (if $beside == "auto" then ($real | max_by(.x + .w)) else ([$real[] | select(.name == $beside)][0]) end) as $d
+        | if $d == null then error("no such display: " + $beside) else
+            ($real | min_by(.x)) as $l
+            | [ {x: ($d.x + $d.w), y: $d.y}, {x: $d.x, y: ($d.y + $d.h)}, {x: ($l.x - $w), y: $l.y} ]
+            | (map(select(free(.))) | first) // .[0]
+            | "\(.x)x\(.y)"
+          end
+      end'
 }
 
 cmd_virtual() {
@@ -1449,7 +1459,16 @@ cmd_virtual() {
       ;;
     restore) cmd_virtual_restore ;;
     guard) cmd_virtual_guard ;;
-    *) die "virtual supports: add, remove, view, secret, clients, disconnect, restore, guard" ;;
+    install)
+      # The one package network viewing needs, through Omarchy's own
+      # installer, in a terminal where its password prompt can be seen.
+      command -v "$WAYVNC" >/dev/null 2>&1 && { echo "wayvnc is installed"; return 0; }
+      command -v omarchy-launch-floating-terminal-with-presentation >/dev/null 2>&1 \
+        || die "install the wayvnc package to offer virtual displays on the network"
+      setsid omarchy-launch-floating-terminal-with-presentation omarchy pkg add wayvnc >/dev/null 2>&1 &
+      echo "installing wayvnc in a terminal"
+      ;;
+    *) die "virtual supports: add, remove, view, secret, clients, disconnect, restore, guard, install" ;;
   esac
 }
 
@@ -1459,7 +1478,7 @@ cmd_virtual_add() {
   case "$use" in
     extra) size=2732x2048; scale=2; label="Tablet" ;;
     stage) size=1920x1080; scale=1; apart=1; label="Stage" ;;
-    bench) size=1366x768; scale=1; apart=1; label="Bench" ;;
+    bench) size=1366x768; scale=1; label="Bench" ;;
     *) die "virtual add needs what it is for: extra, stage or bench" ;;
   esac
   while (( $# > 0 )); do
@@ -1488,10 +1507,11 @@ cmd_virtual_add() {
     n=$(( n + 1 ))
   done
   name="VIRTUAL-$n"
-  if (( apart )); then position="$(virtual_position "$live" "" 0)"
-  else
-    [[ -n $beside ]] || beside="$(jq -r --arg vre "$VIRTUAL_RE" '[.[] | select(.disabled != true and .width > 0 and (.name | test($vre) | not))] | max_by(.x + .width / .scale) | .name // ""' <<<"$live")"
-    position="$(virtual_position "$live" "$beside" 0)" || die "no such display: $beside"
+  local lw lh
+  lw="$(awk -v w="${size%x*}" -v s="$scale" 'BEGIN { printf "%d", w / s + 0.5 }')"
+  lh="$(awk -v h="${size#*x}" -v s="$scale" 'BEGIN { printf "%d", h / s + 0.5 }')"
+  if (( apart )); then position="$(virtual_position "$live" "" "$lw" "$lh")"
+  else position="$(virtual_position "$live" "${beside:-auto}" "$lw" "$lh")" || die "no such display: $beside"
   fi
   merged="$(jq -c --arg n "$name" --arg use "$use" --arg label "$label" --arg mode "$size@$refresh" --arg pos "$position" --argjson scale "$scale" \
     '.virtual[$n] = {label:$label, use:$use} | .displays[$n] = {mode:$mode, position:$pos, scale:$scale, transform:0} | .version = 1' <<<"$intent")"
@@ -1582,22 +1602,20 @@ cmd_virtual_guard() {
 }
 
 virtual_state_json() {
-  local live="$1" intent="$2" name out='{}' window network clients net viewer wayvnc=false
-  command -v wayvnc >/dev/null 2>&1 && wayvnc=true
-  viewer="$(virtual_viewer || true)"
+  local live="$1" intent="$2" name out='{}' network clients net wayvnc=false
+  command -v "$WAYVNC" >/dev/null 2>&1 && wayvnc=true
   while IFS= read -r name; do
     [[ -n $name ]] || continue
-    window=false; network=false; clients='[]'
-    unit_active "$(virtual_unit "$name" window)" && window=true
+    network=false; clients='[]'
     if unit_active "$(virtual_unit "$name" network)"; then network=true; clients="$(cmd_virtual clients "$name")"; fi
     net="$(virtual_network_settings "$name")"
-    out="$(jq -c --arg n "$name" --argjson w "$window" --argjson on "$network" --argjson c "$clients" --argjson net "$net" \
-      '.[$n] = {window:$w, network:($net + {on:$on, clients:$c})}' <<<"$out")"
+    out="$(jq -c --arg n "$name" --argjson on "$network" --argjson c "$clients" --argjson net "$net" \
+      '.[$n] = {network:($net + {on:$on, clients:$c})}' <<<"$out")"
   done < <(jq -r '(.virtual // {}) | keys[]' <<<"$intent")
-  jq -c -n --argjson intent "$intent" --argjson views "$out" --arg viewer "$viewer" --argjson wayvnc "$wayvnc" \
+  jq -c -n --argjson intent "$intent" --argjson views "$out" --argjson wayvnc "$wayvnc" \
         --argjson addresses "$(virtual_lan_addresses | jq -R -s -c 'split("\n") | map(select(. != "") | split("\t") | {address:.[0], interface:.[1]})')" "$JQ_VIRTUAL_DEFS"'
     virtual_workspace_names($intent.virtual) as $ws
-    | { wayvnc: $wayvnc, viewer: (if $viewer == "" then null else $viewer end), addresses: $addresses,
+    | { wayvnc: $wayvnc, addresses: $addresses,
         displays: (($intent.virtual // {}) | with_entries(.value += {workspace: $ws[.key]} + ($views[.key] // {}))) }'
 }
 
@@ -1811,21 +1829,21 @@ cmd_doctor() {
   while IFS= read -r vname; do
     [[ -n $vname ]] || continue
     if jq -e --arg n "$vname" 'any(.name == $n)' <<<"$live" >/dev/null; then
-      ok "$vname is a virtual display; it is seen only through a viewer$(unit_active "$(virtual_unit "$vname" window)" && echo ", and one is open on this desk")"
+      ok "$vname is a virtual display: Candela's window shows it here$(virtual_is_beside "$vname" && echo ", and it sits beside your displays" || echo ", and it sits apart, out of the pointer's reach")"
     else
       warn "$vname is kept but not created: run \`omarchy-candela virtual restore\`"
     fi
     conf="$VIRTUAL_DIR/$vname/network.conf"
     if unit_active "$(virtual_unit "$vname" network)"; then
       if [[ -f $conf ]] && grep -qx 'enable_auth=true' "$conf" && ! grep -qE '^(relax_encryption|allow_broken_crypto)=true' "$conf"; then
-        ok "$vname is offered on $(sed -n 's/^address=//p' "$conf"):$(sed -n 's/^port=//p' "$conf") with a password and RSA-AES"
+        ok "$vname is offered on $(sed -n 's/^address=//p' "$conf"):$(sed -n 's/^port=//p' "$conf") with a password and RSA-AES$(jq -e '.input == false' "$VIRTUAL_DIR/$vname/network.json" >/dev/null 2>&1 && echo ", watch-only")"
       else
         bad "$vname is on the network without the password and encryption this tool sets: \`omarchy-candela virtual view $vname network off\`"
       fi
     fi
   done < <(intent_json | jq -r '(.virtual // {}) | keys[]')
-  if (( $(intent_json | jq '(.virtual // {}) | length') > 0 )) && ! command -v wayvnc >/dev/null 2>&1; then
-    warn "wayvnc is not installed, so virtual displays cannot be seen: install the wayvnc package"
+  if (( $(intent_json | jq '(.virtual // {}) | length') > 0 )) && ! command -v "$WAYVNC" >/dev/null 2>&1; then
+    ok "wayvnc is not installed: virtual displays show in Candela's window, and \`omarchy-candela virtual install\` adds network viewing"
   fi
 
   local errors

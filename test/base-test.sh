@@ -57,9 +57,14 @@ EOF
 #!/bin/bash
 echo 62
 EOF
-  cat > "$dir/bin/omarchy-shell" <<'EOF'
+  cat > "$dir/bin/omarchy-shell" <<EOF
 #!/bin/bash
+echo "\$*" >> "$dir/omarchy-shell.log"
 exit 0
+EOF
+  cat > "$dir/bin/omarchy-launch-floating-terminal-with-presentation" <<EOF
+#!/bin/bash
+echo "\$*" >> "$dir/terminal.log"
 EOF
   # A transient unit counts as running from systemd-run until systemctl stops it.
   cat > "$dir/bin/systemd-run" <<EOF
@@ -86,10 +91,6 @@ EOF
 #!/bin/bash
 echo "\$*" >> "$dir/wayvncctl.log"
 case "\$*" in *client-list*) echo '[{"id":"7","address":"192.168.1.40"}]' ;; esac
-exit 0
-EOF
-  cat > "$dir/bin/vncviewer" <<'EOF'
-#!/bin/bash
 exit 0
 EOF
   cat > "$dir/bin/ssh-keygen" <<'EOF'

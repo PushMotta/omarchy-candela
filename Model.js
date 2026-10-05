@@ -784,15 +784,29 @@ function virtualPlacement(rects, name) {
   return realRects(rects).some(function (o) { return touching(r, o) }) ? "beside" : "apart"
 }
 
+// Same as the backend: beside tries right of the rightmost real display,
+// then below it, then left of the leftmost, taking the first free place;
+// apart goes past everything with a gap.
 function virtualPositionFor(rects, name, placement) {
+  var me = null
+  ;(rects || []).forEach(function (o) { if (o.name === name) me = o })
+  var w = me ? me.width : 0, h = me ? me.height : 0
   var real = realRects(rects)
   if (!real.length) return { x: 0, y: 0 }
-  var right = -Infinity, top = 0
-  real.forEach(function (o) { if (o.x + o.width > right) { right = o.x + o.width; top = o.y } })
-  if (placement === "beside") return { x: right, y: top }
-  var edge = right
-  ;(rects || []).forEach(function (o) { if (o.name !== name && !o.disabled && o.x + o.width > edge) edge = o.x + o.width })
-  return { x: edge + VIRTUAL_GAP, y: 0 }
+  var others = (rects || []).filter(function (o) { return o.name !== name && !o.disabled })
+  if (placement !== "beside") {
+    var edge = -Infinity
+    real.concat(others).forEach(function (o) { if (o.x + o.width > edge) edge = o.x + o.width })
+    return { x: edge + VIRTUAL_GAP, y: 0 }
+  }
+  var d = real[0], l = real[0]
+  real.forEach(function (o) { if (o.x + o.width > d.x + d.width) d = o; if (o.x < l.x) l = o })
+  var candidates = [{ x: d.x + d.width, y: d.y }, { x: d.x, y: d.y + d.height }, { x: l.x - w, y: l.y }]
+  function free(c) {
+    return others.every(function (o) { return c.x + w <= o.x || o.x + o.width <= c.x || c.y + h <= o.y || o.y + o.height <= c.y })
+  }
+  for (var i = 0; i < candidates.length; i++) if (free(candidates[i])) return candidates[i]
+  return candidates[0]
 }
 
 // A display set to mirror cannot be a home: its homes go to the display it

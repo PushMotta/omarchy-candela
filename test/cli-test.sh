@@ -595,7 +595,6 @@ assert_eq "$(jq -c '.virtual["VIRTUAL-1"]' "$sandbox2/state/intent.json")" '{"la
 state="$(run_cli "$sandbox2" state)"
 assert_eq "$(jq -r '.displays[] | select(.name == "VIRTUAL-1") | .virtual' <<<"$state")" "true" "state marks it virtual"
 assert_eq "$(jq -r '.virtual.displays["VIRTUAL-1"].workspace' <<<"$state")" "stage" "state names its workspace"
-assert_eq "$(jq -r '.virtual.viewer' <<<"$state")" "vncviewer" "state names the viewer it would use"
 assert_eq "$(jq -c '[.virtual.addresses[].address]' <<<"$state")" '["192.168.1.89"]' "only LAN addresses are offered, not loopback or the VM bridge"
 pass "a virtual display is added apart, on its own workspace, without a countdown"
 
@@ -609,14 +608,11 @@ assert_eq "$(run_cli "$sandbox2" virtual restore)" "restored 1" "restore recreat
 assert_eq "$(jq -r '.[] | select(.name == "VIRTUAL-1") | .x' "$sandbox2/monitors.json")" "5120" "where it was"
 pass "a virtual display survives reloads and is recreated at start"
 
-# ---- viewing: a private socket and a viewer; the network behind a password
+# ---- viewing: the shell's own window; the network behind a password
 : > "$sandbox2/systemd-run.log"
 assert_eq "$(run_cli "$sandbox2" virtual view VIRTUAL-1 window on)" "VIRTUAL-1 window on" "window view starts"
-log="$(cat "$sandbox2/systemd-run.log")"
-assert_contains "$log" "--unit=omarchy-candela-window-VIRTUAL-1 -- wayvnc -C $sandbox2/state/virtual/VIRTUAL-1/window.conf -o VIRTUAL-1 -S $sandbox2/runtime/omarchy-candela/VIRTUAL-1-window.ctl -R unix:$sandbox2/runtime/omarchy-candela/VIRTUAL-1.vnc" "the window server listens on a socket only, with its own config"
-assert_contains "$log" "--unit=omarchy-candela-viewer-VIRTUAL-1 -- vncviewer -RemoteResize=0 $sandbox2/runtime/omarchy-candela/VIRTUAL-1.vnc" "the viewer opens that socket and never asks to resize"
-assert_eq "$(cat "$sandbox2/state/virtual/VIRTUAL-1/window.conf")" "enable_auth=false" "no address in the window config, so nothing on the network"
-assert_eq "$(stat -c %a "$sandbox2/runtime/omarchy-candela")" "700" "the socket's directory is the user's alone"
+assert_contains "$(cat "$sandbox2/omarchy-shell.log")" "io.github.pushmotta.candela preview VIRTUAL-1 on" "the shell draws the window view"
+assert_not_contains "$(cat "$sandbox2/systemd-run.log")" "wayvnc" "and no VNC server is started for it"
 if run_cli "$sandbox2" virtual view VIRTUAL-1 network on --address 0.0.0.0 2>/dev/null; then fail "every interface at once is refused"; fi
 if run_cli "$sandbox2" virtual view VIRTUAL-1 network on --address 192.168.122.1 2>/dev/null; then fail "the VM bridge is not a LAN address"; fi
 assert_eq "$(run_cli "$sandbox2" virtual view VIRTUAL-1 network on)" "VIRTUAL-1 network on" "network view starts"
@@ -627,6 +623,8 @@ assert_contains "$conf" "port=5901" "VIRTUAL-1 listens on 5901"
 assert_contains "$conf" "rsa_private_key_file=$sandbox2/state/virtual/VIRTUAL-1/rsa_key.pem" "with a kept RSA key"
 assert_not_contains "$conf" "relax_encryption" "never relaxed encryption"
 assert_eq "$(stat -c %a "$sandbox2/state/virtual/VIRTUAL-1/network.conf")" "600" "the config holding the password is private"
+assert_contains "$(cat "$sandbox2/systemd-run.log")" "-o VIRTUAL-1 -S $sandbox2/runtime/omarchy-candela/VIRTUAL-1-network.ctl -R -d" "a display placed apart is watch-only, so the cursor cannot be left out of reach"
+assert_eq "$(stat -c %a "$sandbox2/runtime/omarchy-candela")" "700" "the control socket's directory is the user's alone"
 secret="$(run_cli "$sandbox2" virtual secret VIRTUAL-1)"
 assert_eq "$(jq -r .username <<<"$secret")" "candela" "secret gives the username"
 [[ $(jq -r .password <<<"$secret") =~ ^[A-Za-z0-9]{16}$ ]] || fail "a 16-character password" "$secret"
@@ -635,17 +633,22 @@ run_cli "$sandbox2" virtual view VIRTUAL-1 network off >/dev/null
 run_cli "$sandbox2" virtual view VIRTUAL-1 network on >/dev/null
 assert_eq "$(run_cli "$sandbox2" virtual secret VIRTUAL-1 | jq -r .password)" "$pw1" "the password is kept between starts"
 state="$(run_cli "$sandbox2" state)"
-assert_eq "$(jq -c '.virtual.displays["VIRTUAL-1"] | [.window, .network.on, .network.address, .network.port, .network.atLogin]' <<<"$state")" '[true,true,"192.168.1.89",5901,false]' "state reports both viewers"
+assert_eq "$(jq -c '.virtual.displays["VIRTUAL-1"].network | [.on, .address, .port, .atLogin, .input]' <<<"$state")" '[true,"192.168.1.89",5901,false,false]' "state reports network viewing, watch-only"
 assert_eq "$(jq -r '.virtual.displays["VIRTUAL-1"].network.clients[0].address' <<<"$state")" "192.168.1.40" "and who is connected"
 out="$(run_cli "$sandbox2" doctor || true)"
-assert_contains "$out" "VIRTUAL-1 is offered on 192.168.1.89:5901 with a password and RSA-AES" "doctor says what is on the network"
+assert_contains "$out" "VIRTUAL-1 is offered on 192.168.1.89:5901 with a password and RSA-AES, watch-only" "doctor says what is on the network"
+: > "$sandbox2/systemd-run.log"
+run_cli "$sandbox2" apply '{"displays":[{"name":"VIRTUAL-1","position":"4800x0"}]}' >/dev/null
+assert_contains "$(cat "$sandbox2/systemd-run.log")" "-o VIRTUAL-1 -S $sandbox2/runtime/omarchy-candela/VIRTUAL-1-network.ctl -R" "moving it beside starts its server again"
+assert_not_contains "$(cat "$sandbox2/systemd-run.log")" " -d" "and beside, viewers may take input"
+run_cli "$sandbox2" apply '{"displays":[{"name":"VIRTUAL-1","position":"5120x0"}]}' >/dev/null
 pass "a virtual display is seen on a private socket, or on one LAN address behind a password"
 
 # ---- removing it stops its servers before the output goes, and can be undone
 : > "$sandbox2/wayvncctl.log"; : > "$sandbox2/hyprctl.log"
 assert_eq "$(run_cli "$sandbox2" virtual remove VIRTUAL-1)" "removed VIRTUAL-1" "remove reports"
 assert_contains "$(cat "$sandbox2/systemctl.log")" "stop omarchy-candela-network-VIRTUAL-1.service" "the network server is stopped"
-[[ ! -e $sandbox2/units/omarchy-candela-window-VIRTUAL-1.service ]] || fail "the window server is stopped"
+assert_contains "$(cat "$sandbox2/omarchy-shell.log")" "preview VIRTUAL-1 off" "its window is closed"
 assert_contains "$(cat "$sandbox2/hyprctl.log")" "output remove VIRTUAL-1" "then the output is removed"
 assert_eq "$(jq -r 'has("virtual")' "$sandbox2/state/intent.json")" "false" "it is gone from intent, with no empty block left"
 assert_not_contains "$(cat "$sandbox2/state/candela-layout.lua")" "VIRTUAL-1" "and from the layout"
@@ -680,10 +683,22 @@ if run_cli "$sandbox2" virtual add stage --label 'a"b' 2>/dev/null; then fail "a
 if run_cli "$sandbox2" virtual remove DP-1 2>/dev/null; then fail "a real display is never removed"; fi
 run_cli "$sandbox2" virtual add stage >/dev/null
 assert_eq "$(run_cli "$sandbox2" virtual add bench)" "VIRTUAL-2" "the next one is VIRTUAL-2"
-assert_contains "$(cat "$sandbox2/state/candela-layout.lua")" 'output = "VIRTUAL-2", mode = "1366x768@60", position = "7360x0"' "and goes apart past VIRTUAL-1"
+assert_contains "$(cat "$sandbox2/state/candela-layout.lua")" 'output = "VIRTUAL-2", mode = "1366x768@60", position = "2400x1600"' "a test bench goes beside, below DP-2, since VIRTUAL-1 sits right of it"
+assert_eq "$(run_cli "$sandbox2" virtual add stage)" "VIRTUAL-3" "a third, apart"
+assert_contains "$(cat "$sandbox2/state/candela-layout.lua")" 'output = "VIRTUAL-3", mode = "1920x1080@60", position = "7360x0"' "past everything, VIRTUAL-1 included"
 run_cli "$sandbox2" apply '{"displays":[{"name":"DP-1","scale":2}]}' >/dev/null
 if run_cli "$sandbox2" virtual add stage 2>/dev/null; then fail "nothing is added while a change waits for Keep"; fi
 run_cli "$sandbox2" revert >/dev/null
 out="$(run_cli "$sandbox2" apply '{"displays":[{"name":"VIRTUAL-2","mode":"1920x1080@60"}]}')"
 assert_eq "$out" "kept" "resizing a virtual display needs no countdown"
 pass "virtual displays are validated, and a real display is never removed"
+
+# ---- install: Omarchy's installer, in a terminal, only when missing
+sandbox2="$(new_sandbox)"
+assert_eq "$(run_cli "$sandbox2" virtual install)" "wayvnc is installed" "nothing to do when wayvnc is there"
+out="$(OMARCHY_CANDELA_WAYVNC=wayvnc-not-installed run_cli "$sandbox2" virtual install)"
+assert_eq "$out" "installing wayvnc in a terminal" "a terminal is opened"
+sleep 0.3
+assert_eq "$(cat "$sandbox2/terminal.log")" "omarchy pkg add wayvnc" "running Omarchy's own installer"
+pass "wayvnc is installed through Omarchy's installer, when asked"
+

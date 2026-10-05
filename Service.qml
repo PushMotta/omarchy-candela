@@ -807,6 +807,12 @@ Item {
     function identify(): void { root.identify() }
     function state(): string { return root.state ? JSON.stringify(root.state) : "{}" }
     function recover(): void { root.recoverAttempted = false; root.maybeRecover() }
+    // `omarchy-candela virtual view NAME window on|off` lands here.
+    function preview(name: string, on: string): string {
+      if (on === "on" && !root.screenNamed(name)) return "no display named " + name
+      root.setPreview(name, on === "on")
+      return "ok"
+    }
     function keep(): void { root.keep() }
     function revert(): void { root.revert() }
     function open(): void { if (root.shell) root.shell.summon(root.pluginId, "{}") }
@@ -843,6 +849,82 @@ Item {
   function virtualRemove(name) { runVirtual(["remove", name]) }
   function virtualView(name, kind, on, extra) { runVirtual(["view", name, kind, on ? "on" : "off"].concat(extra || [])) }
   function virtualDisconnect(name, id) { runVirtual(["disconnect", name, String(id)]) }
+  function installWayvnc() { runVirtual(["install"]) }
+
+  // ------------------------------------------------------------ previews
+  //
+  // The window view of a virtual display is drawn here: Quickshell's own
+  // live capture of that screen, in a floating window. Nothing to install,
+  // nothing on a socket or the network, and watch-only: to work on a
+  // virtual display, place it beside the desk and move the pointer there.
+  property var previews: []
+
+  function setPreview(name, on) {
+    var list = previews.filter(function(n) { return n !== name })
+    if (on) {
+      if (!screenNamed(name)) return
+      // A window opens on the display that has focus; on the virtual display
+      // itself it would be capturing its own picture.
+      var f = Hyprland.focusedMonitor ? String(Hyprland.focusedMonitor.name) : ""
+      if (/^VIRTUAL-[0-9]+$/.test(f)) focusRealDisplay()
+      list.push(name)
+    }
+    previews = list
+  }
+  function togglePreview(name) { setPreview(name, previews.indexOf(name) === -1) }
+
+  function screenNamed(name) {
+    for (var i = 0; i < Quickshell.screens.length; i++) if (String(Quickshell.screens[i].name) === name) return Quickshell.screens[i]
+    return null
+  }
+
+  function focusRealDisplay() {
+    var real = displays.filter(function(d) { return !d.virtual && d.enabled }).sort(function(a, b) { return a.x - b.x })
+    if (!real.length) return
+    focusProc.command = ["hyprctl", "dispatch", "hl.dsp.focus({ monitor = \"" + real[0].name + "\" })"]
+    focusProc.running = true
+  }
+  Process { id: focusProc }
+
+  // A display that went away takes its window with it.
+  Connections {
+    target: Quickshell
+    function onScreensChanged() {
+      var kept = root.previews.filter(function(n) { return root.screenNamed(n) !== null })
+      if (kept.length !== root.previews.length) root.previews = kept
+    }
+  }
+
+  Variants {
+    model: root.previews
+    FloatingWindow {
+      id: previewWindow
+      required property var modelData
+      readonly property var source: root.screenNamed(modelData)
+      readonly property var info: (root.virtualState.displays || {})[modelData] || ({})
+      title: "Candela · " + modelData + (info.label ? " · " + info.label : "")
+      implicitWidth: 960
+      implicitHeight: 540
+      color: "black"
+      ScreencopyView {
+        id: previewView
+        anchors.fill: parent
+        live: true
+        paintCursor: true
+        captureSource: previewWindow.source
+      }
+      Text {
+        anchors.centerIn: parent
+        visible: !previewView.hasContent
+        textFormat: Text.PlainText
+        text: previewWindow.source ? "Waiting for " + previewWindow.modelData + "…" : previewWindow.modelData + " is not there"
+        color: "#9a9a9a"
+        font.family: Style.font.family
+        font.pixelSize: Style.font.body
+      }
+      onClosed: root.setPreview(modelData, false)
+    }
+  }
   function showVirtualSecret(name) {
     if (virtualSecretFor === name && virtualSecret) { virtualSecretFor = ""; virtualSecret = null; return }
     secretProc.command = [root.cli, "virtual", "secret", name]

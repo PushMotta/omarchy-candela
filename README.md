@@ -259,7 +259,7 @@ from there; everything stays editable afterwards.
 |---|---|---|
 | Extra screen | 2732×2048 at 2× (an iPad Pro 12.9″) | beside your rightmost display |
 | Stage | 1920×1080 at 1× | apart |
-| Test bench | 1366×768 at 1× | apart |
+| Test bench | 1366×768 at 1× | beside your displays |
 
 **Beside** means flush against a real display, so the pointer and windows
 cross to it like any neighbour. **Apart** leaves a gap the pointer cannot
@@ -272,26 +272,29 @@ a real screen; `r` undoes the last change. It has no EDID, so it is SDR only.
 Hyprland forgets virtual displays when it restarts; Candela recreates them
 when the shell starts.
 
-You see a virtual display through [wayvnc](https://github.com/any1/wayvnc),
-which Candela never installs for you: install the `wayvnc` package yourself.
+You see a virtual display in two ways:
 
-- **In a window on this desk**: a wayvnc server on a socket in your runtime
-  directory, which only you can open, shown in the first viewer found that
-  never asks to resize it: wlvncc (from the AUR) or TigerVNC (the
-  `tigervnc` package). Nothing listens on the network. Input works, so this
-  is also how you use a test bench. gvncviewer is not used: it always asks
-  the server to resize, which a virtual display of a fixed size cannot do.
-- **On the network**: a second server on one LAN address you choose, never
+- **In a window on this desk**: Candela's own live picture of it, drawn by
+  the shell. Nothing to install and nothing on the network. It is for
+  watching; to work in a virtual display, place it beside your displays and
+  move the pointer onto it, with the window showing you where you are.
+- **On the network**, through [wayvnc](https://github.com/any1/wayvnc), the
+  one package this needs: the inspector's *Install wayvnc* opens a terminal
+  with Omarchy's own installer. A server on one LAN address you choose, never
   every interface, behind the username `candela` and a generated password,
   with RSA-AES encryption and a key Candela keeps so its fingerprint does
   not change. TigerVNC, bVNC on Android and RealVNC connect; macOS Screen
   Sharing can only connect unencrypted, so it is turned away (TigerVNC on the
   Mac works). It is off after each login unless you ask for it at login. The
-  inspector shows who is connected and can disconnect them.
+  inspector shows who is connected and can disconnect them. Hyprland has one
+  cursor, and a viewer's input moves it, so a display placed apart is
+  watch-only over the network: input there could leave your pointer on a
+  screen you cannot see, out of the mouse's reach. Placed beside, viewers can
+  use it.
 - **In a call**: the screen-share picker lists virtual displays like any
   other, so a stage is shared by choosing it there.
 
-A viewer shares your keyboard focus: Super shortcuts typed on a tablet act on
+A network viewer shares your keyboard focus: Super shortcuts typed on a tablet act on
 the whole desktop, and locking the session locks the virtual display too.
 Removing a virtual display stops its viewers before the output goes, because
 wayvnc would otherwise carry on with a real display. If a real display is
@@ -329,6 +332,7 @@ omarchy-candela virtual view VIRTUAL-1 window on|off
 omarchy-candela virtual view VIRTUAL-1 network on|off [--address 192.168.1.89] [--port 5901] [--at-login yes|no]
 omarchy-candela virtual secret VIRTUAL-1         # the username and password, as JSON
 omarchy-candela virtual remove VIRTUAL-1
+omarchy-candela virtual install                  # wayvnc, through Omarchy's installer, in a terminal
 ```
 
 Change JSON accepts, per display: `mode`, `position`, `scale`, `transform`,
@@ -355,9 +359,9 @@ mode. Set the mode you want instead.
 - `~/.local/state/omarchy/candela/undo.json` — what the last change kept at
   once (the workspace plan, a virtual display) replaced, until anything else
   is applied.
-- `~/.local/state/omarchy/candela/virtual/<name>/` (0700) — each virtual
-  display's wayvnc configs, and for network viewing its RSA key and password
-  (0600). Removing the display deletes it.
+- `~/.local/state/omarchy/candela/virtual/<name>/` (0700) — for network
+  viewing, a virtual display's wayvnc config, RSA key and password (0600).
+  Removing the display deletes it.
 - `~/.local/state/omarchy/candela/pending.json` — an applied-but-not-kept change with its expiry and transaction token.
 - `~/.local/state/omarchy/toggles/hypr/candela-pending.lua` — the pending
   change in the same form as the layout, loaded after it, for as long as the

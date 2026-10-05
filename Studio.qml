@@ -539,7 +539,7 @@ Item {
   readonly property var virtualUses: [
     { use: "extra", title: "Extra screen", caption: "An iPad Pro's 2732×2048 at 2×, beside your rightmost display, for a tablet or laptop over the network." },
     { use: "stage", title: "Stage", caption: "1920×1080 at 1×, apart from the desk, to share in a call or record at an exact size." },
-    { use: "bench", title: "Test bench", caption: "1366×768 at 1×, apart, to see an app at a size you don't have. Change it freely." } ]
+    { use: "bench", title: "Test bench", caption: "1366×768 at 1×, beside your displays so you can work in it, to see an app at a size you don't have." } ]
   property string removeArmedFor: ""
   Timer { id: removeArm; interval: 4000; onTriggered: root.removeArmedFor = "" }
 
@@ -562,10 +562,9 @@ Item {
     removeArmedFor = ""
     service.virtualRemove(d.name)
   }
+  readonly property bool previewOpen: isVirtual && !!service && service.previews.indexOf(display.name) !== -1
   function virtualViewCaption() {
-    if (!virtualState.wayvnc) return "Needs wayvnc: install the wayvnc package"
-    if (!virtualState.viewer) return "Needs a VNC viewer: install the tigervnc package (or wlvncc from the AUR)"
-    return "In " + virtualState.viewer + " · a private socket, nothing on the network"
+    return "A live picture in a Candela window, nothing on the network. Watching only: to work in it, place it beside your displays and move the pointer there."
   }
 
   Connections {
@@ -634,6 +633,7 @@ Item {
       ? ["vsize", "vrefresh", "scale", "rotation", "posx", "posy", "vplace", "enabled", "vwindow", "vnetwork"]
       : ["mode", "refresh", "vrr", "scale", "rotation", "posx", "posy", "mirror", "enabled"]
     if (isVirtual) {
+      if (!virtualState.wayvnc) list.push("vinstall")
       if (virtualNetwork.on) list.push("vaddress", "vsecret", "vlogin")
       list.push("vremove")
     }
@@ -764,7 +764,8 @@ Item {
       case "advanced": advancedOpen = !advancedOpen; break
       case "wshomes": toggleHome(d, Model.WORKSPACE_IDS[wsPillIndex]); break
       case "wssend": if (service) service.sendWorkspacesHome(); break
-      case "vwindow": if (service && virtualState.wayvnc && virtualState.viewer) service.virtualView(d.name, "window", !virtualInfo.window); break
+      case "vwindow": if (service) service.togglePreview(d.name); break
+      case "vinstall": if (service) service.installWayvnc(); break
       case "vnetwork": if (service && virtualState.wayvnc) service.virtualView(d.name, "network", !virtualNetwork.on); break
       case "vsecret": if (service) service.showVirtualSecret(d.name); break
       case "vlogin": if (service) service.virtualView(d.name, "network", true, ["--at-login", virtualNetwork.atLogin ? "no" : "yes"]); break
@@ -1099,8 +1100,7 @@ Item {
                 }
                 Text {
                   textFormat: Text.PlainText
-                  text: root.virtualState.wayvnc ? "It is added at once, with no countdown: it cannot blank a real display. r undoes it."
-                    : "It is added at once, with no countdown. Seeing it needs the wayvnc package."
+                  text: "It is added at once, with no countdown: it cannot blank a real display. r undoes it. Candela's window shows it here; only a tablet or another computer needs wayvnc."
                   color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width
                 }
               }
@@ -1537,7 +1537,7 @@ Item {
                       textFormat: Text.PlainText
                       text: root.display && Model.virtualPlacement(root.rects, root.display.name) === "beside"
                         ? "Beside: the pointer and windows cross to it like any display."
-                        : "Apart: the pointer cannot wander onto it. Windows get there through the workspace plan or SUPER+SHIFT+number."
+                        : "Apart: the pointer cannot wander onto it, and network viewers can watch but not use it. Windows get there through the workspace plan or SUPER+SHIFT+number."
                       color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width
                     }
                   }
@@ -1555,12 +1555,10 @@ Item {
                     width: parent.width
                     label: "In a window on this desk"
                     description: root.virtualViewCaption()
-                    checked: root.virtualInfo.window === true
-                    enabled: root.virtualState.wayvnc === true && !!root.virtualState.viewer
-                    opacity: enabled ? 1 : 0.6
+                    checked: root.previewOpen
                     foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily
                     hasCursor: root.focusArea === "inspector" && root.currentRow === "vwindow"
-                    onClicked: if (root.display && root.service && enabled) root.service.virtualView(root.display.name, "window", !root.virtualInfo.window)
+                    onClicked: if (root.display && root.service) root.service.togglePreview(root.display.name)
                     onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vwindow" } }
                   }
                 }
@@ -1571,8 +1569,10 @@ Item {
                   Toggle {
                     width: parent.width
                     label: "On the network"
-                    description: !root.virtualState.wayvnc ? "Needs wayvnc: install the wayvnc package"
-                      : root.virtualNetwork.on ? "RSA-AES with a username and password. TigerVNC, bVNC on Android and RealVNC connect; macOS Screen Sharing cannot, securely, so it is turned away."
+                    description: !root.virtualState.wayvnc ? "For a tablet or another computer. It needs wayvnc, which is not installed yet."
+                      : root.virtualNetwork.on
+                        ? "RSA-AES with a username and password. TigerVNC, bVNC on Android and RealVNC connect; macOS Screen Sharing cannot, securely, so it is turned away. "
+                          + (root.virtualNetwork.input ? "Viewers can use it." : "Watch-only while it sits apart, so a viewer can never leave your pointer out of reach: place it beside your displays to let them use it.")
                       : "Off. For a tablet or another computer on " + (((root.virtualState.addresses || [])[0] || {}).address || "your network") + "."
                     checked: root.virtualNetwork.on === true
                     enabled: root.virtualState.wayvnc === true
@@ -1581,6 +1581,27 @@ Item {
                     hasCursor: root.focusArea === "inspector" && root.currentRow === "vnetwork"
                     onClicked: if (root.display && root.service && enabled) root.service.virtualView(root.display.name, "network", !root.virtualNetwork.on)
                     onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vnetwork" } }
+                  }
+                }
+
+                InspectorRow {
+                  rowId: "vinstall"
+                  visible: root.isVirtual && root.virtualState.wayvnc !== true
+                  Column {
+                    width: parent.width; spacing: Style.spacing.labelGap
+                    Button {
+                      text: "Install wayvnc"
+                      bordered: true
+                      foreground: root.foreground; fontFamily: root.fontFamily
+                      hasCursor: root.focusArea === "inspector" && root.currentRow === "vinstall"
+                      onClicked: if (root.service) root.service.installWayvnc()
+                      onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vinstall" } }
+                    }
+                    Text {
+                      textFormat: Text.PlainText
+                      text: "Opens a terminal with Omarchy's installer, which asks for your password. Only network viewing needs it."
+                      color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width
+                    }
                   }
                 }
 
