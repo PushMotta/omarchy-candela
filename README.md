@@ -286,7 +286,11 @@ You see a virtual display in two ways:
   not change. TigerVNC, bVNC on Android and RealVNC connect; macOS Screen
   Sharing can only connect unencrypted, so it is turned away (TigerVNC on the
   Mac works). It is off after each login unless you ask for it at login. The
-  inspector shows who is connected and can disconnect them. Hyprland has one
+  inspector shows who is connected and can disconnect them. The login has
+  to be finished within 30 seconds of connecting, too short to type a
+  password on a tablet, so *Show* also draws it as a QR code: scan it with
+  the tablet's camera, copy it, then connect and paste it, and let the app
+  remember it. Hyprland has one
   cursor, and a viewer's input moves it, so a display placed apart is
   watch-only over the network: input there could leave your pointer on a
   screen you cannot see, out of the mouse's reach. Placed beside, viewers can
