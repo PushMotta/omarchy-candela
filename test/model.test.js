@@ -497,3 +497,14 @@ test("a virtual display's workspace is named the way the backend names it", () =
   assert.equal(M.virtualWorkspaceSlug("  Stage!  "), "stage")
   assert.equal(M.virtualWorkspaceSlug("✨"), "", "nothing usable: the backend falls back to the output name")
 })
+
+test("the plan presets home workspaces on real displays only, never on a virtual one", () => {
+  const r = [
+    { name: "DP-1", x: 0, y: 0, width: 2400, height: 1600 },
+    { name: "DP-2", x: 2400, y: 0, width: 2400, height: 1600 },
+    { name: "VIRTUAL-1", x: 4800, y: 0, width: 1280, height: 800, virtual: true },
+    { name: "VIRTUAL-2", x: 6400, y: 0, width: 1920, height: 1080, virtual: true }]
+  assert.equal(M.planLine(M.presetPlan("split", r), r), "1–5 on DP-1 · 6–0 on DP-2")
+  assert.equal(M.planLine(M.presetPlan("alternate", r), r), "1, 3, 5, 7, 9 on DP-1 · 2, 4, 6, 8, 0 on DP-2")
+  assert.equal(M.planKind(M.presetPlan("split", r), r), "split", "and the plan still reads as Split with virtual displays present")
+})

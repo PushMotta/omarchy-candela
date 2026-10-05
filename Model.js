@@ -603,10 +603,12 @@ function workspaceLabel(id) {
   return Number(id) === 10 ? "0" : String(id)
 }
 
-// Displays that can be a home, left to right and then top to bottom: on, and
-// not showing another display's picture.
+// Displays that can be a home, left to right and then top to bottom: on,
+// not showing another display's picture, and real. A virtual display opens
+// on a named workspace of its own so that 1 to 0 stay on the real ones; the
+// presets never send a numbered workspace there (a custom plan still can).
 function planOrder(rects) {
-  return (rects || []).filter(function (r) { return !r.disabled && !r.mirrorOf })
+  return (rects || []).filter(function (r) { return !r.disabled && !r.mirrorOf && !r.virtual })
     .slice().sort(function (a, b) { return a.x !== b.x ? a.x - b.x : (a.y !== b.y ? a.y - b.y : (a.name < b.name ? -1 : 1)) })
     .map(function (r) { return r.name })
 }
