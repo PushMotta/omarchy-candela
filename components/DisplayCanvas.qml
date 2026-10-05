@@ -245,6 +245,7 @@ Item {
         : Util.alpha(root.foreground, 0.06)
       borderSpec: isOverlapping
         ? Border.flat(root.urgent, Math.max(1, Style.space(2)))
+        : disp.virtual === true ? Border.none()
         : (isSelected || isDropTarget
           ? Border.flat(root.accent, Math.max(1, Style.space(2)))
           : Border.controlSpec("normal", root.foreground, root.accent))
@@ -255,6 +256,26 @@ Item {
       Behavior on height { enabled: !block.isDragging && !root.reducedMotion; NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
       Behavior on color { enabled: !root.reducedMotion; ColorAnimation { duration: 120 } }
       Behavior on opacity { enabled: !root.reducedMotion; NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+
+      // A virtual display is drawn with a dashed edge: it is real to Hyprland
+      // and to the layout, but there is no panel behind it.
+      Shape {
+        anchors.fill: parent
+        visible: block.disp.virtual === true
+        z: 1
+        ShapePath {
+          strokeColor: block.isSelected || block.isDropTarget ? root.accent : Util.alpha(root.foreground, 0.7)
+          strokeWidth: block.isSelected ? Math.max(1, Style.space(2)) : 1
+          strokeStyle: ShapePath.DashLine
+          dashPattern: [4, 3]
+          fillColor: "transparent"
+          startX: 0.5; startY: 0.5
+          PathLine { x: block.width - 0.5; y: 0.5 }
+          PathLine { x: block.width - 0.5; y: block.height - 0.5 }
+          PathLine { x: 0.5; y: block.height - 0.5 }
+          PathLine { x: 0.5; y: 0.5 }
+        }
+      }
 
       // The picture on that screen, inset so a themed corner radius never
       // clips it and the block still reads as a panel with a bezel rather
@@ -301,7 +322,7 @@ Item {
             font.bold: true
           }
           BorderSurface {
-            visible: block.disp.hdr || block.disp.disabled || (block.disp.mirrorOf && block.disp.mirrorOf !== "")
+            visible: block.disp.hdr || block.disp.disabled || block.disp.virtual === true || (block.disp.mirrorOf && block.disp.mirrorOf !== "")
             implicitWidth: badgeText.implicitWidth + Style.space(10)
             implicitHeight: badgeText.implicitHeight + Style.space(3)
             anchors.verticalCenter: parent.verticalCenter
@@ -312,7 +333,7 @@ Item {
               id: badgeText
               anchors.centerIn: parent
               textFormat: Text.PlainText
-              text: block.disp.disabled ? "OFF" : (block.disp.mirrorOf ? "MIRROR" : "HDR")
+              text: block.disp.disabled ? "OFF" : (block.disp.mirrorOf ? "MIRROR" : (block.disp.virtual === true ? "VIRTUAL" : "HDR"))
               color: root.foreground
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -322,21 +343,30 @@ Item {
         }
       }
 
-      Text {
+      // Two lines that each elide: one text with a line break in it only
+      // elides its last line, and a narrow block let the first run into its
+      // neighbour.
+      Column {
         id: infoText
         anchors.left: parent.left
         anchors.bottom: parent.bottom
         anchors.margins: Style.space(10)
         width: parent.width - Style.space(20)
-        textFormat: Text.PlainText
-        text: (block.disp.model ? block.disp.model + " · " : "") + block.disp.mode + " · " + block.disp.scale + "×\n" + block.disp.width + "×" + block.disp.height + " logical"
-        color: Qt.darker(root.foreground, 1.4)
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
-        elide: Text.ElideRight
-        maximumLineCount: 2
-        wrapMode: Text.NoWrap
         visible: parent.height > Style.space(56)
+        Repeater {
+          model: [(block.disp.model ? block.disp.model + " · " : "") + block.disp.mode + " · " + block.disp.scale + "×",
+                  block.disp.width + "×" + block.disp.height + " logical"]
+          Text {
+            required property var modelData
+            width: infoText.width
+            textFormat: Text.PlainText
+            text: modelData
+            color: Qt.darker(root.foreground, 1.4)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+          }
+        }
       }
 
       MouseArea {

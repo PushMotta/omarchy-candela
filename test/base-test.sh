@@ -61,14 +61,45 @@ EOF
 #!/bin/bash
 exit 0
 EOF
+  # A transient unit counts as running from systemd-run until systemctl stops it.
   cat > "$dir/bin/systemd-run" <<EOF
 #!/bin/bash
 echo "\$*" >> "$dir/systemd-run.log"
+for a in "\$@"; do case \$a in --unit=*) mkdir -p "$dir/units"; touch "$dir/units/\${a#--unit=}.service" ;; esac; done
+exit 0
 EOF
   cat > "$dir/bin/systemctl" <<EOF
 #!/bin/bash
 echo "\$*" >> "$dir/systemctl.log"
+case "\$1 \$2" in
+  "--user is-active") [[ -e "$dir/units/\${@: -1}" ]]; exit \$? ;;
+  "--user stop") shift 2; for u in "\$@"; do rm -f "$dir/units/\$u"; done ;;
+esac
 exit 0
+EOF
+  # wayvnc and friends, so the virtual display paths run without the real ones.
+  cat > "$dir/bin/wayvnc" <<EOF
+#!/bin/bash
+echo "\$*" >> "$dir/wayvnc.log"
+EOF
+  cat > "$dir/bin/wayvncctl" <<EOF
+#!/bin/bash
+echo "\$*" >> "$dir/wayvncctl.log"
+case "\$*" in *client-list*) echo '[{"id":"7","address":"192.168.1.40"}]' ;; esac
+exit 0
+EOF
+  cat > "$dir/bin/gvncviewer" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+  cat > "$dir/bin/ssh-keygen" <<'EOF'
+#!/bin/bash
+while (( $# )); do [[ $1 == -f ]] && { printf 'not a key: the test stand-in for ssh-keygen\n' > "$2"; : > "$2.pub"; }; shift; done
+EOF
+  # The desk's addresses: loopback, the LAN, and libvirt's bridge.
+  cat > "$dir/bin/ip" <<'EOF'
+#!/bin/bash
+printf '1: lo    inet 127.0.0.1/8 scope host lo\n2: enp5s0    inet 192.168.1.89/24 brd 192.168.1.255 scope global enp5s0\n4: virbr0    inet 192.168.122.1/24 brd 192.168.122.255 scope global virbr0\n'
 EOF
   cat > "$dir/bin/omarchy-notification-send" <<'EOF'
 #!/bin/bash
@@ -88,6 +119,7 @@ EOF
     printf '%s\n' '[{"id":1,"name":"1","monitor":"DP-1","windows":4},{"id":2,"name":"2","monitor":"DP-2","windows":1}]' > "$dir/workspaces.json"
   fi
   echo '[]' > "$dir/wsrules.json"
+  echo '[]' > "$dir/virtual.json"
   echo "$dir"
 }
 
@@ -100,6 +132,7 @@ run_cli() {
   OMARCHY_CANDELA_STATE_DIR="$sandbox/state" \
   OMARCHY_CANDELA_LUA_FILE="$sandbox/state/candela-layout.lua" \
   OMARCHY_CANDELA_VERIFY_SECONDS="${OMARCHY_CANDELA_VERIFY_SECONDS:-0.5}" \
+  OMARCHY_CANDELA_VNC_WAIT_SECONDS=0 \
   HOME="$sandbox" \
     "$ROOT/bin/omarchy-candela" "$@"
 }

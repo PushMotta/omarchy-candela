@@ -62,9 +62,11 @@ Item {
     else if (!hasPending && operationPhase === "previewing") operationPhase = "idle"
   }
   readonly property int revertSeconds: state && state.revertSeconds ? Number(state.revertSeconds) : 15
-  // A workspace-only change is kept at once; while this is set, `revert`
-  // undoes it.
-  readonly property bool workspaceUndo: !!(state && state.workspaces && state.workspaces.undo)
+  // A change kept at once (the workspace plan, a virtual display); while this
+  // is set, `revert` undoes it.
+  readonly property bool undoAvailable: !!(state && state.undo)
+  readonly property var virtualState: state && state.virtual ? state.virtual : ({ wayvnc: false, viewer: null, addresses: [], displays: {} })
+  readonly property bool hasVirtual: Object.keys(virtualState.displays || {}).length > 0
   property int now: Math.floor(Date.now() / 1000)
   readonly property int pendingRemaining: hasPending ? Math.max(0, Number(pending.expires) - now) : 0
 
@@ -422,6 +424,9 @@ Item {
         var l = String(line || "")
         if (l.indexOf("monitoradded") === 0 || l.indexOf("monitorremoved") === 0 || l.indexOf("configreloaded") === 0 || l.indexOf("focusedmon") === 0)
           root.scheduleRefresh()
+        // Hyprland parks an unplugged display's workspaces on the first other
+        // display, which can be a virtual one nobody can see.
+        if (l.indexOf("monitorremoved>>") === 0 && root.hasVirtual) guardTimer.restart()
       }
     }
     onRunningChanged: if (!running && root.hyprSocket !== "") eventRestart.restart()
@@ -457,8 +462,10 @@ Item {
   property bool recoverAttempted: false
 
   function maybeRecover() {
-    if (!displays.length) return
-    for (var i = 0; i < displays.length; i++) if (displays[i].enabled) { recoverAttempted = false; return }
+    // A virtual display that is on is still nothing anyone can see.
+    var real = displays.filter(function(d) { return !d.virtual })
+    if (!real.length) return
+    for (var i = 0; i < real.length; i++) if (real[i].enabled) { recoverAttempted = false; return }
     if (recoverAttempted || recoverProc.running) return
     recoverAttempted = true
     recoverProc.running = true
@@ -810,6 +817,91 @@ Item {
       root.setColourMode(name, m)
       return "ok"
     }
+  }
+
+  // ------------------------------------------------------------ virtual displays
+  //
+  // They live only as long as Hyprland does, so each shell start recreates
+  // the kept ones. Every other virtual action is a command, run one at a
+  // time; the result reaches the surfaces through a refresh.
+  property var virtualQueue: []
+  property string virtualSecretFor: ""
+  property var virtualSecret: null
+  signal virtualFinished(string action, bool ok, string output)
+
+  function runVirtual(args) {
+    var q = virtualQueue.slice(); q.push(args); virtualQueue = q
+    pumpVirtual()
+  }
+  function pumpVirtual() {
+    if (virtualProc.running || !virtualQueue.length) return
+    var q = virtualQueue.slice(), next = q.shift(); virtualQueue = q
+    virtualProc.command = [root.cli, "virtual"].concat(next)
+    virtualProc.running = true
+  }
+  function virtualAdd(use) { runVirtual(["add", use]) }
+  function virtualRemove(name) { runVirtual(["remove", name]) }
+  function virtualView(name, kind, on, extra) { runVirtual(["view", name, kind, on ? "on" : "off"].concat(extra || [])) }
+  function virtualDisconnect(name, id) { runVirtual(["disconnect", name, String(id)]) }
+  function showVirtualSecret(name) {
+    if (virtualSecretFor === name && virtualSecret) { virtualSecretFor = ""; virtualSecret = null; return }
+    secretProc.command = [root.cli, "virtual", "secret", name]
+    virtualSecretFor = name
+    virtualSecret = null
+    secretProc.running = true
+  }
+
+  Process {
+    id: virtualProc
+    property int lastExitCode: -1
+    stdout: StdioCollector { id: virtualOut; waitForEnd: true }
+    stderr: StdioCollector { id: virtualErr; waitForEnd: true }
+    onExited: function(exitCode) { virtualProc.lastExitCode = exitCode }
+    onRunningChanged: {
+      if (running) return
+      var ok = virtualProc.lastExitCode === 0
+      var out = ok ? String(virtualOut.text || "").trim() : String(virtualErr.text || "").trim()
+      var action = virtualProc.command.length > 2 ? String(virtualProc.command[2]) : "virtual"
+      if (!ok) root.failOperation("virtual", out || "The virtual display command failed")
+      else root.succeedOperation("virtual")
+      root.virtualFinished(action, ok, out)
+      root.refresh()
+      root.pumpVirtual()
+    }
+  }
+
+  // The password is read on demand and forgotten when the studio closes or it
+  // is hidden again; it is never part of the state.
+  Process {
+    id: secretProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try { root.virtualSecret = JSON.parse(String(text || "")) } catch (e) { root.virtualSecret = null }
+      }
+    }
+  }
+
+  Process {
+    id: restoreProc
+    command: [root.cli, "virtual", "restore"]
+    onRunningChanged: if (!running) root.refresh()
+  }
+  Process {
+    id: guardProc
+    command: [root.cli, "virtual", "guard"]
+    onRunningChanged: if (!running) root.refresh()
+  }
+  Timer {
+    id: guardTimer
+    interval: 400
+    onTriggered: if (!guardProc.running) guardProc.running = true
+  }
+  // Give Hyprland a moment after the shell starts before asking it for outputs.
+  Timer {
+    interval: 1500
+    running: true
+    onTriggered: if (!restoreProc.running) restoreProc.running = true
   }
 
   Component.onCompleted: refresh()

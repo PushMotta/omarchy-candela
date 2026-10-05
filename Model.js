@@ -245,7 +245,8 @@ var ROW_FIELDS = {
   colour: ["cm", "bitdepth", "sdr_max_luminance", "sdr_min_luminance"], sdrwhite: ["sdr_max_luminance"],
   transfer: ["sdr_eotf"], icc: ["icc"], preset: ["cm"], saturation: ["sdrsaturation"],
   minlum: ["min_luminance"], maxlum: ["max_luminance"], avglum: ["max_avg_luminance"],
-  caphdr: ["supports_hdr"], capwide: ["supports_wide_color"]
+  caphdr: ["supports_hdr"], capwide: ["supports_wide_color"],
+  vsize: ["mode"], vrefresh: ["mode"], vplace: ["position"]
 }
 var ROW_GLOBAL_FIELDS = { autohdr: ["cm_auto_hdr"] }
 // Fields that mark a row as changed, where that differs from what its reset
@@ -747,6 +748,53 @@ function planLine(homes, rects) {
   return order.filter(function (n) { return by[n] }).map(function (n) { return workspaceList(by[n]) + " on " + n }).join(" · ")
 }
 
+// ---------------------------------------------------------------- virtual displays
+
+// Sizes a virtual display is offered at, in pixels. A tablet's is its own
+// screen, so a viewer there shows it pixel for pixel.
+var VIRTUAL_SIZES = [
+  { value: "1366x768", label: "1366×768" },
+  { value: "1920x1080", label: "1920×1080" },
+  { value: "2560x1440", label: "2560×1440" },
+  { value: "3840x2160", label: "3840×2160" },
+  { value: "2388x1668", label: "iPad 11″" },
+  { value: "2732x2048", label: "iPad 12.9″" }
+]
+// Same as the backend: the gap a display placed apart keeps from the desk,
+// which the pointer cannot cross.
+var VIRTUAL_GAP = 320
+
+function realRects(rects) {
+  return (rects || []).filter(function (r) { return !r.virtual && !r.disabled && !r.mirrorOf })
+}
+
+// Two rectangles that share some length of edge.
+function touching(a, b) {
+  var side = (a.x + a.width === b.x || b.x + b.width === a.x) && a.y < b.y + b.height && b.y < a.y + a.height
+  var stack = (a.y + a.height === b.y || b.y + b.height === a.y) && a.x < b.x + b.width && b.x < a.x + a.width
+  return side || stack
+}
+
+// Beside: flush against a real display, so the pointer and windows cross to
+// it. Apart: anywhere else, out of the pointer's reach.
+function virtualPlacement(rects, name) {
+  var r = null
+  ;(rects || []).forEach(function (o) { if (o.name === name) r = o })
+  if (!r) return "apart"
+  return realRects(rects).some(function (o) { return touching(r, o) }) ? "beside" : "apart"
+}
+
+function virtualPositionFor(rects, name, placement) {
+  var real = realRects(rects)
+  if (!real.length) return { x: 0, y: 0 }
+  var right = -Infinity, top = 0
+  real.forEach(function (o) { if (o.x + o.width > right) { right = o.x + o.width; top = o.y } })
+  if (placement === "beside") return { x: right, y: top }
+  var edge = right
+  ;(rects || []).forEach(function (o) { if (o.name !== name && !o.disabled && o.x + o.width > edge) edge = o.x + o.width })
+  return { x: edge + VIRTUAL_GAP, y: 0 }
+}
+
 // A display set to mirror cannot be a home: its homes go to the display it
 // mirrors, in the same change.
 function rehomeFrom(homes, from, to) {
@@ -794,6 +842,7 @@ if (typeof module !== "undefined") {
     brightnessName: brightnessName, parseState: parseState, clamp: clamp, round2: round2,
     WORKSPACE_IDS: WORKSPACE_IDS, workspaceLabel: workspaceLabel, planOrder: planOrder, presetPlan: presetPlan, samePlanHomes: samePlanHomes,
     planKind: planKind, planKindLabel: planKindLabel, homesOn: homesOn, effectiveShows: effectiveShows, planMoves: planMoves, planSummary: planSummary,
-    chipsFor: chipsFor, rehomeFrom: rehomeFrom, workspaceChange: workspaceChange, workspaceList: workspaceList, openChipsFor: openChipsFor, planLine: planLine
+    chipsFor: chipsFor, rehomeFrom: rehomeFrom, workspaceChange: workspaceChange, workspaceList: workspaceList, openChipsFor: openChipsFor, planLine: planLine,
+    VIRTUAL_SIZES: VIRTUAL_SIZES, VIRTUAL_GAP: VIRTUAL_GAP, realRects: realRects, touching: touching, virtualPlacement: virtualPlacement, virtualPositionFor: virtualPositionFor
   }
 }

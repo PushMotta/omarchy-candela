@@ -463,7 +463,8 @@ Item {
       if (mode && mode.width > 0) size = Model.logicalSize({ width: mode.width, height: mode.height }, scaleOf(d), transformOf(d))
       out.push({ name: d.name, x: pos.x, y: pos.y, width: size.width, height: size.height,
                  model: String(d.model || "").trim(), mode: modeOf(d).replace("@", " @ ") + " Hz", scale: Model.formatScale(scaleOf(d)),
-                 hdr: colourOf(d) === "hdr", disabled: !enabledOf(d), mirrorOf: mirrorOf(d), focused: d.focused === true })
+                 hdr: colourOf(d) === "hdr", disabled: !enabledOf(d), mirrorOf: mirrorOf(d), focused: d.focused === true,
+                 virtual: d.virtual === true })
     }
     return out
   }
@@ -518,7 +519,7 @@ Item {
   // revert from), that plan.
   function revertOrDiscard() {
     if (hasPending && service) { service.revert(); return }
-    if (!draftDirty && service && service.workspaceUndo) { service.revert(); return }
+    if (!draftDirty && service && service.undoAvailable) { service.revert(); return }
     draft = ({})
     draftGlobal = ({})
     draftPlan = undefined
@@ -526,6 +527,53 @@ Item {
 
   function moveDisplay(name, x, y) {
     setField(name, "position", x + "x" + y)
+  }
+
+  // ---------------------------------------------------------- virtual displays
+  readonly property bool isVirtual: !!display && display.virtual === true
+  readonly property var virtualState: service ? service.virtualState : ({ wayvnc: false, viewer: null, addresses: [], displays: {} })
+  readonly property var virtualInfo: isVirtual ? ((virtualState.displays || {})[display.name] || {}) : ({})
+  readonly property var virtualNetwork: virtualInfo.network || ({})
+  property bool addingVirtual: false
+  property int chooserIndex: 1
+  readonly property var virtualUses: [
+    { use: "extra", title: "Extra screen", caption: "An iPad Pro's 2732×2048 at 2×, beside your rightmost display, for a tablet or laptop over the network." },
+    { use: "stage", title: "Stage", caption: "1920×1080 at 1×, apart from the desk, to share in a call or record at an exact size." },
+    { use: "bench", title: "Test bench", caption: "1366×768 at 1×, apart, to see an app at a size you don't have. Change it freely." } ]
+  property string removeArmedFor: ""
+  Timer { id: removeArm; interval: 4000; onTriggered: root.removeArmedFor = "" }
+
+  function sizeOf(d) { var m = Model.parseMode(modeOf(d)); return m ? m.width + "x" + m.height : "" }
+  function refreshOfVirtual(d) { var m = Model.parseMode(modeOf(d)); return m ? Math.round(m.refresh) : 60 }
+  function setVirtualSize(d, size) { setSizeField(d, "mode", size + "@" + refreshOfVirtual(d)) }
+  function setVirtualRefresh(d, hz) { setSizeField(d, "mode", sizeOf(d) + "@" + hz) }
+  function setPlacement(d, placement) {
+    var p = Model.virtualPositionFor(rects, d.name, placement)
+    moveDisplay(d.name, p.x, p.y)
+  }
+  function addVirtual(use) {
+    addingVirtual = false
+    if (service) service.virtualAdd(use)
+  }
+  // Removing asks twice: it closes viewers someone may be using.
+  function removeVirtual(d) {
+    if (!d || !service) return
+    if (removeArmedFor !== d.name) { removeArmedFor = d.name; removeArm.restart(); return }
+    removeArmedFor = ""
+    service.virtualRemove(d.name)
+  }
+  function virtualViewCaption() {
+    if (!virtualState.wayvnc) return "Needs wayvnc: install the wayvnc package"
+    if (!virtualState.viewer) return "Needs a VNC viewer: install the gtk-vnc or tigervnc package"
+    return "In " + virtualState.viewer + " · a private socket, nothing on the network"
+  }
+
+  Connections {
+    target: root.service
+    function onVirtualFinished(action, ok, output) {
+      // A display just added is the one you want to look at next.
+      if (action === "add" && ok && /^VIRTUAL-[0-9]+$/.test(output)) root.selectedName = output
+    }
   }
 
   // ---------------------------------------------------------- keyboard
@@ -550,6 +598,7 @@ Item {
       ["?", "this sheet"],
       ["⇥  ⇧⇥", "canvas ⇄ workspaces ⇄ inspector ⇄ actions"],
       ["w", "the workspace plan, under the canvas"],
+      ["+", "add a virtual display"],
       ["1–9  [ ]", "select a display"],
       ["a", "apply the draft"],
       ["r", "discard the draft, or revert a pending change"],
@@ -581,7 +630,13 @@ Item {
   ]
 
   readonly property var rows: {
-    var list = ["mode", "refresh", "vrr", "scale", "rotation", "posx", "posy", "mirror", "enabled"]
+    var list = isVirtual
+      ? ["vsize", "vrefresh", "scale", "rotation", "posx", "posy", "vplace", "enabled", "vwindow", "vnetwork"]
+      : ["mode", "refresh", "vrr", "scale", "rotation", "posx", "posy", "mirror", "enabled"]
+    if (isVirtual) {
+      if (virtualNetwork.on) list.push("vaddress", "vsecret", "vlogin")
+      list.push("vremove")
+    }
     if (caps.available) {
       list.push("colour")
       if (display && colourOf(display) === "hdr") list.push("sdrwhite")
@@ -648,6 +703,14 @@ Item {
         if (homes.length) setShow(d, cycle(homes, Model.effectiveShows(plan.homes, plan.shows)[d.name] || homes[0], delta)); break
       }
       case "wssend": break
+      case "vsize": setVirtualSize(d, cycle(Model.VIRTUAL_SIZES.map(function(o) { return o.value }), sizeOf(d), delta)); break
+      case "vrefresh": setVirtualRefresh(d, cycle([30, 60], refreshOfVirtual(d), delta)); break
+      case "vplace": setPlacement(d, Model.virtualPlacement(rects, d.name) === "beside" ? "apart" : "beside"); break
+      case "vaddress": {
+        var addrs = (virtualState.addresses || []).map(function(a) { return a.address })
+        if (addrs.length > 1 && service) service.virtualView(d.name, "network", true, ["--address", cycle(addrs, virtualNetwork.address || addrs[0], delta)])
+        break
+      }
       case "enabled": setField(d.name, "enabled", !enabledOf(d)); break
       case "colour": setColour(d, cycle(Model.offeredModes(d.capabilities, colourIntent(d)), colourOf(d), delta)); break
       case "sdrwhite": {
@@ -701,6 +764,11 @@ Item {
       case "advanced": advancedOpen = !advancedOpen; break
       case "wshomes": toggleHome(d, Model.WORKSPACE_IDS[wsPillIndex]); break
       case "wssend": if (service) service.sendWorkspacesHome(); break
+      case "vwindow": if (service && virtualState.wayvnc && virtualState.viewer) service.virtualView(d.name, "window", !virtualInfo.window); break
+      case "vnetwork": if (service && virtualState.wayvnc) service.virtualView(d.name, "network", !virtualNetwork.on); break
+      case "vsecret": if (service) service.showVirtualSecret(d.name); break
+      case "vlogin": if (service) service.virtualView(d.name, "network", true, ["--at-login", virtualNetwork.atLogin ? "no" : "yes"]); break
+      case "vremove": removeVirtual(d); break
       case "icc": if (colourOf(d) !== "hdr") iccDropdown.toggle(); break   // disabled while the draft is in HDR
       case "posx": posXField.field.forceActiveFocus(); break
       case "posy": posYField.field.forceActiveFocus(); break
@@ -731,6 +799,13 @@ Item {
       if (k === Qt.Key_Escape || k === Qt.Key_Question) helpOpen = false
       return true
     }
+    if (addingVirtual) {
+      if (k === Qt.Key_Escape) addingVirtual = false
+      else if (k === Qt.Key_H || k === Qt.Key_Left) chooserIndex = Math.max(0, chooserIndex - 1)
+      else if (k === Qt.Key_L || k === Qt.Key_Right) chooserIndex = Math.min(virtualUses.length - 1, chooserIndex + 1)
+      else if (k === Qt.Key_Return || k === Qt.Key_Enter || k === Qt.Key_Space) addVirtual(virtualUses[chooserIndex].use)
+      return true
+    }
     var shift = (event.modifiers & Qt.ShiftModifier) !== 0
     var alt = (event.modifiers & Qt.AltModifier) !== 0
     if (k === Qt.Key_Escape) {
@@ -747,6 +822,7 @@ Item {
       return true
     }
     if (k === Qt.Key_W) { focusArea = "workspaces"; return true }
+    if (k === Qt.Key_Plus || k === Qt.Key_Equal) { addingVirtual = true; return true }
     if (k === Qt.Key_Tab || k === Qt.Key_Backtab) {
       var order = ["canvas", "workspaces", "inspector", "actions"]
       var i = order.indexOf(focusArea)
@@ -955,6 +1031,81 @@ Item {
               onChipDropped: function(workspace, name) { root.moveHome(workspace, name) }
             }
 
+            // Add a virtual display: top right of the canvas, or +.
+            Button {
+              anchors.top: canvas.top
+              anchors.right: canvas.right
+              anchors.margins: Style.space(8)
+              z: 5
+              text: "+ Virtual"
+              fontSize: Style.font.caption
+              bordered: true
+              foreground: root.foreground; fontFamily: root.fontFamily
+              tooltipText: "Add a virtual display (+)"
+              onClicked: root.addingVirtual = true
+            }
+
+            Rectangle {
+              id: virtualChooser
+              visible: root.addingVirtual
+              anchors.fill: canvas
+              z: 6
+              color: root.background
+              border.color: Util.alpha(root.foreground, 0.25)
+              border.width: 1
+              radius: Style.cornerRadius
+              MouseArea { anchors.fill: parent }
+              Column {
+                anchors.fill: parent
+                anchors.margins: Style.space(16)
+                spacing: Style.spacing.md
+                Item {
+                  width: parent.width
+                  implicitHeight: chooserTitle.implicitHeight
+                  Text { id: chooserTitle; textFormat: Text.PlainText; text: "Add a virtual display. What is it for?"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.title; font.bold: true; anchors.left: parent.left }
+                  Text { textFormat: Text.PlainText; text: "h/l choose · ↵ add · esc cancel"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; anchors.right: parent.right; anchors.verticalCenter: chooserTitle.verticalCenter }
+                }
+                Row {
+                  width: parent.width
+                  spacing: Style.spacing.md
+                  Repeater {
+                    model: root.virtualUses
+                    CursorSurface {
+                      required property var modelData
+                      required property int index
+                      width: (parent.width - parent.spacing * 2) / 3
+                      height: useColumn.implicitHeight + Style.spacing.md * 2
+                      hasCursor: root.chooserIndex === index
+                      outline: true
+                      foreground: root.foreground
+                      accent: root.accent
+                      Column {
+                        id: useColumn
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                        anchors.margins: Style.spacing.md
+                        spacing: Style.spacing.xs
+                        Text { textFormat: Text.PlainText; text: modelData.title; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall; font.bold: true }
+                        Text { textFormat: Text.PlainText; text: modelData.caption; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width }
+                      }
+                      MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onEntered: root.chooserIndex = index
+                        onClicked: root.addVirtual(modelData.use)
+                      }
+                    }
+                  }
+                }
+                Text {
+                  textFormat: Text.PlainText
+                  text: root.virtualState.wayvnc ? "It is added at once, with no countdown: it cannot blank a real display. r undoes it."
+                    : "It is added at once, with no countdown. Seeing it needs the wayvnc package."
+                  color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width
+                }
+              }
+            }
+
             // ----- panel identity, under the canvas
             //
             // This is what the display *is* rather than what you can do to
@@ -1052,14 +1203,18 @@ Item {
                 spacing: Style.spacing.xs
                 Text {
                   textFormat: Text.PlainText
-                  text: root.display ? root.display.name + " · " + String(root.display.description || root.display.model || "").trim() : "No display"
+                  text: !root.display ? "No display"
+                    : root.isVirtual ? root.display.name + " · " + (root.virtualInfo.label || "Virtual")
+                    : root.display.name + " · " + String(root.display.description || root.display.model || "").trim()
                   color: root.foreground
                   font.family: root.fontFamily; font.pixelSize: Style.font.title; font.bold: true
                   elide: Text.ElideRight; width: parent.width
                 }
                 Text {
                   textFormat: Text.PlainText
-                  text: root.display ? Model.panelLine(root.display) : ""
+                  text: !root.display ? ""
+                    : root.isVirtual ? "Virtual: it exists only in Hyprland and is recreated when the shell starts. No EDID, so SDR only. It opens on its own workspace, \u201C" + (root.virtualInfo.workspace || "") + "\u201D, so 1\u20130 stay yours."
+                    : Model.panelLine(root.display)
                   color: root.dim
                   font.family: root.fontFamily; font.pixelSize: Style.font.caption
                   wrapMode: Text.WordWrap; width: parent.width
@@ -1119,6 +1274,7 @@ Item {
               markers: [
                 { item: signalHeader, name: "signal" },
                 { item: geometryHeader, name: "geometry" },
+                { item: viewHeader, name: "view" },
                 { item: colourHeader, name: "colour" },
                 { item: workspacesHeader, name: "workspaces" },
                 { item: advancedSection, name: "advanced" }
@@ -1142,10 +1298,61 @@ Item {
                 spacing: Style.spacing.xl
 
                 // ----- signal
-                PanelSectionHeader { id: signalHeader; text: "SIGNAL"; foreground: root.foreground; fontFamily: root.fontFamily }
+                PanelSectionHeader { id: signalHeader; text: root.isVirtual ? "SIZE" : "SIGNAL"; foreground: root.foreground; fontFamily: root.fontFamily }
+
+                // A virtual display has no EDID and no modes of its own: any
+                // size Hyprland is given is the size it has.
+                InspectorRow {
+                  rowId: "vsize"
+                  visible: root.isVirtual
+                  Column {
+                    width: parent.width; spacing: Style.spacing.labelGap
+                    RowLabel { text: "Size in pixels" }
+                    Flow {
+                      width: parent.width
+                      spacing: Style.spacing.xs
+                      Repeater {
+                        model: Model.VIRTUAL_SIZES
+                        Button {
+                          required property var modelData
+                          text: modelData.label
+                          fontSize: Style.font.caption
+                          foreground: root.foreground; fontFamily: root.fontFamily
+                          bordered: true
+                          active: root.display !== null && root.sizeOf(root.display) === modelData.value
+                          onClicked: if (root.display) root.setVirtualSize(root.display, modelData.value)
+                          onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vsize" } }
+                        }
+                      }
+                    }
+                    Text {
+                      textFormat: Text.PlainText
+                      text: "Any other size: omarchy-candela apply '{\"displays\":[{\"name\":\"" + (root.display ? root.display.name : "") + "\",\"mode\":\"1600x1200@60\"}]}'"
+                      color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WrapAnywhere; width: parent.width
+                    }
+                  }
+                }
+
+                InspectorRow {
+                  rowId: "vrefresh"
+                  visible: root.isVirtual
+                  Column {
+                    width: parent.width; spacing: Style.spacing.labelGap
+                    RowLabel { text: "Refresh" }
+                    ButtonGroup {
+                      options: [{ value: "30", label: "30 Hz" }, { value: "60", label: "60 Hz" }]
+                      value: root.display ? String(root.refreshOfVirtual(root.display)) : "60"
+                      foreground: root.foreground; background: root.background; accent: root.accent; fontFamily: root.fontFamily
+                      focusable: false
+                      onChanged: function(v) { if (root.display) root.setVirtualRefresh(root.display, Number(v)) }
+                      onHovered: function(i, h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vrefresh" } }
+                    }
+                  }
+                }
 
                 InspectorRow {
                   rowId: "mode"
+                  visible: !root.isVirtual
                   // Two keyboard rows share this surface: the cursor sits on
                   // whichever dropdown the row name says.
                   hasCursor: root.focusArea === "inspector" && (root.currentRow === "mode" || root.currentRow === "refresh")
@@ -1179,6 +1386,7 @@ Item {
 
                 InspectorRow {
                   rowId: "vrr"
+                  visible: !root.isVirtual
                   Column {
                     width: parent.width; spacing: Style.spacing.labelGap
                     RowLabel { text: "Variable refresh" }
@@ -1281,11 +1489,13 @@ Item {
 
                 InspectorRow {
                   rowId: "mirror"
+                  // A mirror cannot be captured, and a virtual display is nobody's picture.
+                  visible: !root.isVirtual
                   Column {
                     width: parent.width; spacing: Style.spacing.labelGap
                     RowLabel { text: "Mirror" }
                     ButtonGroup {
-                      options: [{ value: "", label: "None" }].concat(root.displays.filter(function(o) { return root.display && o.name !== root.display.name }).map(function(o) { return { value: o.name, label: o.name } }))
+                      options: [{ value: "", label: "None" }].concat(root.displays.filter(function(o) { return root.display && o.name !== root.display.name && !o.virtual }).map(function(o) { return { value: o.name, label: o.name } }))
                       value: root.display ? root.mirrorOf(root.display) : ""
                       foreground: root.foreground; background: root.background; accent: root.accent; fontFamily: root.fontFamily
                       focusable: false
@@ -1306,6 +1516,163 @@ Item {
                     hasCursor: root.focusArea === "inspector" && root.currentRow === "enabled"
                     onClicked: if (root.display) root.setField(root.display.name, "enabled", !root.enabledOf(root.display))
                     onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "enabled" } }
+                  }
+                }
+
+                InspectorRow {
+                  rowId: "vplace"
+                  visible: root.isVirtual
+                  Column {
+                    width: parent.width; spacing: Style.spacing.labelGap
+                    RowLabel { text: "Placement" }
+                    ButtonGroup {
+                      options: [{ value: "beside", label: "Beside your displays" }, { value: "apart", label: "Apart" }]
+                      value: root.display ? Model.virtualPlacement(root.rects, root.display.name) : "apart"
+                      foreground: root.foreground; background: root.background; accent: root.accent; fontFamily: root.fontFamily
+                      focusable: false
+                      onChanged: function(v) { if (root.display) root.setPlacement(root.display, v) }
+                      onHovered: function(i, h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vplace" } }
+                    }
+                    Text {
+                      textFormat: Text.PlainText
+                      text: root.display && Model.virtualPlacement(root.rects, root.display.name) === "beside"
+                        ? "Beside: the pointer and windows cross to it like any display."
+                        : "Apart: the pointer cannot wander onto it. Windows get there through the workspace plan or SUPER+SHIFT+number."
+                      color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width
+                    }
+                  }
+                }
+
+                // ----- view: how a virtual display is seen. Each control acts
+                // at once; none of them is part of the draft.
+                PanelSeparator { visible: root.isVirtual; foreground: root.foreground }
+                PanelSectionHeader { id: viewHeader; visible: root.isVirtual; text: "VIEW"; foreground: root.foreground; fontFamily: root.fontFamily }
+
+                InspectorRow {
+                  rowId: "vwindow"
+                  visible: root.isVirtual
+                  Toggle {
+                    width: parent.width
+                    label: "In a window on this desk"
+                    description: root.virtualViewCaption()
+                    checked: root.virtualInfo.window === true
+                    enabled: root.virtualState.wayvnc === true && !!root.virtualState.viewer
+                    opacity: enabled ? 1 : 0.6
+                    foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily
+                    hasCursor: root.focusArea === "inspector" && root.currentRow === "vwindow"
+                    onClicked: if (root.display && root.service && enabled) root.service.virtualView(root.display.name, "window", !root.virtualInfo.window)
+                    onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vwindow" } }
+                  }
+                }
+
+                InspectorRow {
+                  rowId: "vnetwork"
+                  visible: root.isVirtual
+                  Toggle {
+                    width: parent.width
+                    label: "On the network"
+                    description: !root.virtualState.wayvnc ? "Needs wayvnc: install the wayvnc package"
+                      : root.virtualNetwork.on ? "RSA-AES with a username and password. TigerVNC, bVNC on Android and RealVNC connect; macOS Screen Sharing cannot, securely, so it is turned away."
+                      : "Off. For a tablet or another computer on " + (((root.virtualState.addresses || [])[0] || {}).address || "your network") + "."
+                    checked: root.virtualNetwork.on === true
+                    enabled: root.virtualState.wayvnc === true
+                    opacity: enabled ? 1 : 0.6
+                    foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily
+                    hasCursor: root.focusArea === "inspector" && root.currentRow === "vnetwork"
+                    onClicked: if (root.display && root.service && enabled) root.service.virtualView(root.display.name, "network", !root.virtualNetwork.on)
+                    onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vnetwork" } }
+                  }
+                }
+
+                InspectorRow {
+                  rowId: "vaddress"
+                  visible: root.isVirtual && root.virtualNetwork.on === true
+                  Column {
+                    width: parent.width; spacing: Style.spacing.labelGap
+                    RowLabel { text: "Address · port " + (root.virtualNetwork.port || "") }
+                    ButtonGroup {
+                      options: (root.virtualState.addresses || []).map(function(a) { return { value: a.address, label: a.address + " · " + a.interface } })
+                      value: root.virtualNetwork.address || ""
+                      foreground: root.foreground; background: root.background; accent: root.accent; fontFamily: root.fontFamily
+                      focusable: false
+                      onChanged: function(v) { if (root.display && root.service) root.service.virtualView(root.display.name, "network", true, ["--address", v]) }
+                      onHovered: function(i, h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vaddress" } }
+                    }
+                  }
+                }
+
+                InspectorRow {
+                  rowId: "vsecret"
+                  visible: root.isVirtual && root.virtualNetwork.on === true
+                  Item {
+                    width: parent.width
+                    implicitHeight: Math.max(secretText.implicitHeight, secretButton.implicitHeight)
+                    readonly property bool shown: root.service && root.display && root.service.virtualSecretFor === root.display.name && root.service.virtualSecret
+                    Text {
+                      id: secretText
+                      textFormat: Text.PlainText
+                      text: "Username candela · password " + (parent.shown ? root.service.virtualSecret.password : "••••••••••••••••")
+                      color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall
+                      anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Button {
+                      id: secretButton
+                      text: parent.shown ? "Hide" : "Show"
+                      bordered: true
+                      foreground: root.foreground; fontFamily: root.fontFamily
+                      hasCursor: root.focusArea === "inspector" && root.currentRow === "vsecret"
+                      anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                      onClicked: if (root.display && root.service) root.service.showVirtualSecret(root.display.name)
+                      onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vsecret" } }
+                    }
+                  }
+                }
+
+                InspectorRow {
+                  rowId: "vlogin"
+                  visible: root.isVirtual && root.virtualNetwork.on === true
+                  Column {
+                    width: parent.width; spacing: Style.spacing.md
+                    Toggle {
+                      width: parent.width
+                      label: "Offer it again at login"
+                      description: root.virtualNetwork.atLogin ? "It is back on the network every time you log in." : "Off: after a login it is only on this desk until you turn this on."
+                      checked: root.virtualNetwork.atLogin === true
+                      foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily
+                      hasCursor: root.focusArea === "inspector" && root.currentRow === "vlogin"
+                      onClicked: if (root.display && root.service) root.service.virtualView(root.display.name, "network", true, ["--at-login", root.virtualNetwork.atLogin ? "no" : "yes"])
+                      onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vlogin" } }
+                    }
+                    Repeater {
+                      model: root.virtualNetwork.clients || []
+                      Item {
+                        required property var modelData
+                        width: parent.width
+                        implicitHeight: Math.max(clientText.implicitHeight, clientButton.implicitHeight)
+                        Text { id: clientText; textFormat: Text.PlainText; text: (modelData.address || "a client") + " is connected"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.caption; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter }
+                        Button {
+                          id: clientButton
+                          text: "Disconnect"; bordered: true; fontSize: Style.font.caption
+                          foreground: root.foreground; fontFamily: root.fontFamily
+                          anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                          onClicked: if (root.display && root.service) root.service.virtualDisconnect(root.display.name, modelData.id)
+                        }
+                      }
+                    }
+                  }
+                }
+
+                InspectorRow {
+                  rowId: "vremove"
+                  visible: root.isVirtual
+                  Button {
+                    readonly property bool armed: root.display !== null && root.removeArmedFor === root.display.name
+                    text: armed ? "Press again to remove " + root.display.name : "Remove " + (root.display ? root.display.name : "")
+                    bordered: true
+                    foreground: armed ? root.urgent : root.foreground; fontFamily: root.fontFamily
+                    hasCursor: root.focusArea === "inspector" && root.currentRow === "vremove"
+                    onClicked: root.removeVirtual(root.display)
+                    onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vremove" } }
                   }
                 }
 
@@ -1769,7 +2136,7 @@ Item {
               }
               Button {
                 text: root.draftDirty ? "Discard" : "Revert"; bordered: true
-                enabled: root.draftDirty || root.hasPending || (root.service !== null && root.service.workspaceUndo)
+                enabled: root.draftDirty || root.hasPending || (root.service !== null && root.service.undoAvailable)
                 opacity: enabled ? 1 : 0.45
                 foreground: root.foreground; fontFamily: root.fontFamily
                 hasCursor: root.focusArea === "actions" && root.actionIndex === 1

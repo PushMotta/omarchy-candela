@@ -1,0 +1,519 @@
+<title>Candela Virtual Displays</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;700&display=swap">
+<style>
+  /* Layout: the review-01 page, a long single column of boards, each a mockup in the shell's own tokens beside its callouts. */
+  :root {
+    --ground: #EDEEEA;
+    --ground-2: #E4E6E1;
+    --ink: #1E2320;
+    --ink-2: #5F655F;
+    --rule: #D3D6D0;
+    --page-accent: #3D5A4C;
+    --note: #B86A14;
+    --note-ink: #FFFFFF;
+    --frame: #DADDD6;
+    --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --head: "Manrope", "IBM Plex Sans", system-ui, sans-serif;
+    --mono: "JetBrains Mono", "JetBrainsMono Nerd Font", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #161816; --ground-2: #1D201D; --ink: #E6E8E3; --ink-2: #9AA09B;
+      --rule: #2A2E2B; --page-accent: #8FB8A2; --note: #E0913A; --note-ink: #161816; --frame: #242825;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #161816; --ground-2: #1D201D; --ink: #E6E8E3; --ink-2: #9AA09B;
+    --rule: #2A2E2B; --page-accent: #8FB8A2; --note: #E0913A; --note-ink: #161816; --frame: #242825;
+    color-scheme: dark;
+  }
+
+  body { background: var(--ground); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.5; }
+  * { box-sizing: border-box; }
+  .wrap { max-width: 1240px; margin: 0 auto; padding-block: 40px 80px; padding-inline: 28px; }
+  @media (max-width: 600px) { .wrap { padding-inline: 16px; } }
+  h1, h2, h3 { font-family: var(--head); letter-spacing: -0.02em; text-wrap: balance; margin: 0; }
+  h1 { font-size: 44px; font-weight: 800; line-height: 1.05; }
+  h2 { font-size: 24px; font-weight: 700; margin-top: 8px; }
+  h3 { font-size: 16px; font-weight: 700; }
+  p { margin: 0; max-width: 68ch; }
+  .eyebrow { font-family: var(--sans); font-weight: 600; font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-2); }
+  .dek { font-size: 18px; color: var(--ink); max-width: 62ch; margin-top: 14px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 18px; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .meta b { color: var(--ink); font-weight: 600; }
+  section { margin-top: 56px; padding-top: 28px; border-top: 1px solid var(--rule); }
+  section > .eyebrow { margin-bottom: 6px; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 28px; margin-top: 18px; }
+  .cols > div { min-width: 0; }
+  .cols p { font-size: 15px; color: var(--ink); }
+  .cols p + p { margin-top: 8px; }
+  .cols h3 { margin-bottom: 6px; }
+  a { color: var(--page-accent); }
+  code { font-family: var(--mono); font-size: 0.88em; background: var(--ground-2); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+  pre { font-family: var(--mono); font-size: 13px; line-height: 1.55; background: var(--ground-2); border: 1px solid var(--rule); padding: 14px 16px; margin: 14px 0 0; overflow-x: auto; }
+  pre .c { color: var(--ink-2); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14px; margin-top: 16px; }
+  th, td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-weight: 600; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); }
+  td code { font-size: 12px; }
+  td .src { display: block; margin-top: 4px; font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
+  .tablewrap { overflow-x: auto; }
+  .tablewrap table { min-width: 760px; }
+  .tag-new { display: inline-block; font: 600 11px var(--sans); letter-spacing: 0.04em; text-transform: uppercase; color: var(--note); border: 1px solid currentColor; padding: 0 5px; margin-left: 6px; vertical-align: 1px; }
+
+  /* ---------------------------------------------------------- theme switch */
+  .switcher { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin-top: 18px; padding: 12px 14px; background: var(--ground-2); border: 1px solid var(--rule); }
+  .switcher .lbl { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
+  .seg { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--rule); }
+  .seg button { font: 500 13px var(--sans); background: transparent; color: var(--ink); border: 0; border-right: 1px solid var(--rule); padding: 6px 12px; cursor: pointer; }
+  .seg button:last-child { border-right: 0; }
+  .seg button[aria-pressed="true"] { background: var(--page-accent); color: var(--ground); }
+  .seg button:focus-visible { outline: 2px solid var(--note); outline-offset: -2px; }
+  .switcher .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; border: 1px solid var(--rule); }
+
+  /* ------------------------------------------------------------ boards */
+  .board { margin-top: 22px; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 28px; align-items: start; }
+  .board.single { grid-template-columns: minmax(0, 1fr); }
+  @media (max-width: 900px) { .board { grid-template-columns: minmax(0, 1fr); } }
+  .frame { position: relative; background: var(--frame); border: 1px solid var(--rule); padding: 28px; overflow-x: auto; }
+  .frame.desktop { padding: 0; }
+  .callouts { font-size: 14px; }
+  .callouts h3 { margin-bottom: 10px; }
+  .callouts ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  .callouts li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; align-items: start; }
+  .callouts li p { color: var(--ink); }
+  .pin, .callouts .n { width: 22px; height: 22px; border-radius: 50%; background: var(--note); color: var(--note-ink); font: 700 12px/22px var(--sans); text-align: center; }
+  .pin { position: absolute; z-index: 5; box-shadow: 0 0 0 2px var(--frame); }
+  .frame-cap { margin-top: 12px; font-size: 13px; }
+  .states { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 22px; margin-top: 22px; }
+  .states .frame { padding: 22px; }
+
+  /* ====================================================== mock: shell tokens */
+  .mock {
+    --m-bg: #222222; --m-fg: #c2c2b0; --m-accent: #78824b; --m-urgent: #685742; --m-muted: #666666;
+    --m-radius: 0px; --m-pill: 0px;
+    --m-dim: color-mix(in srgb, var(--m-fg) 71%, var(--m-bg));
+    --m-dim2: color-mix(in srgb, var(--m-fg) 62%, var(--m-bg));
+    --m-fill-normal: color-mix(in srgb, var(--m-fg) 4%, transparent);
+    --m-fill-hover: color-mix(in srgb, var(--m-fg) 8%, transparent);
+    --m-fill-selected: color-mix(in srgb, var(--m-fg) 18%, transparent);
+    --m-border-normal: color-mix(in srgb, var(--m-fg) 40%, transparent);
+    --m-border-hover: color-mix(in srgb, var(--m-fg) 25%, transparent);
+    --m-sep: color-mix(in srgb, var(--m-fg) 12%, transparent);
+    font-family: var(--mono); font-size: 12px; line-height: 1.25; color: var(--m-fg);
+  }
+  .mock[data-mtheme="tokyo-night"] { --m-bg: #1a1b26; --m-fg: #a9b1d6; --m-accent: #7aa2f7; --m-urgent: #f7768e; --m-muted: #414868; }
+  .mock[data-mtheme="catppuccin-latte"] { --m-bg: #eff1f5; --m-fg: #4c4f69; --m-accent: #1e66f5; --m-urgent: #d20f39; --m-muted: #acb0be; }
+  .mock[data-mtheme="rose-pine"] { --m-bg: #faf4ed; --m-fg: #575279; --m-accent: #56949f; --m-urgent: #b4637a; --m-muted: #cecacd; }
+  .mock[data-mtheme="vantablack"] { --m-bg: #000000; --m-fg: #ffffff; --m-accent: #8d8d8d; --m-urgent: #a4a4a4; --m-muted: #7a7a7a; }
+  .mock[data-rounded="true"] { --m-radius: 8px; --m-pill: 999px; }
+  .mock * { box-sizing: border-box; }
+  .mock .t-small { font-size: 11px; } .mock .t-title { font-size: 14px; } .mock .t-heading { font-size: 16px; }
+  .mock .dim { color: var(--m-dim); }
+  .mock .bold { font-weight: 700; }
+  .mock .sec { font-size: 10px; font-weight: 700; color: var(--m-dim); text-transform: uppercase; padding-top: 2px; }
+  .mock .sep { height: 1px; background: var(--m-sep); }
+  .mock .row-h { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .mock .val { font-size: 10px; font-weight: 700; color: var(--m-dim); font-variant-numeric: tabular-nums; }
+  .pills { display: grid; gap: 3px; }
+  .pill { font-size: 10px; text-align: center; padding: 6px 4px; border: 1px solid var(--m-border-normal); border-radius: var(--m-radius); background: transparent; }
+  .pill.on { background: var(--m-fill-selected); border-color: transparent; }
+  .pill.hot { background: var(--m-fill-hover); border-color: var(--m-border-hover); }
+  .group { display: flex; gap: 6px; }
+  .group .pill { flex: 1; font-size: 12px; padding: 6px 8px; }
+  .caption { font-size: 10px; color: var(--m-dim2); line-height: 1.45; }
+  .field { display: grid; gap: 5px; }
+  .field .lab { font-size: 10px; font-weight: 700; color: var(--m-dim); }
+  .field .box { height: 28px; display: flex; align-items: center; justify-content: space-between; padding: 0 10px; border: 1px solid var(--m-border-normal); border-radius: var(--m-radius); background: var(--m-fill-normal); font-size: 12px; }
+  .field .box svg { width: 10px; height: 10px; stroke: var(--m-fg); fill: none; stroke-width: 1.6; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .cursor-row { padding: 6px; margin: -6px; border-radius: var(--m-radius); }
+  .cursor-row.hot { background: var(--m-fill-hover); box-shadow: inset 0 0 0 1px var(--m-border-hover); }
+  .lrow { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: center; padding: 8px 6px; border-radius: var(--m-radius); }
+  .lrow svg { width: 16px; height: 16px; stroke: var(--m-fg); fill: none; stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round; }
+
+  /* workspace pills: one per workspace, 1 to 0 as on the keyboard */
+  .wsp { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 3px; }
+  .wsp .pill { font-size: 12px; font-weight: 700; padding: 5px 0 4px; display: grid; gap: 1px; }
+  .wsp .pill small { font-size: 8px; font-weight: 700; color: var(--m-dim2); letter-spacing: 0; }
+  .wsp .pill.else { color: var(--m-dim2); border-style: dashed; }
+  .wsp .pill.off { opacity: .45; }
+
+  /* studio */
+  .studio-scrim { background: color-mix(in srgb, var(--m-bg) 50%, transparent); padding: 34px; min-width: 1000px; }
+  .studio { width: 1100px; max-width: 100%; margin: 0 auto; background: var(--m-bg); border: 2px solid var(--m-accent); border-radius: var(--m-radius); padding: 18px; display: grid; grid-template-rows: auto 1fr auto; gap: 14px; }
+  .studio .head { display: flex; justify-content: space-between; align-items: baseline; }
+  .studio .body { display: grid; grid-template-columns: minmax(0, 58fr) minmax(360px, 42fr); gap: 18px; min-height: 0; }
+  .canvas { position: relative; border: 1px solid var(--m-sep); border-radius: var(--m-radius);
+    background-image: radial-gradient(color-mix(in srgb, var(--m-fg) 16%, transparent) 1px, transparent 1.2px); background-size: 24px 24px; background-position: 12px 12px; height: 330px; }
+  .disp { position: absolute; border: 1px solid var(--m-border-normal); background: color-mix(in srgb, var(--m-fg) 6%, var(--m-bg)); border-radius: var(--m-radius); padding: 10px 12px; display: flex; flex-direction: column; justify-content: space-between; }
+  .disp.sel { border: 2px solid var(--m-accent); background: color-mix(in srgb, var(--m-fg) 10%, var(--m-bg)); }
+  .disp .name { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .disp .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--m-accent); }
+  .disp .sub { font-size: 10px; color: var(--m-dim); margin-top: 4px; }
+  .disp .badge { font-size: 10px; font-weight: 700; border: 1px solid var(--m-border-normal); padding: 1px 5px; border-radius: var(--m-radius); }
+  .canvas-cap { position: absolute; left: 12px; right: 12px; bottom: 10px; font-size: 10px; color: var(--m-dim); font-variant-numeric: tabular-nums; line-height: 1.5; }
+  .canvas-cap b { color: var(--m-fg); }
+
+  /* chips: the plan drawn on each block */
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip { position: relative; width: 22px; height: 22px; display: grid; place-items: center; font-size: 11px; font-weight: 700; border: 1px solid var(--m-border-normal); border-radius: var(--m-radius); color: var(--m-dim2); }
+  .chip.used { color: var(--m-fg); background: var(--m-fill-selected); border-color: transparent; }
+  .chip.shown::after { content: ""; position: absolute; left: 3px; right: 3px; bottom: -4px; height: 2px; background: var(--m-accent); border-radius: 1px; }
+  .chip.away { border-style: dashed; color: var(--m-fg); }
+  .chip.away::before { content: "↗"; position: absolute; top: -9px; right: -7px; font-size: 9px; color: var(--m-fg); }
+  .chip.ghost { border-style: dotted; opacity: .7; }
+
+  .inspector { display: grid; gap: 12px; align-content: start; min-width: 0; position: relative; }
+  .fold { font-size: 10px; color: var(--m-dim); display: flex; align-items: center; gap: 8px; }
+  .fold::before { content: ""; height: 1px; flex: 0 0 18px; background: var(--m-sep); }
+  .ws-sec { display: grid; gap: 12px; padding: 10px; margin: -10px; border: 1px dashed color-mix(in srgb, var(--m-accent) 70%, transparent); border-radius: var(--m-radius); }
+
+  .actions { display: flex; justify-content: space-between; align-items: center; gap: 18px; border-top: 1px solid var(--m-sep); padding-top: 12px; }
+  .actions .hint { font-size: 10px; color: var(--m-dim); line-height: 1.5; }
+  .actions .hint b { color: var(--m-fg); }
+  .btns { display: flex; gap: 8px; flex: none; }
+  .btn { font-size: 12px; padding: 6px 12px; border: 1px solid var(--m-border-normal); border-radius: var(--m-radius); }
+  .btn.primary { background: var(--m-fill-selected); border-color: transparent; font-weight: 700; }
+
+  /* preset diagrams */
+  .preset { display: grid; gap: 10px; }
+  .preset .desk { display: flex; gap: 6px; align-items: flex-start; }
+  .preset .scr { flex: 1; border: 1px solid var(--m-border-normal); border-radius: var(--m-radius); padding: 8px; display: grid; gap: 8px; background: color-mix(in srgb, var(--m-fg) 5%, var(--m-bg)); min-height: 70px; align-content: space-between; }
+  .preset .scr .nm { font-size: 10px; font-weight: 700; color: var(--m-dim); }
+  .legend { display: grid; gap: 10px; }
+  .legend .it { display: grid; grid-template-columns: 30px 1fr; gap: 10px; align-items: center; }
+
+  .decisions ol { margin: 14px 0 0; padding-left: 22px; display: grid; gap: 14px; max-width: 76ch; }
+  .decisions li strong { font-weight: 600; }
+  .decisions .rec { display: block; margin-top: 3px; font-size: 14px; color: var(--ink-2); }
+  .decisions .rec b { color: var(--page-accent); font-weight: 600; }
+  .small { font-size: 13px; color: var(--ink-2); }
+  .facts-note { margin-top: 12px; font-size: 13px; color: var(--ink-2); max-width: 80ch; }
+  @media (prefers-reduced-motion: no-preference) { .seg button { transition: background-color .12s; } }
+
+  .disp.virt { border-style: dashed; }
+  .disp.virt.sel { border-style: dashed; }
+  .sw { position: relative; width: 42px; height: 22px; flex: none; border-radius: var(--m-pill); background: var(--m-fill-normal); border: 1px solid var(--m-border-normal); }
+  .sw i { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: var(--m-pill); background: color-mix(in srgb, var(--m-fg) 70%, var(--m-bg)); }
+  .sw.on { background: var(--m-fill-selected); border-color: transparent; }
+  .sw.on i { left: 22px; background: var(--m-fg); }
+  .mock .row-h > div { min-width: 0; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Design review 03 · 5 October 2026 · for Candela 1.3</div>
+    <h1 style="margin-top:10px">Virtual displays</h1>
+    <p class="dek">Add a display that exists only in Hyprland. You can use it as an extra screen on a tablet, a fixed-size stage to share or record, or a test bench at a resolution you don't own. Candela arranges it like any other display and recreates it at login. You see it through wayvnc, either in a window on your desk or from another device.</p>
+    <div class="meta">
+      <span><b>Target</b> Omarchy 4.0.4 · Hyprland 0.56.2 · wayvnc 0.10.2 (Arch extra, not installed here)</span>
+      <span><b>Ships</b> in 1.3, after 1.2</span>
+      <span><b>Behaviour</b> read in the Hyprland, wayvnc, neatvnc and portal sources; nothing tried on this desk yet</span>
+      <span><b>Status</b> awaiting your decisions</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="eyebrow">Scope</div>
+    <div class="cols">
+      <div>
+        <h3>What it does</h3>
+        <p>It creates, sizes, places and removes virtual displays, and recreates them at login. It shows a virtual display in a window on this desk, or offers it to another device over VNC behind a password. A virtual display is a full part of the arrangement: it appears on the canvas, takes the workspace plan, uses the safe apply and appears in <code>doctor</code>.</p>
+      </div>
+      <div>
+        <h3>What it leaves alone</h3>
+        <p>It never installs packages: when wayvnc or a viewer is missing, Candela says what to install. There's no RDP, Sunshine or web viewer, and no "switch all screens together" desktops, which existing plugins already cover. It doesn't take over your own <code>~/.config/wayvnc/config</code>. A virtual display has no EDID, so it is SDR only.</p>
+      </div>
+      <div>
+        <h3>Why Candela, given that a virtual-display plugin exists</h3>
+        <p>The existing one bolts a screen to one side. Candela can make the virtual display a real member of the layout: snapped and placed like any display, homes in the workspace plan, never the place where another display's workspaces are parked, and stopped safely before it is removed. The last point matters: wayvnc would otherwise go on serving a real display (see below).</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">What Hyprland, Omarchy and wayvnc do</div>
+    <h2>Facts the design rests on</h2>
+    <p class="small" style="margin-top:8px">Read in the sources of Hyprland v0.56.2, wayvnc 0.10.1/0.10.2, neatvnc 1.0.2 and xdg-desktop-portal-hyprland 1.4.1, and in Omarchy's files on this machine. Nothing below has been tried on this desk; the test plan does that.</p>
+    <div class="tablewrap"><table>
+      <tr><th style="width:26%">Question</th><th>Answer</th></tr>
+      <tr><td>Creating and removing one</td><td><code>hyprctl output create headless VIRTUAL-1</code>; the name is ours and a taken name is refused. <code>output remove</code> only works on outputs created this way, so it cannot remove DP-1 or DP-2.<span class="src">src/debug/HyprCtl.cpp:1770-1810</span></td></tr>
+      <tr><td>Size and refresh</td><td>Monitor rules apply to it like any display, at any resolution. VRR is skipped. With no EDID, Candela offers SDR only.<span class="src">src/output/Monitor.cpp:259 · src/config/shared/monitor/MonitorRuleManager.cpp:211</span></td></tr>
+      <tr><td>After a restart</td><td>It is gone when Hyprland restarts, so Candela recreates it when the shell starts. <i>Inferred: these outputs live in the running backend only.</i></td></tr>
+      <tr><td>What is on it</td><td>Omarchy draws its bar, wallpaper and lock screen on every output, so a viewer sees a normal Omarchy screen, and sees the lock screen when you lock.<span class="src">shell/plugins/bar/Bar.qml:1197 · shell/plugins/lock/Service.qml</span></td></tr>
+      <tr><td>Its first workspace</td><td>A new display takes the lowest free number, so 3 on this desk. Then SUPER+3 would jump to a screen you may not be looking at. A rule can give it a named workspace instead; named workspaces have ids below −1337, so they never take 1–10.<span class="src">src/output/Monitor.cpp:1276-1330 · src/state/WorkspaceQueryCore.cpp:83</span></td></tr>
+      <tr><td>Reaching it with the pointer</td><td>A pointer outside every display snaps to the nearest one. A virtual display flush against DP-2 can be reached like any neighbour; one placed with a gap cannot.<span class="src">src/pointer/PointerManager.cpp:723-770</span></td></tr>
+      <tr><td>When a real display is unplugged</td><td>Its workspaces go to the first other display in connect order. After a dock is replugged, that can be the virtual one, which hides them.<span class="src">src/output/Monitor.cpp:421-427</span></td></tr>
+      <tr><td>wayvnc and outputs</td><td>One output per process (<code>-o</code>). By default it listens on 127.0.0.1:5900 only. <b>If its output is removed it switches to the previous one, a real display, and keeps serving it</b>, so Candela stops it first.<span class="src">wayvnc src/main.c:68-69, 250-278, 1076-1081</span></td></tr>
+      <tr><td>Input from a viewer</td><td>wayvnc's pointer is bound to the display it serves, and Hyprland maps it there even when another display has focus. The keyboard is shared, so Super shortcuts typed on a tablet act on the whole desktop.<span class="src">Hyprland src/devices/VirtualPointer.cpp:43 · src/pointer/PointerManager.cpp:905-920 · src/managers/input/InputManager.cpp:1623-1638</span></td></tr>
+      <tr><td>Passwords and encryption</td><td>With authentication off, anyone who can reach the port is let in. With it on, RSA-AES with a username and password needs no certificate, only a key file Candela can keep so the fingerprint doesn't change.<span class="src">neatvnc src/server.c:302-325 · wayvnc src/main.c:1566-1588</span></td></tr>
+      <tr><td>Which viewers can connect securely</td><td>RSA-AES: TigerVNC, bVNC (Android), RealVNC (Windows confirmed; iOS and Android unknown). macOS Screen Sharing only unencrypted. Remmina, wlvncc and gvncviewer: no RSA-AES, TLS with our certificate only.<span class="src">tigervnc SecurityClient.cxx:58-117 · bVNC RfbProto.java:67-70 · wayvnc #445 · README.md:174-188</span></td></tr>
+      <tr><td>Arch's neatvnc</td><td>1.0.2-1 lacks two upstream fixes: Apple DH aborts, and a WebSocket connection crashes it before authentication. Candela never enables either.<span class="src">neatvnc issue #170</span></td></tr>
+      <tr><td>NVIDIA</td><td>Don't use <code>--gpu</code>: the 3090 has no VAAPI encoder and there are open crash reports. Plain capture worked on Hyprland 0.56.2 with NVIDIA 610 in one report.<span class="src">wayvnc #258, #360, #452</span></td></tr>
+      <tr><td>Screen sharing in calls</td><td>Both the stock portal picker and the one you use list every output, virtual ones included. <i>From source only.</i><span class="src">xdg-desktop-portal-hyprland PortalManager.cpp:113-116, main.cpp:116-130</span></td></tr>
+      <tr><td>Seeing it on this desk</td><td><code>gvncviewer</code> (from gtk-vnc) is already installed here and can open a VNC Unix socket.<span class="src">gtk-vnc gvncviewer.c:878</span></td></tr>
+    </table></div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Mockups</div>
+    <h2>A dashed block on the canvas, and a View section in the inspector</h2>
+    <p class="small" style="margin-top:8px">This desk, with a 1920×1080 stage added away from DP-2. Switch the theme to check nothing is hard-coded.</p>
+    <div class="switcher" role="group" aria-label="Preview theme">
+      <span class="lbl">Preview theme</span>
+      <div class="seg" id="themeSeg">
+        <button type="button" data-t="miasma" aria-pressed="true"><span class="swatch" style="background:#78824b"></span>miasma</button>
+        <button type="button" data-t="tokyo-night" aria-pressed="false"><span class="swatch" style="background:#7aa2f7"></span>tokyo-night</button>
+        <button type="button" data-t="catppuccin-latte" aria-pressed="false"><span class="swatch" style="background:#1e66f5"></span>catppuccin-latte</button>
+        <button type="button" data-t="rose-pine" aria-pressed="false"><span class="swatch" style="background:#56949f"></span>rose-pine</button>
+        <button type="button" data-t="vantablack" aria-pressed="false"><span class="swatch" style="background:#8d8d8d"></span>vantablack</button>
+      </div>
+      <span class="lbl">Corners</span>
+      <div class="seg" id="roundSeg">
+        <button type="button" data-r="false" aria-pressed="true">square</button>
+        <button type="button" data-r="true" aria-pressed="false">rounded</button>
+      </div>
+    </div>
+
+    <h3 style="margin-top:34px">A · Studio, VIRTUAL-1 selected</h3>
+    <div class="board single">
+      <div class="frame desktop mock" data-mtheme="miasma" data-rounded="false">
+        <div class="studio-scrim">
+          <div class="studio">
+            <div class="head">
+              <div class="t-heading bold">Candela</div>
+              <div class="caption">3 displays · 1 virtual · layout unchanged</div>
+            </div>
+            <div class="body">
+              <div>
+                <div class="canvas" style="height:250px">
+                  <span class="pin" style="top:10px;left:10px">1</span>
+                  <div class="disp" style="left:24px;top:64px;width:190px;height:127px;padding:8px 10px">
+                    <div class="name" style="font-size:12px"><span class="dot"></span>DP-1</div>
+                    <div class="chips"><span class="chip used shown">1</span><span class="chip">3</span><span class="chip">5</span></div>
+                  </div>
+                  <div class="disp" style="left:214px;top:64px;width:190px;height:127px;padding:8px 10px">
+                    <div class="name" style="font-size:12px">DP-2</div>
+                    <div class="chips"><span class="chip used shown">2</span><span class="chip">4</span><span class="chip">6</span></div>
+                  </div>
+                  <div class="disp sel virt" style="left:436px;top:64px;width:152px;height:86px;padding:8px 10px">
+                    <div class="name" style="font-size:12px">VIRTUAL-1 <span class="badge">VIRTUAL</span></div>
+                    <div class="chips"><span class="chip shown" style="width:auto;padding:0 5px">stage</span></div>
+                  </div>
+                  <div class="canvas-cap">DP-1 at 0, 0 · DP-2 at 2400, 0 · VIRTUAL-1 at 5200, 0, apart · logical px</div>
+                </div>
+                <div style="margin-top:14px">
+                  <div class="t-title bold">VIRTUAL-1 · Stage</div>
+                  <div class="caption" style="margin-top:3px">Exists only in Hyprland. No EDID, so SDR only. Recreated when the shell starts. Its own workspace, "stage", is outside 1–0.</div>
+                </div>
+              </div>
+
+              <div class="inspector">
+                <span class="sec">Size</span>
+                <div class="group" style="flex-wrap:wrap"><span class="pill on">1920×1080</span><span class="pill">2560×1440</span><span class="pill">3840×2160</span><span class="pill">iPad 2732×2048</span><span class="pill">Custom</span></div>
+                <div class="two">
+                  <div class="field"><span class="lab">Refresh</span><div class="group"><span class="pill">30 Hz</span><span class="pill on">60 Hz</span></div></div>
+                  <div class="field"><span class="lab">Scale</span><div class="group"><span class="pill on">1×</span><span class="pill">1.5×</span><span class="pill">2×</span></div></div>
+                </div>
+                <div class="field" style="position:relative">
+                  <span class="pin" style="top:-4px;left:-34px">2</span>
+                  <span class="lab">Placement</span>
+                  <div class="group"><span class="pill">Beside DP-2</span><span class="pill on">Apart</span></div>
+                  <div class="caption">Apart: the pointer can't wander onto it. Move windows there with the workspace plan or SUPER+SHIFT+number.</div>
+                </div>
+
+                <div class="sep"></div>
+                <div class="ws-sec" style="position:relative">
+                  <span class="pin" style="top:-11px;left:-34px">3</span>
+                  <span class="sec">View</span>
+                  <div class="row-h cursor-row hot"><div><div class="t-small bold">In a window on this desk</div><div class="caption">gvncviewer · private socket, nothing on the network</div></div><span class="sw on"><i></i></span></div>
+                  <div class="row-h"><div><div class="t-small bold">On the network</div><div class="caption">Off. For a tablet or another computer.</div></div><span class="sw"><i></i></span></div>
+                </div>
+
+                <div class="sep"></div>
+                <div class="lrow"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg><span>Remove VIRTUAL-1 · stops its viewers first</span><span class="dim">›</span></div>
+              </div>
+            </div>
+
+            <div class="actions" style="position:relative">
+              <span class="pin" style="top:10px;left:-34px">4</span>
+              <span class="hint"><b>Changes to a virtual display apply at once: none of them can blank a real screen.</b><br>+ add a virtual display · j/k move · h/l adjust · ⇥ canvas ⇄ workspaces ⇄ inspector · ? keys · esc close</span>
+              <div class="btns"><span class="btn">+ Virtual</span><span class="btn">Identify</span><span class="btn">Revert</span><span class="btn primary">Apply</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="callouts" style="margin-top:18px">
+      <ol style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+        <li><span class="n">1</span><p><b>A dashed block with a VIRTUAL badge.</b> It snaps and moves like any display. Apart, it sits beyond a gap that the pointer can't cross. Its chip is its own named workspace, so 1–0 stay yours.</p></li>
+        <li><span class="n">2</span><p><b>Placement is per display.</b> Beside is for an extra screen you drag windows onto. Apart is for a stage or a test bench that windows reach on purpose.</p></li>
+        <li><span class="n">3</span><p><b>View says how you see it.</b> In a window: a private wayvnc on a socket under your runtime directory, opened in a viewer on this desk, with working input. On the network: the card in board C.</p></li>
+        <li><span class="n">4</span><p><b>No countdown.</b> Adding, resizing or removing a virtual display can't blank DP-1 or DP-2, so it applies at once, the way the workspace plan does; Revert undoes it once.</p></li>
+      </ol>
+    </div>
+
+    <h3 style="margin-top:44px">B · Adding one: start from what it's for</h3>
+    <p class="small" style="margin-top:4px">The <i>+ Virtual</i> button asks one question and fills in a sensible start. Everything stays editable afterwards.</p>
+    <div class="states">
+      <div class="frame mock" data-mtheme="miasma" data-rounded="false">
+        <div class="preset">
+          <div class="row-h"><span class="t-title bold">Extra screen</span><span class="val">tablet or laptop</span></div>
+          <div class="caption">2732×2048 at 2× (an iPad Pro 12.9″), beside DP-2, on the network. Drag windows across as you would to DP-2.</div>
+        </div>
+      </div>
+      <div class="frame mock" data-mtheme="miasma" data-rounded="false">
+        <div class="preset">
+          <div class="row-h"><span class="t-title bold">Stage</span><span class="val">share or record</span></div>
+          <div class="caption">1920×1080 at 1×, apart, in a window here. Pick VIRTUAL-1 in the call's screen picker, and watch it in the window.</div>
+        </div>
+      </div>
+      <div class="frame mock" data-mtheme="miasma" data-rounded="false">
+        <div class="preset">
+          <div class="row-h"><span class="t-title bold">Test bench</span><span class="val">another resolution</span></div>
+          <div class="caption">1366×768 at 1× to start, apart, in a window here. Change the size and scale and see the app reflow live.</div>
+        </div>
+      </div>
+    </div>
+
+    <h3 style="margin-top:44px">C · Small states</h3>
+    <div class="states">
+      <div class="frame mock" data-mtheme="miasma" data-rounded="false">
+        <div class="field">
+          <div class="row-h"><span class="t-small bold">On the network</span><span class="sw on"><i></i></span></div>
+          <div class="box"><span>192.168.1.89:5901</span><span class="dim">enp5s0</span></div>
+          <div class="two">
+            <div class="box"><span>candela</span></div>
+            <div class="box"><span>••••••••••</span><span class="dim">show</span></div>
+          </div>
+          <div class="caption">RSA-AES with this username and password. Connects from TigerVNC, bVNC on Android and RealVNC. macOS Screen Sharing can only connect unencrypted, so it is refused.</div>
+          <div class="lrow" style="padding:6px 0"><span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--m-accent)"></span><span>192.168.1.40 · connected 2 min</span><span class="dim">disconnect</span></div>
+        </div>
+        <div class="frame-cap" style="color:var(--m-dim)">Network sharing on, one client</div>
+      </div>
+      <div class="frame mock" data-mtheme="miasma" data-rounded="false">
+        <div class="field">
+          <div class="row-h"><span class="t-small bold">In a window on this desk</span><span class="sw" style="opacity:.45"><i></i></span></div>
+          <div class="caption">Needs wayvnc, which isn't installed.</div>
+          <div class="box"><span>Install the wayvnc package</span></div>
+          <div class="caption">Candela never installs packages. The virtual display works without wayvnc; only seeing it from here or from another device needs it.</div>
+        </div>
+        <div class="frame-cap" style="color:var(--m-dim)">wayvnc missing</div>
+      </div>
+      <div class="frame mock" data-mtheme="miasma" data-rounded="false">
+        <div class="preset">
+          <div class="desk">
+            <div class="scr" style="border-style:dashed;opacity:.6"><span class="nm">DP-2 · unplugged</span><div class="chips"></div></div>
+            <div class="scr"><span class="nm">DP-1</span><div class="chips"><span class="chip used shown">1</span><span class="chip used">2</span></div></div>
+            <div class="scr" style="border-style:dashed"><span class="nm">VIRTUAL-1</span><div class="chips"><span class="chip shown" style="width:auto;padding:0 5px">stage</span></div></div>
+          </div>
+          <div class="caption">Hyprland put DP-2's workspace 2 on VIRTUAL-1, where nobody could see it. Candela moved it to DP-1 straight away.</div>
+        </div>
+        <div class="frame-cap" style="color:var(--m-dim)">The parking guard</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">How it works</div>
+    <h2>Outputs Candela owns, and wayvnc processes it supervises</h2>
+    <div class="cols">
+      <div>
+        <h3>Intent and lifecycle</h3>
+        <p><code>intent.virtual</code> lists each virtual display with its use, placement and how it is viewed. Its size, scale and position live with the other displays' fields. The service recreates any that are missing when the shell starts. Then the usual layout file gives each one its rule, and a <code>hl.workspace_rule</code> gives it its own named workspace as its default.</p>
+      </div>
+      <div>
+        <h3>Viewing</h3>
+        <p>Each virtual display gets up to two wayvnc processes, run as user units like the revert timer. <b>Local</b> serves a Unix socket in <code>$XDG_RUNTIME_DIR</code> (mode 0700) with authentication off, and Candela opens it in the first viewer it finds: wlvncc, gvncviewer, Remmina or TigerVNC. <b>Network</b> listens on one LAN address you pick, with RSA-AES, a generated password and a key file kept 0600 in Candela's state directory. Both run without <code>--gpu</code>, at 30 fps.</p>
+      </div>
+      <div>
+        <h3>Removal and the guard</h3>
+        <p>Removing a virtual display stops its viewers (<code>wayvnc-exit</code>), and only then calls <code>hyprctl output remove</code>. When a real display goes, the service moves any workspace Hyprland parked on a virtual display, and that doesn't live there, to the first real display. <code>doctor</code> lists virtual displays, their viewers and what listens on the network.</p>
+      </div>
+    </div>
+<pre><span class="c"># CLI, everything the studio does</span>
+omarchy-candela virtual add stage [--size 1920x1080] [--scale 1] [--apart|--beside DP-2]
+omarchy-candela virtual remove VIRTUAL-1
+omarchy-candela virtual view VIRTUAL-1 window|network|off
+omarchy-candela virtual restore           <span class="c"># what the service runs at start</span></pre>
+  </section>
+
+  <section>
+    <div class="eyebrow">Security</div>
+    <div class="cols">
+      <div><h3>Nothing on the network by default</h3><p>The local viewer uses a socket only your user can open. Network sharing is off until you turn it on, and is not restored at login unless you ask (decision 7).</p></div>
+      <div><h3>Never without a password</h3><p>Candela refuses to listen beyond this machine with authentication off. It never enables <code>relax_encryption</code> (unencrypted Apple and DES login, which also aborts on Arch's neatvnc) or WebSocket (which crashes it before login).</p></div>
+      <div><h3>What a viewer can do</h3><p>It shares your keyboard focus, so Super shortcuts from a tablet act on the whole desktop. Locking the session shows the lock screen on the virtual display too. The client list and Disconnect are in the inspector.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="eyebrow">Test plan</div>
+    <div class="cols">
+      <div><h3>Suite</h3><p>The test compositor gains <code>output create</code> and <code>remove</code>, and stub wayvnc and wayvncctl. Tests cover: recreate at start, the named workspace, the order of removal (viewers before output), the parking guard, never listening beyond localhost without authentication, and the key file kept between restarts.</p></div>
+      <div><h3>On this desk, warned, step by step</h3><p>Create VIRTUAL-1 apart at 1920×1080; check the bar, the wallpaper and its named workspace with <code>grim -o VIRTUAL-1</code> (grim can capture it); check that your workspaces 1–0 didn't move; remove it. Then, once you have installed wayvnc: the window viewer, the call picker (your hands), and a tablet over the LAN (your hands).</p></div>
+      <div><h3>Unknown until tried</h3><p>RealVNC on iPad and Android with RSA-AES. Whether a viewer window can stand in for a stage you watch while sharing. CPU cost: Hyprland reports full-frame damage, so neatvnc diffs every frame.</p></div>
+    </div>
+  </section>
+
+  <section class="decisions">
+    <div class="eyebrow">Decisions needed</div>
+    <h2>Ten calls before code</h2>
+    <ol>
+      <li><strong>Names.</strong> <code>VIRTUAL-1</code>, <code>VIRTUAL-2</code>… in the canvas, the call picker and the rules, with your label ("Stage") beside it. The alternative is names you type.
+        <span class="rec"><b>Recommend: VIRTUAL-n plus a label.</b> Rules and pickers need a stable, plain name.</span></li>
+      <li><strong>Recreated at login.</strong> The service recreates kept virtual displays when the shell starts.
+        <span class="rec"><b>Recommend: yes.</b></span></li>
+      <li><strong>Placement per display, Beside or Apart</strong>, with the use choosing the default: Extra screen beside, Stage and Test bench apart.
+        <span class="rec"><b>Recommend: yes.</b></span></li>
+      <li><strong>No countdown</strong> for changes that only touch virtual displays. Revert undoes the last one.
+        <span class="rec"><b>Recommend: yes.</b> They can't blank a real screen.</span></li>
+      <li><strong>Its own named workspace</strong>, so a virtual display never takes 1–0, and so SUPER+number never jumps to a screen you may not be looking at. It can still be a home in the plan.
+        <span class="rec"><b>Recommend: yes.</b></span></li>
+      <li><strong>The parking guard</strong>: a workspace Hyprland parks on a virtual display, which doesn't live there, is moved to a real display at once.
+        <span class="rec"><b>Recommend: yes.</b></span></li>
+      <li><strong>Network sharing</strong>: Candela runs its own wayvnc with RSA-AES, a generated password and a kept key, on one LAN address you pick, off at each login unless you choose otherwise. Alternatives: use your own wayvnc config, or no network sharing in Candela at all.
+        <span class="rec"><b>Recommend: Candela's own, off at login.</b> Your use 1 needs it, and a safe default is the point.</span></li>
+      <li><strong>macOS Screen Sharing is refused</strong>, with the reason shown, because it can only connect unencrypted.
+        <span class="rec"><b>Recommend: yes.</b> TigerVNC on the Mac works.</span></li>
+      <li><strong>The local viewer</strong>: the first one found among wlvncc, gvncviewer (installed here), Remmina and TigerVNC, over a private socket.
+        <span class="rec"><b>Recommend: yes.</b></span></li>
+      <li><strong>Release</strong>: 1.3, after 1.2 is out, with the desk probe as the first step.
+        <span class="rec"><b>Recommend: yes.</b></span></li>
+    </ol>
+  </section>
+
+  <p class="small" style="margin-top:48px">Once these are decided, the approved version goes into <code>DESIGN.md</code> as §12.</p>
+</div>
+
+
+<script>
+  (function () {
+    var mocks = document.querySelectorAll('.mock');
+    function setAll(attr, value, seg) {
+      mocks.forEach(function (m) { m.setAttribute(attr, value); });
+      seg.querySelectorAll('button').forEach(function (b) {
+        var key = attr === 'data-mtheme' ? b.dataset.t : b.dataset.r;
+        b.setAttribute('aria-pressed', key === value ? 'true' : 'false');
+      });
+      try { localStorage.setItem('virtual-review-' + attr, value); } catch (e) {}
+    }
+    var themeSeg = document.getElementById('themeSeg');
+    var roundSeg = document.getElementById('roundSeg');
+    themeSeg.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b) return; setAll('data-mtheme', b.dataset.t, themeSeg);
+    });
+    roundSeg.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b) return; setAll('data-rounded', b.dataset.r, roundSeg);
+    });
+    try {
+      var t = localStorage.getItem('virtual-review-data-mtheme');
+      var r = localStorage.getItem('virtual-review-data-rounded');
+      if (t && themeSeg.querySelector('[data-t="' + t + '"]')) setAll('data-mtheme', t, themeSeg);
+      if (r === 'true' || r === 'false') setAll('data-rounded', r, roundSeg);
+    } catch (e) {}
+  })();
+</script>

@@ -478,11 +478,11 @@ assert_eq "$(jq -r '.[] | select(.id == 2) | .monitor' "$sandbox2/workspaces.jso
 assert_eq "$(jq -r '.[] | select(.id == 1) | .monitor' "$sandbox2/workspaces.json")" "DP-1" "workspace 1 was already home"
 assert_eq "$(grep -c 'workspace.move' "$sandbox2/hyprctl.log")" "1" "only the workspace that was away is moved"
 assert_eq "$(jq -r '.[] | select(.workspaceString == "7") | .monitor' "$sandbox2/wsrules.json")" "DP-2" "the reload loaded the rules"
-[[ -s $sandbox2/state/workspaces-undo.json ]] || fail "the change can be undone"
+[[ -s $sandbox2/state/undo.json ]] || fail "the change can be undone"
 state="$(run_cli "$sandbox2" state)"
 assert_eq "$(jq -r '.workspaces.kept.homes["6"]' <<<"$state")" "DP-2" "state carries the kept plan"
 assert_eq "$(jq -r '.workspaces.open | length' <<<"$state")" "2" "state carries the open workspaces"
-assert_eq "$(jq -r '.workspaces.undo | type' <<<"$state")" "object" "state says an undo is available"
+assert_eq "$(jq -r '.undo | type' <<<"$state")" "object" "state says an undo is available"
 pass "a workspace plan is kept at once and sends open workspaces home"
 
 # ---- revert undoes the plan and puts workspaces back
@@ -491,7 +491,7 @@ assert_eq "$out" "reverted" "revert undoes the workspace change"
 assert_eq "$(jq -r '.workspaces // "off"' "$sandbox2/state/intent.json")" "off" "the plan is off again"
 assert_not_contains "$(cat "$sandbox2/state/candela-layout.lua")" "workspace_rule" "no rules are left"
 assert_eq "$(jq -r '.[] | select(.id == 2) | .monitor' "$sandbox2/workspaces.json")" "DP-2" "workspace 2 is back where it was"
-[[ ! -e $sandbox2/state/workspaces-undo.json ]] || fail "the undo is used once"
+[[ ! -e $sandbox2/state/undo.json ]] || fail "the undo is used once"
 assert_eq "$(run_cli "$sandbox2" revert)" "reverted" "a second revert has nothing to undo"
 assert_eq "$(jq -r '.workspaces // "off"' "$sandbox2/state/intent.json")" "off" "and changes nothing"
 pass "revert undoes a workspace plan"
@@ -540,7 +540,7 @@ assert_eq "$(jq -r '.workspacesBefore | map(select(.id == 2))[0].monitor' "$sand
 run_cli "$sandbox2" revert >/dev/null
 assert_eq "$(jq -r '.[] | select(.id == 2) | .monitor' "$sandbox2/workspaces.json")" "DP-2" "revert puts workspace 2 back"
 assert_eq "$(jq length "$sandbox2/wsrules.json")" "0" "and the reload drops the preview's rules"
-[[ ! -e $sandbox2/state/workspaces-undo.json ]] || fail "a timed change leaves no undo"
+[[ ! -e $sandbox2/state/undo.json ]] || fail "a timed change leaves no undo"
 pass "a mixed change is timed, and revert puts the workspaces back"
 
 # ---- a move the compositor ignores undoes the change
@@ -577,3 +577,113 @@ assert_eq "$(run_cli "$sandbox2" apply '{"workspaces":null}')" "kept" "off is ke
 assert_not_contains "$(cat "$sandbox2/state/candela-layout.lua")" "workspace_rule" "off writes no rules"
 assert_not_contains "$(cat "$sandbox2/hyprctl.log")" "workspace.move" "off moves nothing"
 pass "the plan turns off"
+
+# ---- virtual displays: added apart, on a named workspace, kept at once
+sandbox2="$(new_sandbox)"
+: > "$sandbox2/hyprctl.log"
+out="$(run_cli "$sandbox2" virtual add stage)"
+assert_eq "$out" "VIRTUAL-1" "the first virtual display is VIRTUAL-1"
+assert_contains "$(cat "$sandbox2/hyprctl.log")" "output create headless VIRTUAL-1" "Hyprland is asked for the output"
+lua="$(cat "$sandbox2/state/candela-layout.lua")"
+assert_contains "$lua" 'hl.monitor({ output = "VIRTUAL-1", mode = "1920x1080@60", position = "5120x0", scale = 1, transform = 0 })' "a stage sits apart, past the desk's right edge with a gap"
+assert_contains "$lua" 'hl.workspace_rule({ workspace = "name:stage", monitor = "VIRTUAL-1", default = true })' "it opens on a named workspace of its own"
+assert_eq "$(jq -r '.[] | select(.name == "VIRTUAL-1") | "\(.width)x\(.height)@\(.x),\(.y)"' "$sandbox2/monitors.json")" "1920x1080@5120,0" "the output landed where the rule says"
+assert_eq "$(jq -r '.[] | select(.name == "stage") | .monitor' "$sandbox2/workspaces.json")" "VIRTUAL-1" "the named workspace is on it"
+assert_eq "$(jq -c '.virtual["VIRTUAL-1"]' "$sandbox2/state/intent.json")" '{"label":"Stage","use":"stage"}' "intent records what it is for"
+[[ ! -e $sandbox2/state/pending.json ]] || fail "no countdown for a virtual display"
+[[ -s $sandbox2/state/undo.json ]] || fail "adding it can be undone"
+state="$(run_cli "$sandbox2" state)"
+assert_eq "$(jq -r '.displays[] | select(.name == "VIRTUAL-1") | .virtual' <<<"$state")" "true" "state marks it virtual"
+assert_eq "$(jq -r '.virtual.displays["VIRTUAL-1"].workspace' <<<"$state")" "stage" "state names its workspace"
+assert_eq "$(jq -r '.virtual.viewer' <<<"$state")" "gvncviewer" "state names the viewer it would use"
+assert_eq "$(jq -c '[.virtual.addresses[].address]' <<<"$state")" '["192.168.1.89"]' "only LAN addresses are offered, not loopback or the VM bridge"
+pass "a virtual display is added apart, on its own workspace, without a countdown"
+
+# ---- a reload keeps it, and restore makes nothing twice
+run_cli "$sandbox2" apply --now '{"displays":[{"name":"DP-1","scale":2}]}' >/dev/null
+assert_eq "$(jq -r '[.[] | select(.name == "VIRTUAL-1")] | length' "$sandbox2/monitors.json")" "1" "a keep and its reload leave it in place"
+assert_eq "$(run_cli "$sandbox2" virtual restore)" "restored 0" "restore makes nothing that exists"
+jq 'map(select(.name != "VIRTUAL-1"))' "$sandbox2/monitors.json" > "$sandbox2/m.tmp" && mv "$sandbox2/m.tmp" "$sandbox2/monitors.json"
+echo '[]' > "$sandbox2/virtual.json"
+assert_eq "$(run_cli "$sandbox2" virtual restore)" "restored 1" "restore recreates it after a restart"
+assert_eq "$(jq -r '.[] | select(.name == "VIRTUAL-1") | .x' "$sandbox2/monitors.json")" "5120" "where it was"
+pass "a virtual display survives reloads and is recreated at start"
+
+# ---- viewing: a private socket and a viewer; the network behind a password
+: > "$sandbox2/systemd-run.log"
+assert_eq "$(run_cli "$sandbox2" virtual view VIRTUAL-1 window on)" "VIRTUAL-1 window on" "window view starts"
+log="$(cat "$sandbox2/systemd-run.log")"
+assert_contains "$log" "--unit=omarchy-candela-window-VIRTUAL-1 -- wayvnc -C $sandbox2/state/virtual/VIRTUAL-1/window.conf -o VIRTUAL-1 -S $sandbox2/runtime/omarchy-candela/VIRTUAL-1-window.ctl -R unix:$sandbox2/runtime/omarchy-candela/VIRTUAL-1.vnc" "the window server listens on a socket only, with its own config"
+assert_contains "$log" "--unit=omarchy-candela-viewer-VIRTUAL-1 -- gvncviewer $sandbox2/runtime/omarchy-candela/VIRTUAL-1.vnc" "the viewer opens that socket"
+assert_eq "$(cat "$sandbox2/state/virtual/VIRTUAL-1/window.conf")" "enable_auth=false" "no address in the window config, so nothing on the network"
+assert_eq "$(stat -c %a "$sandbox2/runtime/omarchy-candela")" "700" "the socket's directory is the user's alone"
+if run_cli "$sandbox2" virtual view VIRTUAL-1 network on --address 0.0.0.0 2>/dev/null; then fail "every interface at once is refused"; fi
+if run_cli "$sandbox2" virtual view VIRTUAL-1 network on --address 192.168.122.1 2>/dev/null; then fail "the VM bridge is not a LAN address"; fi
+assert_eq "$(run_cli "$sandbox2" virtual view VIRTUAL-1 network on)" "VIRTUAL-1 network on" "network view starts"
+conf="$(cat "$sandbox2/state/virtual/VIRTUAL-1/network.conf")"
+assert_contains "$conf" "enable_auth=true" "network needs a password"
+assert_contains "$conf" "address=192.168.1.89" "on the one LAN address"
+assert_contains "$conf" "port=5901" "VIRTUAL-1 listens on 5901"
+assert_contains "$conf" "rsa_private_key_file=$sandbox2/state/virtual/VIRTUAL-1/rsa_key.pem" "with a kept RSA key"
+assert_not_contains "$conf" "relax_encryption" "never relaxed encryption"
+assert_eq "$(stat -c %a "$sandbox2/state/virtual/VIRTUAL-1/network.conf")" "600" "the config holding the password is private"
+secret="$(run_cli "$sandbox2" virtual secret VIRTUAL-1)"
+assert_eq "$(jq -r .username <<<"$secret")" "candela" "secret gives the username"
+[[ $(jq -r .password <<<"$secret") =~ ^[A-Za-z0-9]{16}$ ]] || fail "a 16-character password" "$secret"
+pw1="$(jq -r .password <<<"$secret")"
+run_cli "$sandbox2" virtual view VIRTUAL-1 network off >/dev/null
+run_cli "$sandbox2" virtual view VIRTUAL-1 network on >/dev/null
+assert_eq "$(run_cli "$sandbox2" virtual secret VIRTUAL-1 | jq -r .password)" "$pw1" "the password is kept between starts"
+state="$(run_cli "$sandbox2" state)"
+assert_eq "$(jq -c '.virtual.displays["VIRTUAL-1"] | [.window, .network.on, .network.address, .network.port, .network.atLogin]' <<<"$state")" '[true,true,"192.168.1.89",5901,false]' "state reports both viewers"
+assert_eq "$(jq -r '.virtual.displays["VIRTUAL-1"].network.clients[0].address' <<<"$state")" "192.168.1.40" "and who is connected"
+out="$(run_cli "$sandbox2" doctor || true)"
+assert_contains "$out" "VIRTUAL-1 is offered on 192.168.1.89:5901 with a password and RSA-AES" "doctor says what is on the network"
+pass "a virtual display is seen on a private socket, or on one LAN address behind a password"
+
+# ---- removing it stops its servers before the output goes, and can be undone
+: > "$sandbox2/wayvncctl.log"; : > "$sandbox2/hyprctl.log"
+assert_eq "$(run_cli "$sandbox2" virtual remove VIRTUAL-1)" "removed VIRTUAL-1" "remove reports"
+assert_contains "$(cat "$sandbox2/systemctl.log")" "stop omarchy-candela-network-VIRTUAL-1.service" "the network server is stopped"
+[[ ! -e $sandbox2/units/omarchy-candela-window-VIRTUAL-1.service ]] || fail "the window server is stopped"
+assert_contains "$(cat "$sandbox2/hyprctl.log")" "output remove VIRTUAL-1" "then the output is removed"
+assert_eq "$(jq -r '.virtual // {} | length' "$sandbox2/state/intent.json")" "0" "it is gone from intent"
+assert_not_contains "$(cat "$sandbox2/state/candela-layout.lua")" "VIRTUAL-1" "and from the layout"
+[[ ! -e $sandbox2/state/virtual/VIRTUAL-1 ]] || fail "its key and password are deleted"
+assert_eq "$(run_cli "$sandbox2" revert)" "reverted" "revert undoes the removal"
+assert_eq "$(jq -r '.[] | select(.name == "VIRTUAL-1") | .x' "$sandbox2/monitors.json")" "5120" "it comes back where it was"
+assert_eq "$(run_cli "$sandbox2" revert)" "reverted" "a second revert has nothing to undo"
+pass "removing a virtual display stops its servers first, and revert brings it back"
+
+# ---- the parking guard, and real displays only for recover
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" virtual add extra --label "iPad Pro" >/dev/null
+lua="$(cat "$sandbox2/state/candela-layout.lua")"
+assert_contains "$lua" 'output = "VIRTUAL-1", mode = "2732x2048@60", position = "4800x0", scale = 2' "an extra screen sits flush beside the rightmost display"
+assert_contains "$lua" 'workspace = "name:ipad-pro"' "the label becomes its workspace's name"
+jq '. + [{"id":7,"name":"7","monitor":"VIRTUAL-1","windows":2}]' "$sandbox2/workspaces.json" > "$sandbox2/w.tmp" && mv "$sandbox2/w.tmp" "$sandbox2/workspaces.json"
+assert_eq "$(run_cli "$sandbox2" virtual guard)" "moved 1" "a parked workspace is moved"
+assert_eq "$(jq -r '.[] | select(.id == 7) | .monitor' "$sandbox2/workspaces.json")" "DP-1" "to the leftmost real display"
+assert_eq "$(jq -r '.[] | select(.name == "ipad-pro") | .monitor' "$sandbox2/workspaces.json")" "VIRTUAL-1" "its own workspace stays"
+run_cli "$sandbox2" apply '{"workspaces":{"homes":{"9":"VIRTUAL-1"}}}' >/dev/null
+jq '. + [{"id":9,"name":"9","monitor":"VIRTUAL-1","windows":1}]' "$sandbox2/workspaces.json" > "$sandbox2/w.tmp" && mv "$sandbox2/w.tmp" "$sandbox2/workspaces.json"
+assert_eq "$(run_cli "$sandbox2" virtual guard)" "moved 0" "a workspace that lives there by plan stays"
+jq 'map(if .name == "DP-1" or .name == "DP-2" then .disabled = true | .width = 0 else . end)' "$sandbox2/monitors.json" > "$sandbox2/m.tmp" && mv "$sandbox2/m.tmp" "$sandbox2/monitors.json"
+assert_eq "$(run_cli "$sandbox2" recover)" "recovered DP-1" "a virtual display that is on does not stop recover"
+pass "the parking guard, and recover counts real displays only"
+
+# ---- validation and refusals
+sandbox2="$(new_sandbox)"
+if run_cli "$sandbox2" virtual add wall 2>/dev/null; then fail "an unknown use is refused"; fi
+if run_cli "$sandbox2" virtual add stage --size 99999x10 2>/dev/null; then fail "an impossible size is refused"; fi
+if run_cli "$sandbox2" virtual add stage --label 'a"b' 2>/dev/null; then fail "a label that could break Lua is refused"; fi
+if run_cli "$sandbox2" virtual remove DP-1 2>/dev/null; then fail "a real display is never removed"; fi
+run_cli "$sandbox2" virtual add stage >/dev/null
+assert_eq "$(run_cli "$sandbox2" virtual add bench)" "VIRTUAL-2" "the next one is VIRTUAL-2"
+assert_contains "$(cat "$sandbox2/state/candela-layout.lua")" 'output = "VIRTUAL-2", mode = "1366x768@60", position = "7360x0"' "and goes apart past VIRTUAL-1"
+run_cli "$sandbox2" apply '{"displays":[{"name":"DP-1","scale":2}]}' >/dev/null
+if run_cli "$sandbox2" virtual add stage 2>/dev/null; then fail "nothing is added while a change waits for Keep"; fi
+run_cli "$sandbox2" revert >/dev/null
+out="$(run_cli "$sandbox2" apply '{"displays":[{"name":"VIRTUAL-2","mode":"1920x1080@60"}]}')"
+assert_eq "$out" "kept" "resizing a virtual display needs no countdown"
+pass "virtual displays are validated, and a real display is never removed"

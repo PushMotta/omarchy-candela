@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # omarchy:summary=Configure displays: geometry, signal and colour, with safe apply and revert
-# omarchy:args=<state|apply|keep|revert|persist|hdr|brightness|identify|open|edid|icc|workspaces|recover|doctor> [...]
+# omarchy:args=<state|apply|keep|revert|persist|hdr|brightness|identify|open|edid|icc|workspaces|virtual|recover|doctor> [...]
 # omarchy:examples=omarchy-candela state | omarchy-candela hdr on --display DP-2 | omarchy-candela apply @layout.json | omarchy-candela keep | omarchy-candela doctor
 
 # The backend behind the Candela plugin. Everything the UI does is a
@@ -25,6 +25,11 @@
 # regenerates the Lua, reloads, and proves the file ran. `revert` (or the
 # timer) drops pending and reloads, which restores the last kept
 # configuration.
+#
+# Virtual displays (VIRTUAL-1, VIRTUAL-2…) are Hyprland headless outputs this
+# tool creates and owns. Their rules live in the layout file like any other,
+# so the output itself only has to be created: by `virtual add`, and by the
+# service each time the shell starts. They are seen through wayvnc.
 #
 # The workspace plan is written as workspace rules into the same layout file.
 # A reload does not move workspaces that are already open, so a change to the
@@ -60,9 +65,14 @@ TOGGLES_DIR="$(dirname "$LUA_FILE")"
 PENDING_LUA="${OMARCHY_CANDELA_PENDING_LUA_FILE:-$TOGGLES_DIR/candela-pending.lua}"
 INTERNAL_FLAG="$TOGGLES_DIR/internal-monitor-disable.lua"   # Omarchy's own toggle, shared
 INTERNAL_SCALE_FILE="$TOGGLES_DIR/internal-monitor-scale"    # read by Omarchy's clamshell script
-# A workspace-only change is kept at once, with no countdown, so this records
-# what it replaced, for one `revert` to undo.
-WORKSPACE_UNDO_FILE="$STATE_DIR/workspaces-undo.json"
+# A change that cannot blank a real screen (the workspace plan, a virtual
+# display) is kept at once, with no countdown, so this records what it
+# replaced, for one `revert` to undo.
+UNDO_FILE="$STATE_DIR/undo.json"
+VIRTUAL_RE='^VIRTUAL-[0-9]+$'
+VIRTUAL_DIR="$STATE_DIR/virtual"          # per display: wayvnc configs, key, password (0700)
+VIRTUAL_GAP=320                            # logical px between the desk and a display placed apart
+VNC_WAIT_SECONDS="${OMARCHY_CANDELA_VNC_WAIT_SECONDS:-3}"
 REVERT_UNIT="omarchy-candela-revert"
 REVERT_SECONDS="${OMARCHY_CANDELA_REVERT_SECONDS:-15}"
 VERIFY_SECONDS="${OMARCHY_CANDELA_VERIFY_SECONDS:-3}"
@@ -109,14 +119,23 @@ Usage: omarchy-candela <command> [args]
   doctor                         Check that the layout is loaded, the compositor agrees, and nothing fights it
   report                         Diagnostics for a bug report, as Markdown, with home paths, serials and EDID hashes removed
   workspaces home                Move every open workspace that is away from its home display back home
+  virtual add <extra|stage|bench> [--size WxH] [--refresh HZ] [--scale S] [--beside NAME|--apart] [--label TEXT]
+  virtual remove NAME            Stop its viewers, then remove the virtual display
+  virtual view NAME window on|off
+  virtual view NAME network on|off [--address IP] [--port N] [--at-login yes|no]
+  virtual secret NAME            The username and password for network viewing, as JSON
+  virtual clients NAME           Who is connected over the network, as JSON
+  virtual disconnect NAME ID
+  virtual restore                Recreate kept virtual displays (the service runs this at start)
+  virtual guard                  Move workspaces parked on a virtual display to a real one
 
 Change JSON shape (any subset per display):
   {"displays":[{"name":"DP-2","bitdepth":10,"cm":"hdr","sdr_max_luminance":203}],
    "global":{"cm_auto_hdr":1},
    "workspaces":{"homes":{"6":"DP-2"},"shows":{"DP-2":"6"}}}
   Workspace homes are workspaces 1 to 10; null removes one, and
-  "workspaces":null turns the plan off. A change that only touches workspaces
-  is kept at once, and `revert` undoes it.
+  "workspaces":null turns the plan off. A change that only touches the plan
+  and virtual displays is kept at once, and `revert` undoes it.
 USAGE
 }
 
@@ -362,12 +381,25 @@ remember_geometry() {
 # enforce this too; the CLI must not be the door that gets round it.
 check_some_display_stays_on() {
   local intent="$1" live="$2"
-  jq -e -n --argjson intent "$intent" --argjson live "$live" '
-    [ $live[] | select((.name // "") != "")
+  # A virtual display is nowhere anyone can read without a viewer, so it
+  # does not count as one that stays on.
+  jq -e -n --argjson intent "$intent" --argjson live "$live" --arg vre "$VIRTUAL_RE" '
+    [ $live[] | select((.name // "") != "" and (.name | test($vre) | not))
       | ($intent.displays[.name] // {}) as $i
       | if $i.enabled == false then false elif $i.enabled == true then true else (.disabled != true) end ]
     | any' >/dev/null 2>&1 || die "refusing to switch off the last enabled display"
 }
+
+# The named workspace each virtual display opens on: its label as a slug,
+# or its own name when the label gives nothing usable or two labels clash.
+JQ_VIRTUAL_DEFS='
+  def virtual_workspace_names($v):
+    ($v // {}) | to_entries
+    | map(. + {slug: ((.value.label // "") | ascii_downcase | gsub("[^a-z0-9]+"; "-") | gsub("^-+|-+$"; ""))})
+    | (map(.slug) | group_by(.) | map(select(length > 1) | .[0])) as $dupes
+    | map(.slug as $s | {key, value: (if $s == "" or ($dupes | index($s)) != null then (.key | ascii_downcase) else $s end)})
+    | from_entries;
+'
 
 # A mirror shows another display's picture, so it cannot be where a workspace
 # lives. Checked against the merged intent and, for displays it does not
@@ -406,7 +438,7 @@ generate_lua() {
   local intent="$1" live="$2" stamp="${3:-$(date --iso-8601=seconds)}" probe="${4:-}" audience="${5:-file}" previous=""
   [[ $audience == file && -f $LUA_FILE ]] && previous="$(cat "$LUA_FILE")"
   jq -r -n --argjson intent "$intent" --argjson live "$live" --arg stamp "$stamp" --arg plugin "$PLUGIN_ID" \
-        --arg probe "$probe" --arg audience "$audience" --arg internal_re "$INTERNAL_RE" --arg previous "$previous" '
+        --arg probe "$probe" --arg audience "$audience" --arg internal_re "$INTERNAL_RE" --arg previous "$previous" --arg vre "$VIRTUAL_RE" "$JQ_VIRTUAL_DEFS"'
     def lua_str: "\"" + (tostring | gsub("\\\\"; "\\\\\\\\") | gsub("\""; "\\\"")) + "\"";
     def lua_val($k): if $k == "icc" then "[==[" + tostring + "]==]" elif type == "string" then lua_str else tostring end;
     def r2: (. * 100 | round) / 100;
@@ -441,7 +473,25 @@ generate_lua() {
       [ $previous | split("\n")[]
         | select(test("^hl\\.monitor\\(\\{ output = \""))
         | (capture("^hl\\.monitor\\(\\{ output = \"(?<n>[^\"]+)\"").n) as $n
-        | select([$live[].name] | index($n) == null) ];
+        | select([$live[].name] | index($n) == null)
+        # A virtual display is never unplugged: if intent no longer has it,
+        # it was removed, and its rule goes with it.
+        | select($n | test($vre) | not) ];
+    # A virtual display that is not created yet (at login, before the service
+    # creates it; during `virtual add`) gets its rule from intent, so the
+    # output lands where it should the moment it exists.
+    def virtual_not_created:
+      [ ($intent.virtual // {}) | keys[] | select(. as $n | [$live[].name] | index($n) == null)
+        | . as $n | ($intent.displays[$n] // {}) as $i
+        | "hl.monitor({ output = \($n | lua_str), mode = \(($i.mode // "1920x1080@60") | lua_str), position = \(($i.position // "auto") | lua_str), scale = \(($i.scale // 1) | lua_val("scale")), transform = \(($i.transform // 0) | tostring) })" ];
+    # Each virtual display opens on a named workspace of its own (ids below
+    # -1337), so it never takes one of workspaces 1 to 10.
+    def virtual_workspace_rules:
+      (virtual_workspace_names($intent.virtual) | to_entries) as $v
+      | if ($v | length) == 0 then []
+        else [ "", "-- Each virtual display opens on a named workspace of its own, so workspaces 1 to 10 stay yours." ]
+          + [ $v[] | "hl.workspace_rule({ workspace = \(("name:" + .value) | lua_str), monitor = \(.key | lua_str), default = true })" ]
+        end;
     def workspace_rules:
       ($intent.workspaces.homes // {}) as $homes
       | ($intent.workspaces.shows // {}) as $explicit
@@ -461,7 +511,9 @@ generate_lua() {
       "" ]
     + [ $live[] | select((.name // "") != "") | rule(.) | select(. != "") ]
     + (if $audience == "file" then carried as $c | if ($c | length) > 0 then ["", "-- Not connected now. Kept as last written, so it comes back the same way."] + $c else [] end else [] end)
+    + (if $audience == "file" then virtual_not_created as $c | if ($c | length) > 0 then ["", "-- Virtual, created by the Candela service when the shell starts."] + $c else [] end else [] end)
     + workspace_rules
+    + virtual_workspace_rules
     + (if ($intent.global.cm_auto_hdr != null) then ["", "hl.config({ render = { cm_auto_hdr = \($intent.global.cm_auto_hdr) } })"] else [] end)
     + (if $probe != "" then ["", "-- Load probe: `omarchy-candela doctor` asks Hyprland whether this value is set.", "omarchy_candela_layout_probe = \($probe | lua_str)"] else [] end)
     | join("\n")
@@ -846,9 +898,11 @@ cmd_state() {
   internal_flag=false; [[ -f $INTERNAL_FLAG ]] && internal_flag=true
   local open_ws undo=null
   open_ws="$(workspaces_json)"
-  [[ -s $WORKSPACE_UNDO_FILE ]] && undo="$(jq -c '{since}' "$WORKSPACE_UNDO_FILE" 2>/dev/null || echo null)"
+  [[ -s $UNDO_FILE ]] && undo="$(jq -c '{since}' "$UNDO_FILE" 2>/dev/null || echo null)"
+  local virtual
+  virtual="$(virtual_state_json "$live" "$intent")"
   jq -n --argjson live "$live" --argjson intent "$intent" --argjson pending "$pending" \
-        --argjson openWorkspaces "$open_ws" --argjson workspaceUndo "$undo" \
+        --argjson openWorkspaces "$open_ws" --argjson workspaceUndo "$undo" --argjson virtual "$virtual" --arg vre "$VIRTUAL_RE" \
         --argjson edids "$edids" --arg focused "$focused" --arg brightness "$brightness" \
         --argjson autoHdr "$auto_hdr" --arg sdrEotf "$sdr_eotf" --arg pluginId "$PLUGIN_ID" \
         --argjson revertSeconds "$REVERT_SECONDS" --argjson now "$(now_epoch)" \
@@ -868,12 +922,14 @@ cmd_state() {
       workspaces: {
         kept: ($intent.workspaces // null),
         pendingConfig: (if $pending == null then null else ($pending.intent.workspaces // null) end),
-        open: $openWorkspaces,
-        undo: $workspaceUndo
+        open: $openWorkspaces
       },
+      undo: $workspaceUndo,
+      virtual: $virtual,
       displays: [ $live[] | {
         name, description, make, model, serial: (.serial | gsub("^\\s+|\\s+$"; "")),
         internal: (.name | test($internalRe)),
+        virtual: (.name | test($vre)),
         enabled: (.disabled != true), focused, dpms: .dpmsStatus,
         width, height, refreshRate, x, y, scale, transform, vrr, mirrorOf,
         physicalWidth, physicalHeight, currentFormat, availableModes,
@@ -893,18 +949,20 @@ cmd_state() {
 cmd_apply() {
   local now=0
   if [[ ${1:-} == "--now" ]]; then now=1; shift; fi
-  local change intent base merged live chunk_live chunk_file baseline previous targets files ws_before ws_change=0 ws_only=0
+  local change intent base merged live chunk_live chunk_file baseline previous targets files ws_before ws_change=0 at_once=0
   change="$(read_json_arg "${1:-}")"
   [[ -n $change ]] || die "apply needs a JSON change"
   printf '%s' "$change" | jq -e 'type == "object"' >/dev/null 2>&1 || die "change is not a JSON object"
   targets="$(jq -c '[.displays // [] | .[].name] | unique' <<<"$change")"
   jq -e 'has("workspaces")' <<<"$change" >/dev/null && ws_change=1
-  jq -e 'has("workspaces") and (has("displays") | not) and (has("global") | not)' <<<"$change" >/dev/null && ws_only=1
-  # Nothing in a workspace plan can blank a screen, so a change that only
-  # touches the plan is kept at once; `revert` can still undo it.
-  (( ws_only )) && now=1
+  # Neither the workspace plan nor a virtual display can blank a real screen,
+  # so a change that touches only those is kept at once; `revert` can still
+  # undo it.
+  jq -e --arg vre "$VIRTUAL_RE" '(has("global") | not) and (has("displays") or has("workspaces"))
+    and ((.displays // []) | all(.name | test($vre)))' <<<"$change" >/dev/null && at_once=1
+  (( at_once )) && now=1
   # Any newer change makes that undo meaningless.
-  rm -f "$WORKSPACE_UNDO_FILE"
+  rm -f "$UNDO_FILE"
 
   # Chain onto a pending change, so successive slider moves accumulate.
   if [[ -s $PENDING_FILE ]]; then
@@ -982,12 +1040,8 @@ cmd_apply() {
 
   if (( now )); then
     cmd_keep
-    if (( ws_only )) && [[ ${CANDELA_NO_UNDO:-} != 1 ]]; then
-      tmp="$(tmp_for "$WORKSPACE_UNDO_FILE")"
-      jq -n --argjson previous "$previous" --argjson placement "$ws_before" --argjson since "$(now_epoch)" \
-        '{since:$since, workspaces:($previous.workspaces // null), placement:$placement}' > "$tmp" && mv "$tmp" "$WORKSPACE_UNDO_FILE"
-    fi
-    return
+    if (( at_once )) && [[ ${CANDELA_NO_UNDO:-} != 1 ]]; then write_undo "$previous" "$ws_before"; fi
+    return 0
   fi
 
   notify_shell
@@ -1042,8 +1096,8 @@ cmd_revert() {
   done
 
   # Nothing pending, but a workspace change was kept at once: undo that.
-  if (( ! expired )) && [[ ! -s $PENDING_FILE && -s $WORKSPACE_UNDO_FILE ]]; then
-    undo_workspaces
+  if (( ! expired )) && [[ ! -s $PENDING_FILE && -s $UNDO_FILE ]]; then
+    undo_last
     return
   fi
 
@@ -1094,20 +1148,33 @@ cmd_revert() {
   echo "reverted"
 }
 
-# Undo the last workspace-only change: put the previous plan back as it was
-# (replacing, not merging, since the change may have added homes the old plan
-# never had), then the open workspaces where they were.
-undo_workspaces() {
-  local undo change
-  undo="$(cat "$WORKSPACE_UNDO_FILE")"
-  rm -f "$WORKSPACE_UNDO_FILE"
-  change="$(jq -c -n --argjson undo "$undo" --argjson now "$(intent_json)" '
-    if $undo.workspaces == null then {workspaces: null}
-    else {workspaces: {
-      homes: ((($now.workspaces.homes // {}) | map_values(null)) + $undo.workspaces.homes),
-      shows: ((($now.workspaces.shows // {}) | map_values(null)) + ($undo.workspaces.shows // {})) }}
-    end')"
-  CANDELA_NO_UNDO=1 cmd_apply --now "$change" >/dev/null
+write_undo() {
+  local previous="$1" placement="$2" tmp
+  mkdir -p "$STATE_DIR"
+  tmp="$(tmp_for "$UNDO_FILE")"
+  jq -n --argjson previous "$previous" --argjson placement "$placement" --argjson since "$(now_epoch)" \
+    '{since:$since, previousIntent:$previous, placement:$placement}' > "$tmp" && mv "$tmp" "$UNDO_FILE"
+}
+
+# Undo the last change that was kept at once: put the intent back exactly as
+# it was, remove or recreate virtual displays to match (servers stopped before
+# an output goes), and put the open workspaces back where they were.
+undo_last() {
+  local undo previous live name err
+  undo="$(cat "$UNDO_FILE")"
+  rm -f "$UNDO_FILE"
+  previous="$(jq -c '.previousIntent' <<<"$undo")"
+  live="$(live_json)"
+  while IFS= read -r name; do
+    [[ -n $name ]] && virtual_destroy "$name"
+  done < <(jq -r -n --argjson p "$previous" --argjson live "$live" --arg vre "$VIRTUAL_RE" \
+             '[$live[].name | select(test($vre))] - [($p.virtual // {}) | keys[]] | .[]')
+  commit_intent "$previous" || die "could not write the previous configuration back"
+  err="$(reload_and_check "$(intent_json)" "$LAST_PROBE")" || die "undo did not load: $err"
+  while IFS= read -r name; do
+    [[ -n $name ]] && virtual_create "$name"
+  done < <(jq -r -n --argjson p "$previous" --argjson live "$(live_json)" \
+             '[($p.virtual // {}) | keys[]] - [$live[].name] | .[]')
   restore_workspaces "$(jq -c '.placement // []' <<<"$undo")"
   notify_shell
   echo "reverted"
@@ -1121,6 +1188,401 @@ cmd_workspaces() {
   err="$(move_workspaces_home "$intent")" || die "$err"
   notify_shell
   echo "home"
+}
+
+# ---------------------------------------------------------------- virtual displays
+#
+# A virtual display is a Hyprland headless output named VIRTUAL-n that this
+# tool creates and owns. It is seen through wayvnc, in two ways, each its own
+# wayvnc process run as a user unit: "window", a server on a socket in the
+# runtime directory with no password (the directory is the user's alone),
+# opened in a VNC viewer on this desk; and "network", a server on one LAN
+# address behind a username, a generated password and an RSA key (RSA-AES).
+# wayvnc never reads ~/.config/wayvnc/config here: each server gets a config
+# of its own. And wayvnc carries on serving the previous output, a real
+# display, when its own goes away, so every path that removes a virtual
+# display stops its servers first.
+
+is_virtual() { [[ $1 =~ $VIRTUAL_RE ]]; }
+virtual_run_dir() { printf '%s/omarchy-candela' "${XDG_RUNTIME_DIR:-/run/user/$UID}"; }
+virtual_unit() { printf 'omarchy-candela-%s-%s' "$2" "$1"; }   # NAME kind: window, viewer, network
+
+need_wayvnc() {
+  command -v wayvnc >/dev/null 2>&1 || die "wayvnc is not installed: install the wayvnc package to see virtual displays"
+}
+
+# The first VNC viewer that can open a Unix socket by its path: wlvncc
+# (native Wayland), gvncviewer (gtk-vnc), vncviewer (TigerVNC).
+virtual_viewer() {
+  local v
+  for v in wlvncc gvncviewer vncviewer; do
+    command -v "$v" >/dev/null 2>&1 && { echo "$v"; return 0; }
+  done
+  return 1
+}
+
+# Run a command as a transient user unit, replacing one of the same name;
+# without a user manager, detach it instead.
+spawn_unit() {
+  local unit="$1"; shift
+  run_bounded systemctl --user stop "$unit.service" >/dev/null 2>&1 || true
+  if run_bounded systemd-run --user --quiet --collect --unit="$unit" -- "$@" >/dev/null 2>&1; then return 0; fi
+  (setsid bash -c 'exec 9>&-; exec "$@"' _ "$@" >/dev/null 2>&1 &)
+}
+
+unit_active() { run_bounded systemctl --user is-active --quiet "$1.service" >/dev/null 2>&1; }
+
+wait_for_socket() {
+  local path="$1" deadline
+  deadline=$(( $(now_ms) + $(awk -v s="$VNC_WAIT_SECONDS" 'BEGIN { printf "%d", s * 1000 }') ))
+  while (( $(now_ms) < deadline )); do
+    [[ -S $path ]] && return 0
+    sleep 0.1
+  done
+  [[ -S $path ]] || (( VNC_WAIT_SECONDS == 0 ))
+}
+
+virtual_stop() {
+  local name="$1" kind="$2" ctl
+  ctl="$(virtual_run_dir)/$name-$kind.ctl"
+  if [[ -S $ctl ]] && command -v wayvncctl >/dev/null 2>&1; then
+    run_bounded wayvncctl -S "$ctl" wayvnc-exit >/dev/null 2>&1 || true
+  fi
+  run_bounded systemctl --user stop "$(virtual_unit "$name" "$kind").service" >/dev/null 2>&1 || true
+  rm -f -- "$ctl"
+}
+
+virtual_stop_all() {
+  virtual_stop "$1" viewer
+  virtual_stop "$1" window
+  virtual_stop "$1" network
+  rm -f -- "$(virtual_run_dir)/$1.vnc"
+}
+
+# Rules for it are already loaded (the layout file carries them); this only
+# asks Hyprland for the output and checks where it landed.
+virtual_create() {
+  local name="$1" out err
+  out="$(run_apply_bounded hyprctl output create headless "$name" 2>&1)" || { printf 'hyprctl output create failed: %s' "$out" >&2; return 1; }
+  [[ $out == ok* ]] || { printf 'Hyprland did not create %s: %s\n' "$name" "$out" >&2; return 1; }
+  if ! err="$(verify_live "$(intent_json)" "$(jq -nc --arg n "$name" '[$n]')")"; then
+    printf '%s did not land where asked: %s\n' "$name" "$err" >&2; return 1
+  fi
+}
+
+virtual_destroy() {
+  local name="$1"
+  virtual_stop_all "$name"
+  if live_json | jq -e --arg n "$name" 'any(.name == $n)' >/dev/null; then
+    run_apply_bounded hyprctl output remove "$name" >/dev/null 2>&1 || true
+  fi
+}
+
+# LAN addresses a network viewer can be offered on: IPv4, interfaces that are
+# up, not loopback and not a local bridge for containers or VMs. TSV:
+# address, interface.
+virtual_lan_addresses() {
+  ip -4 -o addr show up 2>/dev/null | awk '{ split($4, a, "/"); print a[1] "\t" $2 }' \
+    | grep -vE $'\t(lo|virbr[0-9]*|docker[0-9]*|br-[0-9a-f]+|veth[0-9a-z]*)$' || true
+}
+
+# The username, password and RSA key a network viewer is offered, made once
+# and kept (0600, in a 0700 directory), so a client that accepted the key's
+# fingerprint keeps recognising it.
+virtual_secret_dir() {
+  local dir="$VIRTUAL_DIR/$1"
+  mkdir -p "$dir" && chmod 700 "$VIRTUAL_DIR" "$dir"
+  if [[ ! -s $dir/rsa_key.pem ]]; then
+    command -v ssh-keygen >/dev/null 2>&1 || die "ssh-keygen (openssh) is needed to make the network key"
+    ssh-keygen -q -m pem -t rsa -b 3072 -N "" -C "candela $1" -f "$dir/rsa_key.pem" >/dev/null 2>&1 || die "could not make the network key"
+    rm -f -- "$dir/rsa_key.pem.pub"
+  fi
+  if [[ ! -s $dir/secret ]]; then
+    ( umask 077; head -c 48 /dev/urandom | base64 -w0 | tr -dc 'A-Za-z0-9' | cut -c1-16 > "$dir/secret" )
+  fi
+  chmod 600 "$dir/rsa_key.pem" "$dir/secret"
+  printf '%s' "$dir"
+}
+
+virtual_network_settings() {
+  local f="$VIRTUAL_DIR/$1/network.json"
+  if [[ -s $f ]]; then cat "$f"; else echo '{}'; fi
+}
+
+virtual_view_window() {
+  local name="$1" mode="$2" run sock ctl conf viewer
+  if [[ $mode == off ]]; then
+    virtual_stop "$name" viewer
+    virtual_stop "$name" window
+    rm -f -- "$(virtual_run_dir)/$name.vnc"
+    return 0
+  fi
+  need_wayvnc
+  viewer="$(virtual_viewer)" || die "no VNC viewer to show it in a window. Install the gtk-vnc (gvncviewer) or tigervnc package"
+  run="$(virtual_run_dir)"
+  mkdir -p "$run" && chmod 700 "$run"
+  sock="$run/$name.vnc"; ctl="$run/$name-window.ctl"
+  mkdir -p "$VIRTUAL_DIR/$name" && chmod 700 "$VIRTUAL_DIR" "$VIRTUAL_DIR/$name"
+  conf="$VIRTUAL_DIR/$name/window.conf"
+  printf 'enable_auth=false\n' > "$conf"
+  rm -f -- "$sock"
+  spawn_unit "$(virtual_unit "$name" window)" wayvnc -C "$conf" -o "$name" -S "$ctl" -R "unix:$sock"
+  wait_for_socket "$sock" || die "wayvnc did not start for $name: journalctl --user -u $(virtual_unit "$name" window)"
+  spawn_unit "$(virtual_unit "$name" viewer)" "$viewer" "$sock"
+}
+
+virtual_view_network() {
+  local name="$1" mode="$2" address="$3" port="$4" at_login="$5" saved dir conf ctl n tmp pw
+  saved="$(virtual_network_settings "$name")"
+  if [[ $mode == off ]]; then
+    virtual_stop "$name" network
+    if [[ -n $at_login ]]; then
+      mkdir -p "$VIRTUAL_DIR/$name"
+      jq --argjson a "$([[ $at_login == yes ]] && echo true || echo false)" '.atLogin = $a' <<<"$saved" > "$VIRTUAL_DIR/$name/network.json"
+    fi
+    return 0
+  fi
+  need_wayvnc
+  [[ -n $address ]] || address="$(jq -r '.address // ""' <<<"$saved")"
+  [[ -n $address ]] || address="$(virtual_lan_addresses | head -1 | cut -f1)"
+  [[ -n $address ]] || die "no LAN address to offer $name on"
+  # One address of this machine, never every interface at once.
+  virtual_lan_addresses | cut -f1 | grep -qxF "$address" || die "$address is not a LAN address of this machine: choose one of $(virtual_lan_addresses | cut -f1 | paste -sd' ')"
+  n="${name#VIRTUAL-}"
+  [[ -n $port ]] || port="$(jq -r --arg d "$(( 5900 + n ))" '.port // ($d | tonumber)' <<<"$saved")"
+  [[ $port =~ ^[0-9]+$ ]] && (( port >= 1024 && port <= 65535 )) || die "port must be 1024 to 65535"
+  [[ -n $at_login ]] || at_login="$(jq -r 'if .atLogin == true then "yes" else "no" end' <<<"$saved")"
+  dir="$(virtual_secret_dir "$name")"
+  pw="$(cat "$dir/secret")"
+  conf="$dir/network.conf"
+  ( umask 077
+    # RSA-AES with a username and password. Never relax_encryption (it lets
+    # unencrypted Apple DH and DES in) and never a WebSocket listener: both
+    # also crash the neatvnc Arch ships.
+    printf 'enable_auth=true\nusername=candela\npassword=%s\nrsa_private_key_file=%s\naddress=%s\nport=%s\n' \
+      "$pw" "$dir/rsa_key.pem" "$address" "$port" > "$conf" )
+  ctl="$(virtual_run_dir)/$name-network.ctl"
+  mkdir -p "$(virtual_run_dir)" && chmod 700 "$(virtual_run_dir)"
+  spawn_unit "$(virtual_unit "$name" network)" wayvnc -C "$conf" -o "$name" -S "$ctl" -R
+  wait_for_socket "$ctl" || die "wayvnc did not start for $name: journalctl --user -u $(virtual_unit "$name" network)"
+  tmp="$(tmp_for "$dir/network.json")"
+  jq -n --arg a "$address" --argjson p "$port" --argjson l "$([[ $at_login == yes ]] && echo true || echo false)" \
+    '{address:$a, port:$p, atLogin:$l}' > "$tmp" && mv "$tmp" "$dir/network.json"
+}
+
+# Where a new virtual display goes, in logical px: flush right of a real
+# display (beside), or past the right edge of the whole desk with a gap the
+# pointer cannot cross (apart).
+virtual_position() {
+  local live="$1" beside="$2" width="$3"
+  jq -r -n --argjson live "$live" --arg beside "$beside" --arg vre "$VIRTUAL_RE" --argjson gap "$VIRTUAL_GAP" '
+    def lw: (if ((.transform // 0) % 2) == 1 then .height else .width end) / .scale | round;
+    [ $live[] | select(.disabled != true and .width > 0) ] as $on
+    | ($on | map(.x + lw) | max // 0) as $right
+    | if $beside != "" then
+        ([$on[] | select(.name == $beside)][0]) as $d
+        | if $d == null then error("no such display: " + $beside) else "\($d.x + ($d | lw))x\($d.y)" end
+      else "\($right + $gap)x0" end'
+}
+
+cmd_virtual() {
+  local action="${1:-}"; shift || true
+  case "$action" in
+    add) cmd_virtual_add "$@" ;;
+    remove) cmd_virtual_remove "$@" ;;
+    view)
+      local name="${1:-}" kind="${2:-}" mode="${3:-}" address="" port="" at_login=""
+      shift 3 || die "virtual view needs NAME window|network on|off"
+      is_virtual "$name" && intent_json | jq -e --arg n "$name" '.virtual | has($n)' >/dev/null 2>&1 || die "no virtual display named $name"
+      [[ $mode == on || $mode == off ]] || die "virtual view: on or off"
+      while (( $# > 0 )); do
+        case "$1" in
+          --address) address="${2:-}"; shift 2 ;;
+          --port) port="${2:-}"; shift 2 ;;
+          --at-login) at_login="${2:-}"; [[ $at_login == yes || $at_login == no ]] || die "--at-login yes or no"; shift 2 ;;
+          *) die "virtual view: unknown option $1" ;;
+        esac
+      done
+      case "$kind" in
+        window) virtual_view_window "$name" "$mode" ;;
+        network) virtual_view_network "$name" "$mode" "$address" "$port" "$at_login" ;;
+        *) die "virtual view: window or network" ;;
+      esac
+      notify_shell
+      echo "$name $kind $mode"
+      ;;
+    secret)
+      local name="${1:-}"
+      is_virtual "$name" || die "no virtual display named $name"
+      [[ -s $VIRTUAL_DIR/$name/secret ]] || die "$name has never been offered on the network"
+      jq -nc --arg p "$(cat "$VIRTUAL_DIR/$name/secret")" '{username:"candela", password:$p}'
+      ;;
+    clients)
+      local name="${1:-}" ctl
+      ctl="$(virtual_run_dir)/$name-network.ctl"
+      if command -v wayvncctl >/dev/null 2>&1 && unit_active "$(virtual_unit "$name" network)"; then
+        run_bounded wayvncctl -S "$ctl" -j client-list 2>/dev/null || echo '[]'
+      else
+        echo '[]'
+      fi
+      ;;
+    disconnect)
+      local name="${1:-}" id="${2:-}"
+      [[ $id =~ ^[0-9]+$ ]] || die "virtual disconnect NAME ID"
+      run_bounded wayvncctl -S "$(virtual_run_dir)/$name-network.ctl" client-disconnect "$id" >/dev/null || die "could not disconnect client $id"
+      echo "disconnected $id"
+      ;;
+    restore) cmd_virtual_restore ;;
+    guard) cmd_virtual_guard ;;
+    *) die "virtual supports: add, remove, view, secret, clients, disconnect, restore, guard" ;;
+  esac
+}
+
+cmd_virtual_add() {
+  local use="${1:-}"; shift || true
+  local size refresh=60 scale beside="" apart=0 label
+  case "$use" in
+    extra) size=2732x2048; scale=2; label="Tablet" ;;
+    stage) size=1920x1080; scale=1; apart=1; label="Stage" ;;
+    bench) size=1366x768; scale=1; apart=1; label="Bench" ;;
+    *) die "virtual add needs what it is for: extra, stage or bench" ;;
+  esac
+  while (( $# > 0 )); do
+    case "$1" in
+      --size) size="${2:-}"; shift 2 ;;
+      --refresh) refresh="${2:-}"; shift 2 ;;
+      --scale) scale="${2:-}"; shift 2 ;;
+      --beside) beside="${2:-}"; apart=0; shift 2 ;;
+      --apart) apart=1; beside=""; shift ;;
+      --label) label="${2:-}"; shift 2 ;;
+      *) die "virtual add: unknown option $1" ;;
+    esac
+  done
+  [[ $size =~ ^([0-9]{3,5})x([0-9]{3,5})$ ]] && (( BASH_REMATCH[1] >= 320 && BASH_REMATCH[1] <= 8192 && BASH_REMATCH[2] >= 240 && BASH_REMATCH[2] <= 8192 )) \
+    || die "size must be WIDTHxHEIGHT, 320x240 to 8192x8192"
+  [[ $refresh =~ ^[0-9]+$ ]] && (( refresh >= 1 && refresh <= 240 )) || die "refresh must be 1 to 240 Hz"
+  awk -v s="$scale" 'BEGIN { exit !(s + 0 > 0 && s + 0 <= 10) }' || die "scale must be above 0 and at most 10"
+  [[ $label =~ ^[[:alnum:][:space:]._-]{1,32}$ ]] || die "label: up to 32 letters, digits, spaces, dots, dashes or underscores"
+  [[ ! -s $PENDING_FILE ]] || die "a change is waiting to be kept or reverted; finish that first"
+
+  local live intent name n=1 width position merged err placement
+  live="$(live_json)"
+  intent="$(intent_json)"
+  while jq -e -n --argjson live "$live" --argjson intent "$intent" --arg n "VIRTUAL-$n" \
+          'any($live[]; .name == $n) or (($intent.virtual // {}) | has($n))' >/dev/null; do
+    n=$(( n + 1 ))
+  done
+  name="VIRTUAL-$n"
+  if (( apart )); then position="$(virtual_position "$live" "" 0)"
+  else
+    [[ -n $beside ]] || beside="$(jq -r --arg vre "$VIRTUAL_RE" '[.[] | select(.disabled != true and .width > 0 and (.name | test($vre) | not))] | max_by(.x + .width / .scale) | .name // ""' <<<"$live")"
+    position="$(virtual_position "$live" "$beside" 0)" || die "no such display: $beside"
+  fi
+  merged="$(jq -c --arg n "$name" --arg use "$use" --arg label "$label" --arg mode "$size@$refresh" --arg pos "$position" --argjson scale "$scale" \
+    '.virtual[$n] = {label:$label, use:$use} | .displays[$n] = {mode:$mode, position:$pos, scale:$scale, transform:0} | .version = 1' <<<"$intent")"
+  placement="$(workspaces_json)"
+  rm -f "$UNDO_FILE"
+  commit_intent "$merged" || die "could not write the layout"
+  if ! err="$(reload_and_check "$(intent_json)" "$LAST_PROBE")" || ! virtual_create "$name"; then
+    virtual_destroy "$name"
+    commit_intent "$intent" && reload_and_check "$(intent_json)" "$LAST_PROBE" >/dev/null || true
+    die "could not add $name${err:+: $err}"
+  fi
+  write_undo "$intent" "$placement"
+  notify_shell
+  echo "$name"
+}
+
+cmd_virtual_remove() {
+  local name="${1:-}" live intent merged err placement
+  is_virtual "$name" || die "virtual remove needs the name of a virtual display, like VIRTUAL-1"
+  [[ ! -s $PENDING_FILE ]] || die "a change is waiting to be kept or reverted; finish that first"
+  live="$(live_json)"
+  intent="$(intent_json)"
+  jq -e --arg n "$name" '(.virtual // {}) | has($n)' <<<"$intent" >/dev/null \
+    || jq -e --arg n "$name" 'any(.name == $n)' <<<"$live" >/dev/null || die "no virtual display named $name"
+  placement="$(workspaces_json)"
+  # Servers first: wayvnc would move on to a real display.
+  virtual_destroy "$name"
+  merged="$(jq -c --arg n "$name" '
+    del(.virtual[$n], .displays[$n])
+    | if .workspaces then
+        .workspaces.homes |= with_entries(select(.value != $n))
+        | .workspaces.shows = ((.workspaces.shows // {}) | del(.[$n]))
+        | if (.workspaces.homes | length) == 0 then del(.workspaces)
+          elif (.workspaces.shows | length) == 0 then del(.workspaces.shows) else . end
+      else . end' <<<"$intent")"
+  rm -f "$UNDO_FILE"
+  commit_intent "$merged" || die "could not write the layout"
+  err="$(reload_and_check "$(intent_json)" "$LAST_PROBE")" || die "$name is gone, but the layout did not load: $err"
+  rm -rf -- "${VIRTUAL_DIR:?}/$name"
+  write_undo "$intent" "$placement"
+  notify_shell
+  echo "removed $name"
+}
+
+# At the start of every shell: create the kept virtual displays that are not
+# there, and offer on the network the ones that were asked to be at login.
+cmd_virtual_restore() {
+  local live name made=0
+  live="$(live_json)"
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    if jq -e --arg n "$name" 'any(.name == $n)' <<<"$live" >/dev/null; then continue; fi
+    virtual_create "$name" && made=$(( made + 1 ))
+  done < <(intent_json | jq -r '(.virtual // {}) | keys[]')
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    if [[ $(jq -r '.atLogin == true' "$VIRTUAL_DIR/$name/network.json" 2>/dev/null) == true ]] && ! unit_active "$(virtual_unit "$name" network)"; then
+      ( virtual_view_network "$name" on "" "" yes ) || echo "omarchy-candela: $name was not offered on the network" >&2
+    fi
+  done < <(intent_json | jq -r '(.virtual // {}) | keys[]')
+  (( made == 0 )) || notify_shell
+  echo "restored $made"
+}
+
+# Hyprland parks an unplugged display's workspaces on the first other display
+# in connect order, which can be a virtual one nobody is looking at. Move
+# every workspace on a virtual display that does not live there (its own
+# named workspace, or a home in the plan) to the leftmost real display.
+cmd_virtual_guard() {
+  local live intent open target moves id to line moved=0
+  live="$(live_json)"
+  intent="$(intent_json)"
+  open="$(run_bounded hyprctl workspaces -j 2>/dev/null | jq -c '[.[] | select(.id > 0 or .id < -1337) | {id, name, monitor}]' 2>/dev/null || echo '[]')"
+  target="$(jq -r --arg vre "$VIRTUAL_RE" '[.[] | select(.disabled != true and .width > 0 and ((.mirrorOf // "none") == "none") and (.name | test($vre) | not))] | sort_by(.x, .y) | .[0].name // ""' <<<"$live")"
+  [[ -n $target ]] || { echo "no real display to move them to"; return 0; }
+  moves="$(jq -r -n --argjson intent "$intent" --argjson open "$open" --arg vre "$VIRTUAL_RE" "$JQ_VIRTUAL_DEFS"'
+    virtual_workspace_names($intent.virtual) as $own
+    | ($intent.workspaces.homes // {}) as $homes
+    | $open[] | select(.monitor | test($vre))
+    | select(.name != ($own[.monitor] // "") and ($homes[(.id | tostring)] // "") != .monitor)
+    | (if .id > 0 then (.id | tostring) else "name:" + .name end)')"
+  while IFS= read -r id; do
+    [[ -n $id ]] || continue
+    if line="$(dispatch_move "$id" "$target")"; then moved=$(( moved + 1 )); else echo "omarchy-candela: $line" >&2; fi
+  done <<<"$moves"
+  echo "moved $moved"
+}
+
+virtual_state_json() {
+  local live="$1" intent="$2" name out='{}' window network clients net viewer wayvnc=false
+  command -v wayvnc >/dev/null 2>&1 && wayvnc=true
+  viewer="$(virtual_viewer || true)"
+  while IFS= read -r name; do
+    [[ -n $name ]] || continue
+    window=false; network=false; clients='[]'
+    unit_active "$(virtual_unit "$name" window)" && window=true
+    if unit_active "$(virtual_unit "$name" network)"; then network=true; clients="$(cmd_virtual clients "$name")"; fi
+    net="$(virtual_network_settings "$name")"
+    out="$(jq -c --arg n "$name" --argjson w "$window" --argjson on "$network" --argjson c "$clients" --argjson net "$net" \
+      '.[$n] = {window:$w, network:($net + {on:$on, clients:$c})}' <<<"$out")"
+  done < <(jq -r '(.virtual // {}) | keys[]' <<<"$intent")
+  jq -c -n --argjson intent "$intent" --argjson views "$out" --arg viewer "$viewer" --argjson wayvnc "$wayvnc" \
+        --argjson addresses "$(virtual_lan_addresses | jq -R -s -c 'split("\n") | map(select(. != "") | split("\t") | {address:.[0], interface:.[1]})')" "$JQ_VIRTUAL_DEFS"'
+    virtual_workspace_names($intent.virtual) as $ws
+    | { wayvnc: $wayvnc, viewer: (if $viewer == "" then null else $viewer end), addresses: $addresses,
+        displays: (($intent.virtual // {}) | with_entries(.value += {workspace: $ws[.key]} + ($views[.key] // {}))) }'
 }
 
 cmd_persist() {
@@ -1248,6 +1710,8 @@ cmd_report() {
 cmd_recover() {
   local live rescue
   live="$(live_json)"
+  # A virtual display on is still nothing anyone can see.
+  live="$(jq -c --arg vre "$VIRTUAL_RE" 'map(select(.name | test($vre) | not))' <<<"$live")"
   if ! jq -e 'length > 0 and all(.disabled == true)' <<<"$live" >/dev/null; then
     echo "nothing to recover"
     return 0
@@ -1325,6 +1789,27 @@ cmd_doctor() {
     fi
     absent="$(jq -r -n --argjson plan "$plan" --argjson live "$live" '[ $plan | to_entries[] | select(.value as $n | [$live[].name] | index($n) == null) | .value ] | unique | join(", ")')"
     [[ -z $absent ]] || ok "homes on $absent, not connected now: those workspaces open on another display until it is back"
+  fi
+
+  local vname conf
+  while IFS= read -r vname; do
+    [[ -n $vname ]] || continue
+    if jq -e --arg n "$vname" 'any(.name == $n)' <<<"$live" >/dev/null; then
+      ok "$vname is a virtual display; it is seen only through a viewer$(unit_active "$(virtual_unit "$vname" window)" && echo ", and one is open on this desk")"
+    else
+      warn "$vname is kept but not created: run \`omarchy-candela virtual restore\`"
+    fi
+    conf="$VIRTUAL_DIR/$vname/network.conf"
+    if unit_active "$(virtual_unit "$vname" network)"; then
+      if [[ -f $conf ]] && grep -qx 'enable_auth=true' "$conf" && ! grep -qE '^(relax_encryption|allow_broken_crypto)=true' "$conf"; then
+        ok "$vname is offered on $(sed -n 's/^address=//p' "$conf"):$(sed -n 's/^port=//p' "$conf") with a password and RSA-AES"
+      else
+        bad "$vname is on the network without the password and encryption this tool sets: \`omarchy-candela virtual view $vname network off\`"
+      fi
+    fi
+  done < <(intent_json | jq -r '(.virtual // {}) | keys[]')
+  if (( $(intent_json | jq '(.virtual // {}) | length') > 0 )) && ! command -v wayvnc >/dev/null 2>&1; then
+    warn "wayvnc is not installed, so virtual displays cannot be seen: install the wayvnc package"
   fi
 
   local errors
@@ -1412,6 +1897,11 @@ case "$cmd" in
   edid) [[ -n ${1:-} ]] || die "edid needs a display name"; edid_for "$1" ;;
   icc) cmd_icc "$@" ;;
   workspaces) acquire_lock; cmd_workspaces "$@" ;;
+  virtual)
+    case "${1:-}" in
+      secret|clients) cmd_virtual "$@" ;;
+      *) acquire_lock; cmd_virtual "$@" ;;
+    esac ;;
   doctor) cmd_doctor ;;
   report) cmd_report ;;
   -h|--help|help|"") usage ;;

@@ -18,6 +18,10 @@ Two surfaces, one backend:
   section (colour preset, mastering luminances, capability overrides,
   auto-HDR). A column that runs past its bottom edge says what is below it
   rather than hiding it behind a scrollbar that only appears once you scroll.
+- **Virtual displays**: add a display that exists only in Hyprland, as an
+  extra screen for a tablet, a fixed-size stage to share or record, or a test
+  bench at a size you don't have, and see it in a window here or from another
+  device. See [Virtual displays](#virtual-displays).
 - **Workspaces**, in the same studio: give each of Omarchy's ten workspaces a
   home display. SUPER+6 then opens workspace 6 on the display you chose, a
   display that connects takes its workspaces back, and the plan survives a
@@ -163,6 +167,7 @@ added them. No file outside those paths is ever written.
 | h / l, ← / → | adjust slider, walk pills | adjust the current row; on the canvas nudge 10 px (⇧ 100) |
 | Tab | switch bar panel | canvas ⇄ workspaces ⇄ inspector ⇄ actions |
 | w | — | the workspace plan, under the canvas |
+| + | — | add a virtual display |
 | 1–9 | — | select display |
 | [ / ] | — | previous / next display |
 | ⌥ + arrows | — | on the canvas: flush against the nearest display on that side, centred |
@@ -245,6 +250,52 @@ the same workspace text field by field, so SUPER+L's layout and the plan's
 display live in one rule and neither undoes the other. Names, icons, apps per
 workspace and the bar's workspace widget are left alone.
 
+## Virtual displays
+
+`+ Virtual` on the canvas (or `+`) asks what the display is for and starts
+from there; everything stays editable afterwards.
+
+| For | Starts as | Placed |
+|---|---|---|
+| Extra screen | 2732×2048 at 2× (an iPad Pro 12.9″) | beside your rightmost display |
+| Stage | 1920×1080 at 1× | apart |
+| Test bench | 1366×768 at 1× | apart |
+
+**Beside** means flush against a real display, so the pointer and windows
+cross to it like any neighbour. **Apart** leaves a gap the pointer cannot
+cross, so nothing wanders onto a screen you are not looking at; windows get
+there through the workspace plan or SUPER+SHIFT+number. Each virtual display
+opens on a named workspace of its own (its label, like `stage`), so
+workspaces 1 to 0 stay yours. Size, refresh, scale and position change like
+any display's, at once and without the countdown, since none of it can blank
+a real screen; `r` undoes the last change. It has no EDID, so it is SDR only.
+Hyprland forgets virtual displays when it restarts; Candela recreates them
+when the shell starts.
+
+You see a virtual display through [wayvnc](https://github.com/any1/wayvnc),
+which Candela never installs for you: install the `wayvnc` package yourself.
+
+- **In a window on this desk**: a wayvnc server on a socket in your runtime
+  directory, which only you can open, shown in the first viewer found
+  (wlvncc, gvncviewer from gtk-vnc, or TigerVNC). Nothing listens on the
+  network. Input works, so this is also how you use a test bench.
+- **On the network**: a second server on one LAN address you choose, never
+  every interface, behind the username `candela` and a generated password,
+  with RSA-AES encryption and a key Candela keeps so its fingerprint does
+  not change. TigerVNC, bVNC on Android and RealVNC connect; macOS Screen
+  Sharing can only connect unencrypted, so it is turned away (TigerVNC on the
+  Mac works). It is off after each login unless you ask for it at login. The
+  inspector shows who is connected and can disconnect them.
+- **In a call**: the screen-share picker lists virtual displays like any
+  other, so a stage is shared by choosing it there.
+
+A viewer shares your keyboard focus: Super shortcuts typed on a tablet act on
+the whole desktop, and locking the session locks the virtual display too.
+Removing a virtual display stops its viewers before the output goes, because
+wayvnc would otherwise carry on with a real display. If a real display is
+unplugged and Hyprland parks its workspaces on a virtual one, Candela moves
+them to a real display at once.
+
 ## Command line
 
 Everything the UI does is a subcommand of `bin/omarchy-candela`. It is not
@@ -271,6 +322,11 @@ omarchy-candela report                         # diagnostics for a bug report, a
 omarchy-candela apply '{"workspaces":{"homes":{"6":"DP-2","7":"DP-2"}}}'   # kept at once; revert undoes it
 omarchy-candela apply '{"workspaces":null}'    # plan off: rules removed, nothing moved
 omarchy-candela workspaces home                # send open workspaces home, bindable
+omarchy-candela virtual add stage|extra|bench [--size 1920x1080] [--scale 1] [--beside DP-2|--apart] [--label Stage]
+omarchy-candela virtual view VIRTUAL-1 window on|off
+omarchy-candela virtual view VIRTUAL-1 network on|off [--address 192.168.1.89] [--port 5901] [--at-login yes|no]
+omarchy-candela virtual secret VIRTUAL-1         # the username and password, as JSON
+omarchy-candela virtual remove VIRTUAL-1
 ```
 
 Change JSON accepts, per display: `mode`, `position`, `scale`, `transform`,
@@ -294,9 +350,12 @@ mode. Set the mode you want instead.
 
 - `~/.local/state/omarchy/candela/intent.json` — what you chose, per connector,
   and the workspace plan.
-- `~/.local/state/omarchy/candela/workspaces-undo.json` — the plan and
-  workspace positions a workspace-only change replaced, until anything else
+- `~/.local/state/omarchy/candela/undo.json` — what the last change kept at
+  once (the workspace plan, a virtual display) replaced, until anything else
   is applied.
+- `~/.local/state/omarchy/candela/virtual/<name>/` (0700) — each virtual
+  display's wayvnc configs, and for network viewing its RSA key and password
+  (0600). Removing the display deletes it.
 - `~/.local/state/omarchy/candela/pending.json` — an applied-but-not-kept change with its expiry and transaction token.
 - `~/.local/state/omarchy/toggles/hypr/candela-pending.lua` — the pending
   change in the same form as the layout, loaded after it, for as long as the

@@ -16,6 +16,9 @@
 # hl.workspace_rule merges into an earlier rule with the same workspace text
 # (later fields win), a reload clears every rule and re-reads the files, and
 # neither moves a workspace that is already open; only a dispatched move does.
+# Outputs made with `output create headless` survive a reload, take their rule
+# the moment they exist, and open on their default workspace when a rule names
+# one; `output remove` refuses a real display.
 
 dir="$FAKE_DIR"
 echo "$*" >> "$dir/hyprctl.log"
@@ -108,7 +111,9 @@ case "$1 $2" in
     ;;
   "reload "*|"reload")
     if [[ ${FAKE_HYPRCTL_RELOAD_FAIL:-} == 1 ]]; then echo "fake hyprctl: reload rejected" >&2; exit 1; fi
-    [[ ${FAKE_HYPRCTL_PRESERVE_OMITTED:-} == 1 ]] || cp "$dir/monitors.pristine.json" "$dir/monitors.json"
+    if [[ ${FAKE_HYPRCTL_PRESERVE_OMITTED:-} != 1 ]]; then
+      jq -s '.[0] + .[1]' "$dir/monitors.pristine.json" "$dir/virtual.json" > "$dir/monitors.json"
+    fi
     : > "$dir/probe.txt"
     echo '[]' > "$dir/wsrules.json"
     if [[ ${FAKE_HYPRCTL_TOGGLES_NOT_LOADED:-} != 1 ]]; then
@@ -124,6 +129,32 @@ case "$1 $2" in
     ;;
   "configerrors "*|"configerrors") echo ok ;;
   "version "*|"version") echo "Hyprland 0.56.2 (fake)" ;;
+  "output create")
+    name="$4"
+    if jq -e --arg n "$name" 'any(.name == $n)' "$dir/monitors.json" >/dev/null; then echo "Name already taken"; exit 0; fi
+    entry="$(jq -nc --arg n "$name" '{name:$n, description:"", make:"", model:"", serial:"", disabled:false, focused:false, dpmsStatus:true,
+      width:1920, height:1080, refreshRate:60, x:0, y:0, scale:1, transform:0, vrr:false, mirrorOf:"none", physicalWidth:0, physicalHeight:0,
+      currentFormat:"XRGB8888", colorManagementPreset:"srgb", availableModes:[], activeWorkspace:{id:0, name:""}}')"
+    jq --argjson e "$entry" '. + [$e]' "$dir/monitors.json" > "$dir/monitors.json.tmp" && mv "$dir/monitors.json.tmp" "$dir/monitors.json"
+    for f in "$dir/state/candela-layout.lua" "$dir/state/candela-pending.lua"; do [[ -f $f ]] && apply_rules < "$f"; done
+    jq --arg n "$name" '[.[] | select(.name == $n)]' "$dir/monitors.json" > "$dir/v.tmp"
+    jq -s --arg n "$name" '(.[0] | map(select(.name != $n))) + .[1]' "$dir/virtual.json" "$dir/v.tmp" > "$dir/virtual.json.tmp" && mv "$dir/virtual.json.tmp" "$dir/virtual.json"
+    rm -f "$dir/v.tmp"
+    ws="$(jq -r --arg n "$name" '[.[] | select(.monitor == $n and .default == true)][0].workspaceString // ""' "$dir/wsrules.json")"
+    if [[ $ws == name:* ]]; then
+      jq --arg w "${ws#name:}" --arg n "$name" '. + [{id: (-1338 - length), name: $w, monitor: $n, windows: 0}]' "$dir/workspaces.json" > "$dir/w.tmp" && mv "$dir/w.tmp" "$dir/workspaces.json"
+    fi
+    echo ok
+    ;;
+  "output remove")
+    name="$3"
+    if ! jq -e --arg n "$name" 'any(.name == $n)' "$dir/virtual.json" >/dev/null; then echo "cannot remove a real display. Use the monitor keyword."; exit 0; fi
+    jq --arg n "$name" 'map(select(.name != $n))' "$dir/monitors.json" > "$dir/m.tmp" && mv "$dir/m.tmp" "$dir/monitors.json"
+    jq --arg n "$name" 'map(select(.name != $n))' "$dir/virtual.json" > "$dir/m.tmp" && mv "$dir/m.tmp" "$dir/virtual.json"
+    first="$(jq -r '.[0].name' "$dir/monitors.json")"
+    jq --arg n "$name" --arg f "$first" 'map(select(.monitor != $n or .windows > 0 or .id > 0) | if .monitor == $n then .monitor = $f else . end)' "$dir/workspaces.json" > "$dir/w.tmp" && mv "$dir/w.tmp" "$dir/workspaces.json"
+    echo ok
+    ;;
   "workspaces -j"|"workspaces ") cat "$dir/workspaces.json" ;;
   "workspacerules -j"|"workspacerules ") cat "$dir/wsrules.json" ;;
   "activeworkspace -j"|"activeworkspace ") jq '[.[] | select(.focused == true)][0].activeWorkspace // {id: 1}' "$dir/monitors.json" ;;

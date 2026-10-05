@@ -323,3 +323,37 @@ The plan's draft is one object (`draftPlan`), not per-display fields; the strip 
 
 Suite: the generator byte for byte, validation, merge, undo, mixed changes with revert, a move the compositor ignores, homes on an unplugged display, and the Model's presets, kinds, moves and chips. The test compositor follows the source as read in §11.2. On the desk, 5 October 2026 (two MateViews, Hyprland 0.56.2, the live shell running this branch): the Workspaces section and the chips rendered with the real workspaces; Alternate drafted from the keyboard, applied with `a` and kept at once with no countdown; `workspacerules -j` then held the ten rules with `default` on 1 and 2 and no workspace moved; with DP-1 focused, opening workspace 4 created it on DP-2; `r` in the studio undid the plan, leaving no rules and the workspaces where they were; `doctor` agreed at each step and the shell logged nothing from Candela. Not yet seen on hardware: a plan that moves open workspaces and its undo, dragging a chip, Send home, the mirror re-homing, an unplug with a plan on, the text size slider, and a real all-displays-off `FALLBACK` (the suite covers each).
 
+## 12. Virtual displays (1.3)
+
+Design review 03 (5 October 2026, source `design/virtual-displays-review.html`) put ten decisions; all ten recommendations were approved the same day. Pedro's three uses: an extra screen on a tablet or laptop over VNC, a fixed-size stage to share or record, and a test bench at sizes he does not have. "Switch all screens together" desktops stay with the existing plugins.
+
+### 12.1 Decisions
+
+1. **Names** `VIRTUAL-n`, with a label ("Stage") beside them. Hyprland keeps a name given to `output create headless`, so rules and screen-share pickers see a stable, plain one.
+2. **Recreated when the shell starts** (`virtual restore` from the service), since Hyprland forgets them on restart.
+3. **Placement per display, Beside or Apart**, the use choosing the default: an extra screen beside, a stage and a test bench apart (`VIRTUAL_GAP` = 320 logical px past the desk).
+4. **No countdown** for a change that touches only virtual displays (or only the plan); `revert` undoes the last one. Undo is one record for both (`undo.json`, the whole previous intent plus workspace placement), cleared by any later apply.
+5. **A named workspace of its own**, the label as a slug, as each virtual display's default, so it never takes one of 1–10.
+6. **The parking guard**: on `monitorremoved` the service runs `virtual guard`, which moves any workspace on a virtual display that neither is its own nor lives there by plan to the leftmost real display.
+7. **Network viewing is Candela's own wayvnc**: RSA-AES, username `candela`, a generated 16-character password and an RSA key (`ssh-keygen -m pem`), both kept 0600; one LAN address chosen from the machine's own (never loopback, a container or VM bridge, or every interface); port 5900+n; off after each login unless asked for at login.
+8. **macOS Screen Sharing is refused**, with the reason shown: it only connects unencrypted.
+9. **The local viewer** is the first of wlvncc, gvncviewer, vncviewer, opened on a wayvnc Unix socket in `$XDG_RUNTIME_DIR/omarchy-candela` (0700) with authentication off and no address.
+10. **1.3**, after 1.2, with the desk probe first.
+
+### 12.2 What wayvnc and Hyprland do
+
+- `hyprctl output create headless NAME` takes our name; `output remove` refuses a real display (`src/debug/HyprCtl.cpp:1770-1810`). Monitor rules apply to it at any size; VRR is skipped (`src/output/Monitor.cpp:259`, `src/config/shared/monitor/MonitorRuleManager.cpp:211`).
+- A new display takes the lowest free workspace unless a default rule names one; named workspaces have ids below −1337 (`src/output/Monitor.cpp:1276-1330`, `src/state/WorkspaceQueryCore.cpp:83`).
+- A pointer outside every display snaps to the nearest one, so a display past a gap cannot be reached (`src/pointer/PointerManager.cpp:723-770`).
+- wayvnc serves one output per process (`-o`), listens on 127.0.0.1:5900 by default, and when its output disappears switches to the previous one and keeps serving it (wayvnc `src/main.c:68-69, 250-278`). Every removal path here stops its servers first.
+- With authentication off wayvnc offers no security at all; with it, RSA-AES with a username and password needs only a key file (neatvnc `src/server.c:302-325`, wayvnc `src/main.c:1566-1588`). The neatvnc Arch ships lacks two fixes: Apple DH aborts and a WebSocket client crashes it before authentication (neatvnc #170), so `relax_encryption` and `ws:` are never used.
+- wayvnc's pointer is bound to the display it serves and Hyprland maps it there; the keyboard is shared (Hyprland `src/devices/VirtualPointer.cpp:43`).
+- `--gpu` is never passed: no VAAPI encoder on the desk's NVIDIA cards, and open crash reports.
+- Each wayvnc gets a config of its own (`-C`), so `~/.config/wayvnc/config` never applies, and `-R` turns off client-driven resizing (which hard-codes position 0,0 on headless outputs named `HEADLESS-*`).
+
+### 12.3 What is verified
+
+Suite: add (apart and beside, named workspace, no countdown, undo), survival across a reload and restore after a restart, the window server on a socket with no address, network refusals (every interface, a VM bridge), the network config (authentication, address, port, key, never relaxed, 0600), a password kept between starts, state and doctor, removal stopping servers before the output, revert bringing it back, the guard, `recover` ignoring virtual displays, validation.
+
+On the desk, 5 October 2026, before any code: with a rule and a named default workspace evaluated first, `hyprctl output create headless VIRTUAL-1` gave a 1920×1080@60 output at 5200,0 on workspace "stage" (id −1337); DP-1, DP-2 and workspaces 1 and 2 did not move; `grim -o VIRTUAL-1` showed Omarchy's bar and wallpaper on it; Candela 1.2 listed it with no EDID; removing it took the empty named workspace with it, and a reload restored everything exactly. Not yet on hardware: anything that needs wayvnc (not installed on the desk), the viewers, a tablet, the call picker.
+

@@ -1033,6 +1033,7 @@ Panel {
           anchors.verticalCenter: parent.verticalCenter
         }
         Tag { visible: row.display.focused; text: "focused" }
+        Tag { visible: row.display.virtual === true; text: "virtual" }
         Tag { visible: Model.colourMode(row.display) === "hdr"; text: "HDR" }
         Tag { visible: row.display.mirrorOf && row.display.mirrorOf !== "none"; text: "mirror" }
         Tag { visible: !row.display.enabled; text: "off" }

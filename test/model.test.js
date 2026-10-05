@@ -441,3 +441,23 @@ test("with no plan, chips show where the open workspaces are; the plan reads as 
   assert.equal(M.planLine({ "1": "DP-1", "6": "HDMI-A-1" }, desk), "1 on DP-1 · 6 on HDMI-A-1", "a home on a display not in the layout comes last")
   assert.equal(M.planLine({}, desk), "")
 })
+
+// ---------------------------------------------------------------- virtual displays
+
+test("a virtual display is beside when it shares an edge with a real one, apart otherwise", () => {
+  const withStage = desk.concat([{ name: "VIRTUAL-1", x: 5120, y: 0, width: 1920, height: 1080, disabled: false, mirrorOf: "", virtual: true }])
+  const realDesk = [{ name: "DP-1", x: 0, y: 0, width: 2400, height: 1600, disabled: false, mirrorOf: "" }, { name: "DP-2", x: 2400, y: 0, width: 2400, height: 1600, disabled: false, mirrorOf: "" }]
+  const apart = realDesk.concat([{ name: "VIRTUAL-1", x: 5120, y: 0, width: 1920, height: 1080, virtual: true }])
+  assert.equal(M.virtualPlacement(apart, "VIRTUAL-1"), "apart")
+  assert.deepEqual(M.virtualPositionFor(apart, "VIRTUAL-1", "beside"), { x: 4800, y: 0 })
+  const beside = realDesk.concat([{ name: "VIRTUAL-1", x: 4800, y: 0, width: 1366, height: 1024, virtual: true }])
+  assert.equal(M.virtualPlacement(beside, "VIRTUAL-1"), "beside")
+  assert.deepEqual(M.virtualPositionFor(beside, "VIRTUAL-1", "apart"), { x: 5120, y: 0 }, "the same gap as the backend")
+  // Apart clears the other virtual displays too, but beside is only ever a real one.
+  const two = apart.concat([{ name: "VIRTUAL-2", x: 7360, y: 0, width: 1366, height: 768, virtual: true }])
+  assert.deepEqual(M.virtualPositionFor(two, "VIRTUAL-1", "apart"), { x: 8726 + 320, y: 0 })
+  assert.equal(M.virtualPlacement(realDesk.concat([{ name: "VIRTUAL-2", x: 7040, y: 0, width: 100, height: 100, virtual: true }, { name: "VIRTUAL-1", x: 7140, y: 0, width: 100, height: 100, virtual: true }]), "VIRTUAL-1"), "apart", "touching another virtual display is still apart")
+  assert.deepEqual(M.rowFields("vsize").display, ["mode"])
+  assert.equal(M.VIRTUAL_SIZES.length, 6)
+  void withStage
+})
