@@ -1034,6 +1034,7 @@ Panel {
         }
         Tag { visible: row.display.focused; text: "focused" }
         Tag { visible: row.display.virtual === true; text: "virtual" }
+        Tag { visible: row.display.virtual === true && row.display.enabled && root.service !== null && root.service.virtualUnseen(row.display.name); text: "no viewer" }
         Tag { visible: Model.colourMode(row.display) === "hdr"; text: "HDR" }
         Tag { visible: row.display.mirrorOf && row.display.mirrorOf !== "none"; text: "mirror" }
         Tag { visible: !row.display.enabled; text: "off" }

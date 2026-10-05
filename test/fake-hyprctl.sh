@@ -146,7 +146,7 @@ case "$1 $2" in
     entry="$(jq -nc --arg n "$name" '{name:$n, description:"", make:"", model:"", serial:"", disabled:false, focused:false, dpmsStatus:true,
       width:1920, height:1080, refreshRate:60, x:0, y:0, scale:1, transform:0, vrr:false, mirrorOf:"none", physicalWidth:0, physicalHeight:0,
       currentFormat:"XRGB8888", colorManagementPreset:"srgb", availableModes:[], activeWorkspace:{id:0, name:""}}')"
-    jq --argjson e "$entry" '. + [$e]' "$dir/monitors.json" > "$dir/monitors.json.tmp" && mv "$dir/monitors.json.tmp" "$dir/monitors.json"
+    jq --argjson e "$entry" '. + [$e + {id: ((map(.id // 0) | max) + 1)}]' "$dir/monitors.json" > "$dir/monitors.json.tmp" && mv "$dir/monitors.json.tmp" "$dir/monitors.json"
     for f in "$dir/state/candela-layout.lua" "$dir/state/candela-pending.lua"; do [[ -f $f ]] && apply_rules < "$f"; done
     jq --arg n "$name" '[.[] | select(.name == $n)]' "$dir/monitors.json" > "$dir/v.tmp"
     jq -s --arg n "$name" '(.[0] | map(select(.name != $n))) + .[1]' "$dir/virtual.json" "$dir/v.tmp" > "$dir/virtual.json.tmp" && mv "$dir/virtual.json.tmp" "$dir/virtual.json"
@@ -167,6 +167,7 @@ case "$1 $2" in
     echo ok
     ;;
   "workspaces -j"|"workspaces ") cat "$dir/workspaces.json" ;;
+  "clients -j"|"clients ") cat "$dir/clients.json" 2>/dev/null || echo '[]' ;;
   "workspacerules -j"|"workspacerules ") cat "$dir/wsrules.json" ;;
   "activeworkspace -j"|"activeworkspace ") jq '[.[] | select(.focused == true)][0].activeWorkspace // {id: 1}' "$dir/monitors.json" ;;
   "dispatch "*)
@@ -176,6 +177,19 @@ case "$1 $2" in
       if [[ ${FAKE_HYPRCTL_MOVE_IGNORED:-} != 1 ]]; then
         jq --arg w "$ws" --arg m "$mon" 'map(if .name == $w then .monitor = $m else . end)' "$dir/workspaces.json" > "$dir/workspaces.json.tmp" && mv "$dir/workspaces.json.tmp" "$dir/workspaces.json"
       fi
+    fi
+    # hl.dsp.workspace.rename, by name: the selector Candela uses.
+    if [[ $2 =~ hl\.dsp\.workspace\.rename\(\{\ workspace\ =\ \"name:([^\"]+)\",\ name\ =\ \"([^\"]+)\"\ \}\) ]]; then
+      jq --arg f "${BASH_REMATCH[1]}" --arg t "${BASH_REMATCH[2]}" 'map(if .name == $f then .name = $t else . end)' "$dir/workspaces.json" > "$dir/w.tmp" && mv "$dir/w.tmp" "$dir/workspaces.json"
+    fi
+    # hl.dsp.window.move to a workspace, silently: the window takes that
+    # workspace and the monitor it is on.
+    if [[ $2 =~ hl\.dsp\.window\.move\(\{\ workspace\ =\ \"([^\"]+)\",\ follow\ =\ false,\ window\ =\ \"address:([^\"]+)\"\ \}\) ]]; then
+      ws="${BASH_REMATCH[1]}" addr="${BASH_REMATCH[2]}"
+      mon="$(jq -r --arg w "${ws#name:}" '[.[] | select(.name == $w or (.id | tostring) == $w)][0].monitor // ""' "$dir/workspaces.json")"
+      monid="$(jq -r --arg m "$mon" '[.[] | select(.name == $m)][0].id // ""' "$dir/monitors.json")"
+      [[ -n $monid ]] || { echo "Workspace not found"; exit 1; }
+      jq --arg a "$addr" --arg w "${ws#name:}" --argjson m "$monid" 'map(if .address == $a then .monitor = $m | .workspace = {name: $w} else . end)' "$dir/clients.json" > "$dir/c.tmp" && mv "$dir/c.tmp" "$dir/clients.json"
     fi
     echo ok
     ;;

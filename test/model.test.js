@@ -480,3 +480,20 @@ test("device presets: every one has a source, a whole logical size, and is found
   assert.match(opts.find(o => o.value === "galaxy-tab-ultra").description, /2960×1848 · 2× · Samsung/)
 })
 
+
+test("a picked device is shown as itself, not as the first device of its size", () => {
+  assert.equal(M.virtualPresetChosen("pixel-tablet", 2560, 1600, 2), "pixel-tablet")
+  assert.equal(M.virtualPresetChosen("pixel-tablet", 1600, 2560, 2), "pixel-tablet", "in portrait too")
+  assert.equal(M.virtualPresetChosen("ipad-air-13", 2732, 2048, 2), "ipad-air-13")
+  assert.equal(M.virtualPresetChosen(null, 2560, 1600, 2), "macbook-air-m1", "with none picked, the first of that size")
+  assert.equal(M.virtualPresetChosen("pixel-tablet", 2560, 1600, 1), "1600p", "a different scale is no longer that device")
+  assert.equal(M.virtualPresetChosen("pixel-tablet", 1700, 1000, 2), "custom", "nor is a different size")
+  assert.equal(M.virtualPresetChosen("no-such-device", 2560, 1600, 2), "macbook-air-m1")
+  for (const p of M.virtualPresets()) assert.equal(M.virtualPresetChosen(p.id, p.width, p.height, p.scale), p.id, p.label + " reads back as itself")
+})
+
+test("a virtual display's workspace is named the way the backend names it", () => {
+  assert.equal(M.virtualWorkspaceSlug("iPad Pro 12.9″"), "ipad-pro-12-9")
+  assert.equal(M.virtualWorkspaceSlug("  Stage!  "), "stage")
+  assert.equal(M.virtualWorkspaceSlug("✨"), "", "nothing usable: the backend falls back to the output name")
+})

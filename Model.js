@@ -824,6 +824,23 @@ function virtualPresetFor(width, height, scale) {
 
 function virtualOrientation(width, height) { return height > width ? "portrait" : "landscape" }
 
+// The preset to show for a size: the device it was picked as, while the size
+// is still that device's (either way round), since several devices share a
+// size; otherwise the first preset of that size, or "custom".
+function virtualPresetChosen(device, width, height, scale) {
+  var p = device ? virtualPresetById(device) : null
+  if (p && Math.abs(p.scale - scale) < 0.01
+      && ((p.width === width && p.height === height) || (p.width === height && p.height === width))) return p.id
+  return virtualPresetFor(width, height, scale)
+}
+
+// The workspace a virtual display opens on is named after its label, as the
+// backend names it (virtual_workspace_names): lowercase, runs of anything
+// else as one dash. Empty means the backend falls back to the output name.
+function virtualWorkspaceSlug(label) {
+  return String(label || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+}
+
 // A portrait display is the same panel with its sides swapped, not rotated:
 // what is captured is then already upright for the viewer.
 function virtualModeFor(preset, orientation, refresh) {
@@ -930,6 +947,6 @@ if (typeof module !== "undefined") {
     planKind: planKind, planKindLabel: planKindLabel, homesOn: homesOn, effectiveShows: effectiveShows, planMoves: planMoves, planSummary: planSummary,
     chipsFor: chipsFor, rehomeFrom: rehomeFrom, workspaceChange: workspaceChange, workspaceList: workspaceList, openChipsFor: openChipsFor, planLine: planLine,
     VIRTUAL_SIZES: VIRTUAL_SIZES, VIRTUAL_DEVICES: VIRTUAL_DEVICES, VIRTUAL_GAP: VIRTUAL_GAP, virtualPresets: virtualPresets, virtualPresetById: virtualPresetById,
-    virtualPresetOptions: virtualPresetOptions, virtualPresetFor: virtualPresetFor, virtualOrientation: virtualOrientation, virtualModeFor: virtualModeFor, realRects: realRects, touching: touching, virtualPlacement: virtualPlacement, virtualPositionFor: virtualPositionFor
+    virtualPresetOptions: virtualPresetOptions, virtualPresetFor: virtualPresetFor, virtualOrientation: virtualOrientation, virtualModeFor: virtualModeFor, virtualPresetChosen: virtualPresetChosen, virtualWorkspaceSlug: virtualWorkspaceSlug, realRects: realRects, touching: touching, virtualPlacement: virtualPlacement, virtualPositionFor: virtualPositionFor
   }
 }

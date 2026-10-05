@@ -826,3 +826,43 @@ sandbox2="$(new_sandbox)"
 run_cli "$sandbox2" apply --now '{"displays":[{"name":"DP-2","scale":2}]}' >/dev/null
 assert_not_contains "$(grep '"DP-1"' "$sandbox2/state/candela-layout.lua")" "mirror" "no mirror field for a display intent says nothing about"
 pass "displays intent says nothing about get no mirror field"
+
+# ---- a virtual display's name and device: kept at once, the open workspace
+# renamed with it, and both undone together
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" virtual add extra >/dev/null
+assert_eq "$(jq -r '.[] | select(.monitor == "VIRTUAL-1") | .name' "$sandbox2/workspaces.json")" "tablet" "it opens on its workspace, named after its label"
+run_cli "$sandbox2" apply '{"displays":[{"name":"VIRTUAL-1","mode":"2560x1600@60"}],"virtual":{"VIRTUAL-1":{"label":"  Pixel ","device":"pixel-tablet"}}}' >/dev/null
+assert_eq "$(jq -c '.virtual["VIRTUAL-1"] | {label, device}' "$sandbox2/state/intent.json")" '{"label":"Pixel","device":"pixel-tablet"}' "the name (trimmed) and the device are kept"
+[[ ! -s $sandbox2/state/pending.json ]] || fail "kept at once, with no countdown"
+assert_eq "$(jq -r '.[] | select(.monitor == "VIRTUAL-1") | .name' "$sandbox2/workspaces.json")" "pixel" "the open workspace is renamed"
+assert_contains "$(cat "$sandbox2/state/candela-layout.lua")" 'workspace = "name:pixel", monitor = "VIRTUAL-1"' "and the rule names it"
+state="$(run_cli "$sandbox2" state)"
+assert_eq "$(jq -r '.virtual.displays["VIRTUAL-1"] | "\(.device) \(.workspace)"' <<<"$state")" "pixel-tablet pixel" "state carries both"
+run_cli "$sandbox2" revert >/dev/null
+assert_eq "$(jq -c '.virtual["VIRTUAL-1"] | {label, device}' "$sandbox2/state/intent.json")" '{"label":"Tablet","device":null}' "undo puts the name back and forgets the device"
+assert_eq "$(jq -r '.[] | select(.monitor == "VIRTUAL-1") | .name' "$sandbox2/workspaces.json")" "tablet" "and the workspace's name"
+run_cli "$sandbox2" apply '{"virtual":{"VIRTUAL-1":{"device":"pixel-tablet"}}}' >/dev/null
+run_cli "$sandbox2" apply '{"virtual":{"VIRTUAL-1":{"device":null}}}' >/dev/null
+assert_eq "$(jq -r '.virtual["VIRTUAL-1"] | has("device")' "$sandbox2/state/intent.json")" "false" "null forgets the device"
+if run_cli "$sandbox2" apply '{"virtual":{"VIRTUAL-1":{"label":"   "}}}' 2>/dev/null; then fail "an empty name is refused"; fi
+if run_cli "$sandbox2" apply '{"virtual":{"VIRTUAL-1":{"label":"two\nlines"}}}' 2>/dev/null; then fail "a name on two lines is refused"; fi
+if run_cli "$sandbox2" apply '{"virtual":{"VIRTUAL-1":{"label":"a name far longer than thirty-two characters"}}}' 2>/dev/null; then fail "a long name is refused"; fi
+if run_cli "$sandbox2" apply '{"virtual":{"VIRTUAL-2":{"label":"x"}}}' 2>/dev/null; then fail "a display that does not exist is refused"; fi
+if run_cli "$sandbox2" apply '{"virtual":{"VIRTUAL-1":{"colour":"x"}}}' 2>/dev/null; then fail "an unknown field is refused"; fi
+if run_cli "$sandbox2" apply '{"virtual":{"VIRTUAL-1":{"device":"Bad Device"}}}' 2>/dev/null; then fail "a malformed device is refused"; fi
+pass "a virtual display can be renamed and remembers its device"
+
+# ---- windows nobody can see: counted, and brought back
+sandbox2="$(new_sandbox)"
+run_cli "$sandbox2" virtual add extra >/dev/null
+vid="$(jq -r '.[] | select(.name == "VIRTUAL-1") | .id' "$sandbox2/monitors.json")"
+jq -n --argjson v "$vid" '[{address:"0xa1", monitor:$v, workspace:{name:"tablet"}}, {address:"0xa2", monitor:$v, workspace:{name:"tablet"}}, {address:"0xb1", monitor:0, workspace:{name:"1"}}]' > "$sandbox2/clients.json"
+assert_eq "$(run_cli "$sandbox2" state | jq -r '.virtual.displays["VIRTUAL-1"].windows')" "2" "two windows are on it"
+jq 'map(if .name == "DP-1" then .focused = true | .activeWorkspace = {id: 1, name: "1"} else .focused = false end)' "$sandbox2/monitors.json" > "$sandbox2/m.tmp" && mv "$sandbox2/m.tmp" "$sandbox2/monitors.json"
+assert_eq "$(run_cli "$sandbox2" virtual gather VIRTUAL-1)" "moved 2 to DP-1" "gather brings them to the focused display"
+assert_eq "$(jq -c '[.[] | select(.monitor == 0) | .address] | sort' "$sandbox2/clients.json")" '["0xa1","0xa2","0xb1"]' "onto its workspace"
+assert_contains "$(cat "$sandbox2/hyprctl.log")" 'hl.dsp.window.move({ workspace = "1", follow = false, window = "address:0xa1" })' "silently, by address"
+assert_eq "$(run_cli "$sandbox2" state | jq -r '.virtual.displays["VIRTUAL-1"].windows')" "0" "and none are left there"
+pass "windows on a virtual display are counted and can be brought back"
+

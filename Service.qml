@@ -858,6 +858,14 @@ Item {
   function virtualAdd(use) { runVirtual(["add", use]) }
   function virtualRemove(name) { runVirtual(["remove", name]) }
   function virtualView(name, kind, on, extra) { runVirtual(["view", name, kind, on ? "on" : "off"].concat(extra || [])) }
+  function virtualGather(name) { runVirtual(["gather", name]) }
+  // Nobody is viewing it through Candela: its window is closed and no
+  // network viewer is connected. A call sharing it cannot be seen from here.
+  function virtualUnseen(name) {
+    var info = (virtualState.displays || {})[name] || {}
+    var clients = (info.network && info.network.clients) || []
+    return previews.indexOf(name) === -1 && clients.length === 0
+  }
   function virtualDisconnect(name, id) { runVirtual(["disconnect", name, String(id)]) }
   function installWayvnc() { runVirtual(["install"]) }
 

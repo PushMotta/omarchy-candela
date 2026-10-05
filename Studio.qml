@@ -65,6 +65,7 @@ Item {
     draft = ({})
     draftGlobal = ({})
     draftPlan = undefined
+    draftVirtual = ({})
     wsPillIndex = 0
     advancedOpen = false
     helpOpen = false
@@ -132,7 +133,11 @@ Item {
   property var draftGlobalRevisions: ({})
   property var submittedGlobalRevisions: ({})
   property int editRevision: 0
-  readonly property bool draftDirty: Object.keys(draft).length > 0 || Object.keys(draftGlobal).length > 0 || planDirty
+  // A virtual display's name and the device it was sized for ride in the
+  // same change as its size, so one Apply and one undo cover both.
+  property var draftVirtual: ({})
+  property var submittedVirtual: ({})
+  readonly property bool draftDirty: Object.keys(draft).length > 0 || Object.keys(draftGlobal).length > 0 || planDirty || Object.keys(draftVirtual).length > 0
 
   // ---------------------------------------------------------- workspace plan
   //
@@ -323,6 +328,9 @@ Item {
   // Whether the selected display's draft touches this inspector row.
   function rowChanged(rowId) {
     if (rowId.indexOf("ws") === 0) return rowId !== "wssend" && planDirty
+    var dv = display ? draftVirtual[display.name] : null
+    if (rowId === "vlabel") return !!dv && dv.label !== undefined
+    if (rowId === "vsize" && dv && dv.device !== undefined) return true
     return !!display && Model.rowChanged(rowId, draft[display.name], draftGlobal)
   }
 
@@ -335,6 +343,8 @@ Item {
     if (!d || applyInFlight || !rowChanged(rowId)) return
     // The plan is one thing: putting any of its rows back puts it all back.
     if (rowId.indexOf("ws") === 0) { draftPlan = undefined; return }
+    if (rowId === "vlabel") { setVirtualMeta(d.name, "label", undefined); return }
+    if (rowId === "vsize") setVirtualMeta(d.name, "device", undefined)
     var f = Model.rowFields(rowId)
     var before = null
     for (var i = 0; i < rects.length; i++) if (rects[i].name === d.name) before = rects[i]
@@ -485,6 +495,8 @@ Item {
     // A change that only touches the plan carries no displays key: that is
     // how the backend knows it can keep it at once, without a countdown.
     if (planDirty) change.workspaces = Model.workspaceChange(savedPlan, draftPlan)
+    if (Object.keys(draftVirtual).length) change.virtual = draftVirtual
+    submittedVirtual = draftVirtual
     if (!change.displays.length) delete change.displays
     submittedPlanRevision = planDirty ? planRevision : -1
     submittedDraft = draft
@@ -511,6 +523,7 @@ Item {
       for (var gk in root.draftGlobal) if (!root.submittedGlobalRevisions[gk] || root.draftGlobalRevisions[gk] !== root.submittedGlobalRevisions[gk]) ng[gk] = root.draftGlobal[gk]
       root.draft = next; root.draftGlobal = ng
       if (root.submittedPlanRevision !== -1 && root.planRevision === root.submittedPlanRevision) root.draftPlan = undefined
+      if (root.draftVirtual === root.submittedVirtual) root.draftVirtual = ({})
       root.focusArea = "actions"; root.actionIndex = 1
     }
   }
@@ -524,6 +537,7 @@ Item {
     draft = ({})
     draftGlobal = ({})
     draftPlan = undefined
+    draftVirtual = ({})
   }
 
   function moveDisplay(name, x, y) {
@@ -552,16 +566,45 @@ Item {
   function virtualPresetOf(d) {
     if (customSizeChosen) return "custom"
     var p = pixelsOf(d)
-    return Model.virtualPresetFor(p.width, p.height, scaleOf(d))
+    return Model.virtualPresetChosen(deviceOf(d), p.width, p.height, scaleOf(d))
+  }
+  function keptVirtual(name) { return (virtualState.displays || {})[name] || {} }
+  function deviceOf(d) {
+    var dv = draftVirtual[d.name]
+    if (dv && dv.device !== undefined) return dv.device
+    return keptVirtual(d.name).device || null
+  }
+  function labelOf(d) {
+    var dv = draftVirtual[d.name]
+    if (dv && dv.label !== undefined) return dv.label
+    return keptVirtual(d.name).label || ""
+  }
+  // undefined drops the field from the draft; a value equal to what is kept
+  // drops it too, so the row is only marked while it really changes.
+  function setVirtualMeta(name, key, value) {
+    var next = {}
+    for (var n in draftVirtual) { next[n] = {}; for (var k in draftVirtual[n]) next[n][k] = draftVirtual[n][k] }
+    var kept = keptVirtual(name)[key]
+    if (kept === undefined) kept = null
+    if (!next[name]) next[name] = {}
+    if (value === undefined || value === kept) delete next[name][key]
+    else next[name][key] = value
+    if (Object.keys(next[name]).length === 0) delete next[name]
+    draftVirtual = next
+  }
+  function setVirtualLabel(d, text) {
+    var t = String(text || "").trim()
+    setVirtualMeta(d.name, "label", t.length ? t : undefined)
   }
   function orientationOf(d) { var p = pixelsOf(d); return Model.virtualOrientation(p.width, p.height) }
   function setVirtualPreset(d, id) {
-    if (id === "custom") { customSizeChosen = true; return }
+    if (id === "custom") { customSizeChosen = true; setVirtualMeta(d.name, "device", null); return }
     customSizeChosen = false
     var preset = Model.virtualPresetById(id)
     if (!preset) return
     setSizeField(d, "mode", Model.virtualModeFor(preset, orientationOf(d), refreshOfVirtual(d)))
     setSizeField(d, "scale", preset.scale)
+    setVirtualMeta(d.name, "device", id)
   }
   function setOrientation(d, orientation) {
     var p = pixelsOf(d)
@@ -570,6 +613,7 @@ Item {
   }
   function setCustomSize(d, width, height) {
     if (width < 320 || height < 240 || width > 8192 || height > 8192) return
+    setVirtualMeta(d.name, "device", null)
     setSizeField(d, "mode", Math.round(width) + "x" + Math.round(height) + "@" + refreshOfVirtual(d))
   }
   onSelectedNameChanged: customSizeChosen = false
@@ -591,6 +635,8 @@ Item {
     service.virtualRemove(d.name)
   }
   readonly property bool previewOpen: isVirtual && !!service && service.previews.indexOf(display.name) !== -1
+  readonly property int virtualWindows: Number(virtualInfo.windows || 0)
+  readonly property bool virtualUnseen: isVirtual && display !== null && display.enabled !== false && !!service && service.virtualUnseen(display.name)
   function virtualViewCaption() {
     return "A live picture in a Candela window, nothing on the network. Watching only: to work in it, place it beside your displays and move the pointer there."
   }
@@ -659,7 +705,7 @@ Item {
 
   readonly property var rows: {
     var list = isVirtual
-      ? ["vsize", "vorient"].concat(display && virtualPresetOf(display) === "custom" ? ["vcustomw", "vcustomh"] : [])
+      ? ["vlabel", "vsize", "vorient"].concat(display && virtualPresetOf(display) === "custom" ? ["vcustomw", "vcustomh"] : [])
           .concat(["vrefresh", "scale", "posx", "posy", "vplace", "enabled", "vwindow", "vnetwork"])
       : ["mode", "refresh", "vrr", "scale", "rotation", "posx", "posy", "mirror", "enabled"]
     if (isVirtual) {
@@ -799,6 +845,7 @@ Item {
       case "wssend": if (service) service.sendWorkspacesHome(); break
       case "vwindow": if (service) service.togglePreview(d.name); break
       case "vsize": sizeDropdown.toggle(); break
+      case "vlabel": nameField.forceActiveFocus(); nameField.selectAll(); break
       case "vcustomw": customWidthField.field.forceActiveFocus(); break
       case "vcustomh": customHeightField.field.forceActiveFocus(); break
       case "vinstall": if (service) service.installWayvnc(); break
@@ -827,7 +874,7 @@ Item {
   }
 
   readonly property bool anyPopupOpen: resolutionDropdown.popupOpen || refreshDropdown.popupOpen || iccDropdown.popupOpen || sizeDropdown.popupOpen
-  readonly property bool textEditing: keyScope.activeFocus === false && (posXField.field.activeFocus || posYField.field.activeFocus || customWidthField.field.activeFocus || customHeightField.field.activeFocus || minLumField.field.activeFocus || maxLumField.field.activeFocus || avgLumField.field.activeFocus)
+  readonly property bool textEditing: keyScope.activeFocus === false && (posXField.field.activeFocus || posYField.field.activeFocus || customWidthField.field.activeFocus || customHeightField.field.activeFocus || nameField.activeFocus || minLumField.field.activeFocus || maxLumField.field.activeFocus || avgLumField.field.activeFocus)
 
   function handleKey(event) {
     if (anyPopupOpen) return false
@@ -1272,11 +1319,39 @@ Item {
                 Text {
                   textFormat: Text.PlainText
                   text: !root.display ? ""
-                    : root.isVirtual ? "Virtual: it exists only in Hyprland and is recreated when the shell starts. No EDID, so SDR only. It opens on its own workspace, \u201C" + (root.virtualInfo.workspace || "") + "\u201D, so 1\u20130 stay yours."
+                    : root.isVirtual ? "Virtual: it exists only in Hyprland and is recreated when the shell starts. No EDID, so SDR only."
                     : Model.panelLine(root.display)
                   color: root.dim
                   font.family: root.fontFamily; font.pixelSize: Style.font.caption
                   wrapMode: Text.WordWrap; width: parent.width
+                }
+                // Nobody looking at it: the pointer and windows can still go
+                // there, so say so, and offer its windows back.
+                Item {
+                  visible: root.virtualUnseen
+                  width: parent.width
+                  implicitHeight: Math.max(unseenText.implicitHeight, gatherButton.visible ? gatherButton.implicitHeight : 0)
+                  Text {
+                    id: unseenText
+                    textFormat: Text.PlainText
+                    text: "Nobody is viewing it through Candela: its window is closed and no network viewer is connected."
+                      + (root.virtualWindows > 0 ? " " + root.virtualWindows + (root.virtualWindows === 1 ? " window is" : " windows are") + " on it." : "")
+                    color: root.virtualWindows > 0 ? root.foreground : root.dim
+                    font.family: root.fontFamily; font.pixelSize: Style.font.caption
+                    wrapMode: Text.WordWrap
+                    width: parent.width - (gatherButton.visible ? gatherButton.width + Style.spacing.md : 0)
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+                  Button {
+                    id: gatherButton
+                    visible: root.virtualWindows > 0
+                    text: root.virtualWindows === 1 ? "Bring it here" : "Bring them here"
+                    fontSize: Style.font.caption
+                    bordered: true
+                    foreground: root.foreground; fontFamily: root.fontFamily
+                    anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                    onClicked: if (root.display && root.service) root.service.virtualGather(root.display.name)
+                  }
                 }
               }
 
@@ -1358,6 +1433,36 @@ Item {
 
                 // ----- signal
                 PanelSectionHeader { id: signalHeader; text: root.isVirtual ? "SIZE" : "SIGNAL"; foreground: root.foreground; fontFamily: root.fontFamily }
+
+                // Its name also names the workspace it opens on.
+                InspectorRow {
+                  rowId: "vlabel"
+                  visible: root.isVirtual
+                  Column {
+                    width: parent.width; spacing: Style.spacing.labelGap
+                    RowLabel { text: "Name" }
+                    TextField {
+                      id: nameField
+                      width: parent.width
+                      maximumLength: 32
+                      text: root.display && root.isVirtual ? root.labelOf(root.display) : ""
+                      placeholderText: root.display ? root.display.name : ""
+                      foreground: root.foreground; accent: root.accent
+                      font.family: root.fontFamily; font.pixelSize: Style.font.body
+                      hasCursor: root.focusArea === "inspector" && root.currentRow === "vlabel"
+                      onTextEdited: if (root.display) root.setVirtualLabel(root.display, text)
+                      onAccepted: keyScope.forceActiveFocus()
+                      Keys.onEscapePressed: keyScope.forceActiveFocus()
+                      onHoveredChanged: if (hovered) { root.focusArea = "inspector"; root.currentRow = "vlabel" }
+                    }
+                    Text {
+                      textFormat: Text.PlainText
+                      readonly property string slug: root.display ? (Model.virtualWorkspaceSlug(root.labelOf(root.display)) || root.display.name.toLowerCase()) : ""
+                      text: "It opens on its own workspace, \u201C" + slug + "\u201D, so 1\u20130 stay yours."
+                      color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width
+                    }
+                  }
+                }
 
                 // A virtual display has no EDID and no modes of its own: any
                 // size Hyprland is given is the size it has.

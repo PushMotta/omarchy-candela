@@ -132,6 +132,7 @@ Usage: omarchy-candela <command> [args]
   virtual secret NAME [--new] [--qr]  The username and password for network viewing, as JSON
                                  (--new replaces the password, --qr adds it as a QR code)
   virtual clients NAME           Who is connected over the network, as JSON
+  virtual gather NAME            Bring every window on it to the display you are using
   virtual disconnect NAME ID
   virtual restore                Recreate kept virtual displays (the service runs this at start)
   virtual guard                  Move workspaces parked on a virtual display to a real one
@@ -140,7 +141,8 @@ Usage: omarchy-candela <command> [args]
 Change JSON shape (any subset per display):
   {"displays":[{"name":"DP-2","bitdepth":10,"cm":"hdr","sdr_max_luminance":203}],
    "global":{"cm_auto_hdr":1},
-   "workspaces":{"homes":{"6":"DP-2"},"shows":{"DP-2":"6"}}}
+   "workspaces":{"homes":{"6":"DP-2"},"shows":{"DP-2":"6"}},
+   "virtual":{"VIRTUAL-1":{"label":"iPad","device":"ipad-pro-12-9"}}}
   Workspace homes are workspaces 1 to 10; null removes one, and
   "workspaces":null turns the plan off. A change that only touches the plan
   and virtual displays is kept at once, and `revert` undoes it.
@@ -357,9 +359,29 @@ merge_intent() {
     # Unknown top-level keys (a typo, a stray field) currently apply as a
     # silent no-op that still arms a revert timer; reject them, and reject a
     # change carrying none of the keys this tool understands.
+    # A virtual display'"'"'s own name (its label, which also names its
+    # workspace) and the device it was sized for, so the panel can say which
+    # one when two devices share a size. null forgets the device.
+    def check_virtual(v):
+      if (v | type) != "object" then fail("virtual must be an object")
+      else v | to_entries | map(
+        .key as $n | .value as $f
+        | if ((($intent.virtual // {}) | has($n)) | not) then fail("no virtual display named " + $n)
+          elif ($f | type) != "object" then fail($n + ": virtual fields must be an object")
+          else
+            (($f | keys) - ["label","device"] | first) as $u
+            | if $u != null then fail($n + ": unknown virtual key " + $u)
+              elif ($f | has("label")) and (($f.label | type) != "string"
+                    or ($f.label | gsub("^\\s+|\\s+$"; "") | length) == 0 or ($f.label | length) > 32
+                    or ($f.label | explode | any(. < 32 or . == 127))) then fail($n + ": a name is 1 to 32 characters on one line")
+              elif ($f | has("device")) and $f.device != null
+                    and (($f.device | type) != "string" or ($f.device | test("^[a-z0-9][a-z0-9.-]{0,47}$") | not)) then fail($n + ": device")
+              else {key: $n, value: ($f | if has("label") then .label |= gsub("^\\s+|\\s+$"; "") else . end)} end
+          end) | from_entries
+      end;
     def check_top:
       ($change | keys) as $top
-      | (($top - ["displays","global","workspaces"]) | first) as $unknown
+      | (($top - ["displays","global","workspaces","virtual"]) | first) as $unknown
       | if $unknown != null then fail("unknown top-level key " + $unknown)
         elif ($top | length) == 0 then fail("nothing to apply")
         else true end;
@@ -375,6 +397,10 @@ merge_intent() {
     | if $change | has("workspaces") then
         merge_workspaces(.workspaces; $w) as $plan
         | if $plan == null then del(.workspaces) else .workspaces = $plan end
+      else . end
+    | if $change | has("virtual") then
+        reduce (check_virtual($change.virtual) | to_entries[]) as $e (.;
+          .virtual[$e.key] = ((.virtual[$e.key] + $e.value) | with_entries(select(.value != null))))
       else . end
     | .version = 1
   ' 2>&1 || return 1
@@ -651,6 +677,27 @@ workspace_moves() {
         | {id, to: $home} ]
     | sort_by(if (.id | tostring) == $active then 1 else 0 end)
     | .[] | "\(.id)\t\(.to)"'
+}
+
+# A renamed virtual display renames the workspace it opens on: the rule only
+# names workspaces created from now on, so the open one is renamed too, by
+# name (a named workspace has a negative id, which a selector would read as
+# "back that many").
+rename_virtual_workspaces() {
+  local before="$1" after="$2" from to out
+  while IFS=$'\t' read -r from to; do
+    [[ -n $from && -n $to ]] || continue
+    workspaces_all_json | jq -e --arg n "$from" 'any(.name == $n)' >/dev/null || continue
+    out="$(run_bounded hyprctl dispatch "hl.dsp.workspace.rename({ workspace = \"name:$from\", name = \"$to\" })" 2>&1)" || true
+    [[ $out == ok* ]] || echo "omarchy-candela: workspace $from was not renamed to $to: ${out:-hyprctl failed}" >&2
+  done < <(jq -r -n --argjson b "$before" --argjson a "$after" "$JQ_VIRTUAL_DEFS"'
+    virtual_workspace_names($b.virtual) as $old | virtual_workspace_names($a.virtual) as $new
+    | $old | to_entries[] | select($new[.key] != null and $new[.key] != .value) | "\(.value)\t\($new[.key])"')
+}
+
+# Every open workspace, named ones included (workspaces_json keeps 1 to 10).
+workspaces_all_json() {
+  run_bounded hyprctl workspaces -j 2>/dev/null || echo '[]'
 }
 
 dispatch_move() {
@@ -990,7 +1037,7 @@ cmd_apply() {
   # Neither the workspace plan nor a virtual display can blank a real screen,
   # so a change that touches only those is kept at once; `revert` can still
   # undo it.
-  jq -e --arg vre "$VIRTUAL_RE" '(has("global") | not) and (has("displays") or has("workspaces"))
+  jq -e --arg vre "$VIRTUAL_RE" '(has("global") | not) and (has("displays") or has("workspaces") or has("virtual"))
     and ((.displays // []) | all(.name | test($vre)))' <<<"$change" >/dev/null && at_once=1
   (( at_once )) && now=1
   # Any newer change makes that undo meaningless.
@@ -1084,6 +1131,7 @@ cmd_apply() {
         [ (.displays // [] | map(.name) | unique | if length > 0 then "changing " + join(" and ") else empty end),
           (if has("workspaces") then "the workspace plan" else empty end) ] | join(" and ")' <<<"$change")"
     fi
+    rename_virtual_workspaces "$previous" "$(intent_json)"
     # Moving a display that is on the network can move it beside or apart,
     # which decides whether its viewers may take input: start it again.
     while IFS= read -r vname; do
@@ -1220,10 +1268,11 @@ fresh_undo() {
 # it was, remove or recreate virtual displays to match (servers stopped before
 # an output goes), and put the open workspaces back where they were.
 undo_last() {
-  local undo previous live name err
+  local undo previous live name err current
   undo="$(cat "$UNDO_FILE")"
   rm -f "$UNDO_FILE"
   previous="$(jq -c '.previousIntent' <<<"$undo")"
+  current="$(intent_json)"
   live="$(live_json)"
   while IFS= read -r name; do
     [[ -n $name ]] && virtual_destroy "$name"
@@ -1235,6 +1284,7 @@ undo_last() {
     [[ -n $name ]] && virtual_create "$name"
   done < <(jq -r -n --argjson p "$previous" --argjson live "$(live_json)" \
              '[($p.virtual // {}) | keys[]] - [$live[].name] | .[]')
+  rename_virtual_workspaces "$current" "$previous"
   restore_workspaces "$(jq -c '.placement // []' <<<"$undo")"
   notify_shell
   echo "reverted"
@@ -1571,6 +1621,11 @@ cmd_virtual() {
       jq -nc --arg p "$(cat "$VIRTUAL_DIR/$name/secret")" --arg qr "$qr" \
         '{username:"candela", password:$p} + (if $qr == "" then {} else {qr:$qr} end)'
       ;;
+    gather)
+      local name="${1:-}"
+      is_virtual "$name" && intent_json | jq -e --arg n "$name" '(.virtual // {}) | has($n)' >/dev/null 2>&1 || die "no virtual display named $name"
+      virtual_gather "$name"
+      ;;
     clients)
       local name="${1:-}" ctl
       ctl="$(virtual_run_dir)/$name-network.ctl"
@@ -1747,11 +1802,40 @@ virtual_state_json() {
       '.[$n] = {network:($net + {on:$on, clients:$c, port:$port, firewall:$fw,
         firewallAllow:(if $lan == "" then null else "ufw allow from \($lan) to any port \($port) proto tcp" end)})}' <<<"$out")"
   done < <(jq -r '(.virtual // {}) | keys[]' <<<"$intent")
-  jq -c -n --argjson intent "$intent" --argjson views "$out" --argjson wayvnc "$wayvnc" \
+  local windows
+  windows="$(virtual_window_counts "$live")"
+  jq -c -n --argjson intent "$intent" --argjson views "$out" --argjson wayvnc "$wayvnc" --argjson windows "$windows" \
         --argjson addresses "$(virtual_lan_addresses | jq -R -s -c 'split("\n") | map(select(. != "") | split("\t") | {address:.[0], interface:.[1], network:.[2]})')" "$JQ_VIRTUAL_DEFS"'
     virtual_workspace_names($intent.virtual) as $ws
     | { wayvnc: $wayvnc, addresses: $addresses,
-        displays: (($intent.virtual // {}) | with_entries(.value += {workspace: $ws[.key]} + ($views[.key] // {}))) }'
+        displays: (($intent.virtual // {}) | with_entries(.value += {workspace: $ws[.key], windows: ($windows[.key] // 0)} + ($views[.key] // {}))) }'
+}
+
+# Windows on each virtual display, by output name.
+virtual_window_counts() {
+  local live="$1"
+  jq -c -n --argjson live "$live" --argjson clients "$(run_bounded hyprctl clients -j 2>/dev/null || echo '[]')" --arg vre "$VIRTUAL_RE" '
+    [ $live[] | select(.name | test($vre)) | .id as $id | {key: .name, value: ([$clients[] | select(.monitor == $id)] | length)} ] | from_entries' 2>/dev/null || echo '{}'
+}
+
+# Bring every window on a virtual display to the workspace the focused real
+# display shows (or the leftmost real one), for when nobody is looking at it.
+virtual_gather() {
+  local name="$1" live target ws id addr out moved=0
+  live="$(live_json)"
+  id="$(jq -r --arg n "$name" '[.[] | select(.name == $n)][0].id // ""' <<<"$live")"
+  [[ -n $id ]] || die "$name is not on"
+  target="$(jq -c --arg vre "$VIRTUAL_RE" '[.[] | select(.disabled != true and (.name | test($vre) | not) and ((.mirrorOf // "none") == "none"))]
+    | ([.[] | select(.focused == true)][0] // (sort_by(.x, .y) | .[0])) // empty' <<<"$live")"
+  [[ -n $target ]] || die "no real display is on"
+  ws="$(jq -r '.activeWorkspace | if (.id // 0) > 0 then (.id | tostring) else "name:" + .name end' <<<"$target")"
+  while IFS= read -r addr; do
+    [[ -n $addr ]] || continue
+    out="$(run_bounded hyprctl dispatch "hl.dsp.window.move({ workspace = \"$ws\", follow = false, window = \"address:$addr\" })" 2>&1)" || true
+    if [[ $out == ok* ]]; then moved=$(( moved + 1 )); else echo "omarchy-candela: window $addr did not move: ${out:-hyprctl failed}" >&2; fi
+  done < <(run_bounded hyprctl clients -j 2>/dev/null | jq -r --argjson id "$id" '.[] | select(.monitor == $id) | .address')
+  notify_shell
+  echo "moved $moved to $(jq -r .name <<<"$target")"
 }
 
 cmd_persist() {
