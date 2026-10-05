@@ -724,6 +724,29 @@ function chipsFor(name, homes, open, shownIds) {
   return chips
 }
 
+// With no plan, the chips say where the open workspaces are right now, so
+// the canvas shows what a plan would change before there is one.
+function openChipsFor(name, open, shownIds) {
+  var shown = shownIds || []
+  return (open || []).filter(function (w) { var id = Number(w.id); return id >= 1 && id <= 10 && w.monitor === name })
+    .map(function (w) {
+      var id = Number(w.id)
+      return { id: id, label: workspaceLabel(id), used: Number(w.windows) > 0, open: true, shown: shown.indexOf(id) !== -1, away: false, ghost: false, where: name }
+    })
+    .sort(function (a, b) { return a.id - b.id })
+}
+
+// Each display's homes as one line, displays left to right: "1–5 on DP-1 ·
+// 6–0 on DP-2". Displays that cannot be a home now (off, mirrored, gone)
+// follow the ones that can.
+function planLine(homes, rects) {
+  var by = {}
+  for (var k in (homes || {})) (by[homes[k]] = by[homes[k]] || []).push(Number(k))
+  var order = planOrder(rects)
+  Object.keys(by).sort().forEach(function (n) { if (order.indexOf(n) === -1) order.push(n) })
+  return order.filter(function (n) { return by[n] }).map(function (n) { return workspaceList(by[n]) + " on " + n }).join(" · ")
+}
+
 // A display set to mirror cannot be a home: its homes go to the display it
 // mirrors, in the same change.
 function rehomeFrom(homes, from, to) {
@@ -771,6 +794,6 @@ if (typeof module !== "undefined") {
     brightnessName: brightnessName, parseState: parseState, clamp: clamp, round2: round2,
     WORKSPACE_IDS: WORKSPACE_IDS, workspaceLabel: workspaceLabel, planOrder: planOrder, presetPlan: presetPlan, samePlanHomes: samePlanHomes,
     planKind: planKind, planKindLabel: planKindLabel, homesOn: homesOn, effectiveShows: effectiveShows, planMoves: planMoves, planSummary: planSummary,
-    chipsFor: chipsFor, rehomeFrom: rehomeFrom, workspaceChange: workspaceChange, workspaceList: workspaceList
+    chipsFor: chipsFor, rehomeFrom: rehomeFrom, workspaceChange: workspaceChange, workspaceList: workspaceList, openChipsFor: openChipsFor, planLine: planLine
   }
 }

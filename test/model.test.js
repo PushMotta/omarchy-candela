@@ -431,3 +431,13 @@ test("workspace lists read the way the keyboard numbers them", () => {
   assert.equal(M.workspaceList([1, 2, 4]), "1, 2, 4")
   assert.equal(M.workspaceList([]), "")
 })
+
+test("with no plan, chips show where the open workspaces are; the plan reads as one line", () => {
+  const open = [{ id: 2, monitor: "DP-2", windows: 1 }, { id: 1, monitor: "DP-1", windows: 4 }, { id: 4, monitor: "DP-2", windows: 0 }, { id: -98, monitor: "DP-1", windows: 1 }]
+  assert.deepEqual(M.openChipsFor("DP-2", open, [2]).map(c => [c.label, c.used, c.shown, c.away]), [["2", true, true, false], ["4", false, false, false]])
+  assert.deepEqual(M.openChipsFor("DP-1", open, [2]).map(c => c.label), ["1"], "special workspaces are not chips")
+  assert.equal(M.planLine(M.presetPlan("split", desk), desk), "1–5 on DP-1 · 6–0 on DP-2")
+  assert.equal(M.planLine(M.presetPlan("alternate", desk), desk), "1, 3, 5, 7, 9 on DP-1 · 2, 4, 6, 8, 0 on DP-2")
+  assert.equal(M.planLine({ "1": "DP-1", "6": "HDMI-A-1" }, desk), "1 on DP-1 · 6 on HDMI-A-1", "a home on a display not in the layout comes last")
+  assert.equal(M.planLine({}, desk), "")
+})

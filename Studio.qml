@@ -173,12 +173,18 @@ Item {
   }
   readonly property var planMovesNow: Model.planMoves(plan.homes, openWorkspaces, Model.planOrder(rects))
   readonly property var savedMovesNow: Model.planMoves(savedPlan.homes, openWorkspaces, Model.planOrder(rects))
+  // With a plan, each block carries the workspaces that live there; with
+  // none, the ones that are there now, so the canvas always shows them.
   readonly property var planChips: {
     var out = {}
-    if (!planOn) return out
-    for (var i = 0; i < displays.length; i++) out[displays[i].name] = Model.chipsFor(displays[i].name, plan.homes, openWorkspaces, shownWorkspaceIds)
+    for (var i = 0; i < displays.length; i++)
+      out[displays[i].name] = planOn ? Model.chipsFor(displays[i].name, plan.homes, openWorkspaces, shownWorkspaceIds)
+                                     : Model.openChipsFor(displays[i].name, openWorkspaces, shownWorkspaceIds)
     return out
   }
+  readonly property string planLine: planOn
+    ? Model.planLine(plan.homes, rects)
+    : "Workspaces open on whichever display has focus. The chips show where yours are now."
   readonly property string planNote: {
     var m = planMovesNow
     if (!m.length) return ""
@@ -203,13 +209,7 @@ Item {
   // edit to the pills is what makes a plan custom).
   function choosePlan(kind) {
     if (kind === "custom") {
-      if (planKind !== "off") return
-      var homes = {}, usable = Model.planOrder(rects)
-      for (var i = 0; i < openWorkspaces.length; i++) {
-        var w = openWorkspaces[i]
-        if (w.id <= 10 && usable.indexOf(w.monitor) !== -1) homes[String(w.id)] = w.monitor
-      }
-      setPlan(homes, {})
+      if (planKind === "off") setPlan(placementHomes(), {})
       return
     }
     setPlan(Model.presetPlan(kind, rects), {})
@@ -223,10 +223,21 @@ Item {
     setPlan(homes, copyMap(plan.shows))
   }
 
+  function placementHomes() {
+    var homes = {}, usable = Model.planOrder(rects)
+    for (var i = 0; i < openWorkspaces.length; i++) {
+      var w = openWorkspaces[i]
+      if (w.id <= 10 && usable.indexOf(w.monitor) !== -1) homes[String(w.id)] = w.monitor
+    }
+    return homes
+  }
+
+  // Dragging a chip with no plan starts one from where the open workspaces
+  // are, the way Custom does, so only the dragged one changes.
   function moveHome(id, name) {
     var target = displayByName(name)
     if (!target || mirrorOf(target)) return
-    var homes = copyMap(plan.homes)
+    var homes = planOn ? copyMap(plan.homes) : placementHomes()
     homes[String(id)] = name
     setPlan(homes, copyMap(plan.shows))
   }
@@ -537,7 +548,8 @@ Item {
   readonly property var keySections: [
     { title: "Everywhere", keys: [
       ["?", "this sheet"],
-      ["⇥  ⇧⇥", "canvas ⇄ inspector ⇄ actions"],
+      ["⇥  ⇧⇥", "canvas ⇄ workspaces ⇄ inspector ⇄ actions"],
+      ["w", "the workspace plan, under the canvas"],
       ["1–9  [ ]", "select a display"],
       ["a", "apply the draft"],
       ["r", "discard the draft, or revert a pending change"],
@@ -558,6 +570,10 @@ Item {
       ["⌫", "reset its position"],
       ["drag with ⌥", "move without snapping"],
       ["drag a workspace", "give it another home display"] ] },
+    { title: "Workspace plan", keys: [
+      ["h l", "Off, Split, Alternate"],
+      ["j", "into the selected display's homes"],
+      ["⌫", "put the plan back to what is kept"] ] },
     { title: "Actions and countdown", keys: [
       ["h l", "choose a button"],
       ["↵", "press it; Keep while a change is pending"],
@@ -571,7 +587,6 @@ Item {
       if (display && colourOf(display) === "hdr") list.push("sdrwhite")
       list.push("transfer", "icc")
     }
-    list.push("wsplan")
     if (planOn) {
       list.push("wshomes")
       if (display && Model.homesOn(plan.homes, display.name).length) list.push("wsshows")
@@ -627,11 +642,6 @@ Item {
         var m = [""].concat(displays.filter(function(o) { return o.name !== d.name }).map(function(o) { return o.name }))
         setMirror(d, cycle(m, mirrorOf(d), delta)); break
       }
-      case "wsplan": {
-        var kinds = ["off", "split", "alternate"]
-        if (planKind === "custom") kinds.push("custom")
-        choosePlan(cycle(kinds, planKind, delta)); break
-      }
       case "wshomes": wsPillIndex = Math.max(0, Math.min(Model.WORKSPACE_IDS.length - 1, wsPillIndex + delta)); break
       case "wsshows": {
         var homes = Model.homesOn(plan.homes, d.name).map(String)
@@ -659,6 +669,12 @@ Item {
       case "capwide": setField(d.name, "supports_wide_color", cycle([0, 1, -1], capOf(d, "supports_wide_color"), delta)); reconcileColour(d); break
       case "autohdr": setGlobal("cm_auto_hdr", cycle([0, 1, 2], autoHdrOf(), delta)); break
     }
+  }
+
+  function cyclePlan(delta) {
+    var kinds = ["off", "split", "alternate"]
+    if (planKind === "custom") kinds.push("custom")
+    choosePlan(cycle(kinds, planKind, delta))
   }
 
   function adjustLum(d, key, delta, floor) {
@@ -727,10 +743,12 @@ Item {
     if (k === Qt.Key_Backspace || k === Qt.Key_Delete) {
       if (focusArea === "inspector") resetRow(currentRow)
       else if (focusArea === "canvas") resetRow("posx")
+      else if (focusArea === "workspaces") { if (!applyInFlight) draftPlan = undefined }
       return true
     }
+    if (k === Qt.Key_W) { focusArea = "workspaces"; return true }
     if (k === Qt.Key_Tab || k === Qt.Key_Backtab) {
-      var order = ["canvas", "inspector", "actions"]
+      var order = ["canvas", "workspaces", "inspector", "actions"]
       var i = order.indexOf(focusArea)
       focusArea = order[(i + (k === Qt.Key_Backtab ? -1 : 1) + order.length) % order.length]
       return true
@@ -775,6 +793,13 @@ Item {
       if (right) { canvas.nudge(step, 0); return true }
       if (up) { canvas.nudge(0, -step); return true }
       if (down) { canvas.nudge(0, step); return true }
+      return false
+    }
+    if (focusArea === "workspaces") {
+      if (left) { cyclePlan(-1); return true }
+      if (right) { cyclePlan(1); return true }
+      if (down) { focusArea = "inspector"; if (planOn) currentRow = "wshomes"; return true }
+      if (up) { focusArea = "canvas"; return true }
       return false
     }
     if (focusArea === "actions") {
@@ -938,10 +963,80 @@ Item {
             // controls — the point of the tool — off the bottom of the card.
             // It holds no InspectorRow, so the keyboard's row order is
             // untouched by living here.
+            // ----- the workspace plan, under the picture of the desk
+            //
+            // A plan is about the whole desk, so it sits with the canvas
+            // rather than in the inspector, which describes one display;
+            // there it was the last row of a long column and easy to miss.
+            CursorSurface {
+              id: workspaceStrip
+              anchors.left: parent.left
+              anchors.right: canvas.right
+              anchors.top: canvas.bottom
+              anchors.topMargin: Style.spacing.panelGap
+              height: stripColumn.implicitHeight + Style.spacing.md * 2
+              hasCursor: root.focusArea === "workspaces"
+              foreground: root.foreground
+              accent: root.accent
+
+              // The changed mark, as on an inspector row: click it or ⌫ to put
+              // the plan back to what is kept.
+              Rectangle {
+                visible: root.planDirty
+                width: Math.max(2, Style.space(2))
+                radius: width / 2
+                x: Math.round((Style.spacing.md - width) / 2)
+                anchors.top: parent.top; anchors.bottom: parent.bottom
+                anchors.topMargin: Style.spacing.md; anchors.bottomMargin: Style.spacing.md
+                color: root.accent
+              }
+              MouseArea {
+                visible: root.planDirty && !root.applyInFlight
+                width: Style.spacing.md
+                height: parent.height
+                cursorShape: Qt.PointingHandCursor
+                onClicked: { root.focusArea = "workspaces"; root.draftPlan = undefined }
+              }
+
+              Column {
+                id: stripColumn
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.spacing.md
+                spacing: Style.spacing.md
+                Item {
+                  width: parent.width
+                  implicitHeight: Math.max(stripHeader.implicitHeight, stripGroup.implicitHeight)
+                  PanelSectionHeader { id: stripHeader; text: "WORKSPACES"; foreground: root.foreground; fontFamily: root.fontFamily; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter }
+                  ButtonGroup {
+                    id: stripGroup
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    options: [{ value: "off", label: "Off" }, { value: "split", label: "Split" }, { value: "alternate", label: "Alternate" }, { value: "custom", label: "Custom" }]
+                    value: root.planKind
+                    foreground: root.foreground; background: root.background; accent: root.accent; fontFamily: root.fontFamily
+                    focusable: false
+                    onChanged: function(v) { root.choosePlan(v) }
+                    onHovered: function(i, h) { if (h) root.focusArea = "workspaces" }
+                  }
+                }
+                Text {
+                  textFormat: Text.PlainText
+                  text: root.planLine
+                  color: root.planOn ? root.foreground : root.dim
+                  font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: root.planOn
+                  wrapMode: Text.WordWrap
+                  width: parent.width
+                }
+              }
+              HoverHandler { onHoveredChanged: if (hovered) root.focusArea = "workspaces" }
+            }
+
             Column {
               id: panelInfo
               anchors.left: parent.left
-              anchors.top: canvas.bottom
+              anchors.top: workspaceStrip.bottom
               anchors.topMargin: Style.spacing.panelGap
               anchors.right: canvas.right
               // Bounded and clipped: on a card short enough that the canvas
@@ -1321,32 +1416,10 @@ Item {
                   }
                 }
 
-                // ----- workspaces
-                PanelSeparator { foreground: root.foreground }
-                PanelSectionHeader { id: workspacesHeader; text: "WORKSPACES"; foreground: root.foreground; fontFamily: root.fontFamily }
-
-                InspectorRow {
-                  rowId: "wsplan"
-                  Column {
-                    width: parent.width; spacing: Style.spacing.labelGap
-                    RowLabel { text: "Plan" }
-                    ButtonGroup {
-                      options: [{ value: "off", label: "Off" }, { value: "split", label: "Split" }, { value: "alternate", label: "Alternate" }, { value: "custom", label: "Custom" }]
-                      value: root.planKind
-                      foreground: root.foreground; background: root.background; accent: root.accent; fontFamily: root.fontFamily
-                      focusable: false
-                      onChanged: function(v) { root.choosePlan(v) }
-                      onHovered: function(i, h) { if (h) { root.focusArea = "inspector"; root.currentRow = "wsplan" } }
-                    }
-                    Text {
-                      textFormat: Text.PlainText
-                      text: root.planOn
-                        ? "Each workspace has a home display. SUPER+N opens it there, and a display that connects takes its workspaces back."
-                        : "Workspaces open on whichever display has focus, as Omarchy does by default."
-                      color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width
-                    }
-                  }
-                }
+                // ----- workspaces: the selected display's share of the plan.
+                // The plan itself is the strip under the canvas.
+                PanelSeparator { visible: workspacesHeader.visible; foreground: root.foreground }
+                PanelSectionHeader { id: workspacesHeader; visible: root.planOn || (!root.planDirty && root.savedMovesNow.length > 0); text: "WORKSPACES"; foreground: root.foreground; fontFamily: root.fontFamily }
 
                 InspectorRow {
                   rowId: "wshomes"
@@ -1664,7 +1737,7 @@ Item {
               // Non-breaking spaces inside each pair: the strip wraps at the
               // separators, never between a key and what it does.
               text: ["?\u00A0all\u00A0keys"].concat(root.focusArea === "inspector" && root.rowChanged(root.currentRow) ? ["⌫\u00A0reset\u00A0row"] : []).concat(["j/k\u00A0rows", "h/l\u00A0adjust",
-                     "⇥ canvas ⇄ inspector ⇄ actions",
+                     "⇥ canvas ⇄ workspaces ⇄ inspector ⇄ actions", "w\u00A0workspaces",
                      "arrows nudge 10 px, ⇧ 100, ⌥ flush beside",
                      "0\u00A0origin", "1–9\u00A0[\u00A0]\u00A0select",
                      "a\u00A0apply", "r\u00A0" + (root.draftDirty ? "discard" : "revert"),

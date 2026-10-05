@@ -426,8 +426,8 @@ Item {
             id: chip
             required property var modelData
             readonly property bool dashed: modelData.away || modelData.ghost
-            width: Style.space(20)
-            height: Style.space(20)
+            width: Style.space(24)
+            height: Style.space(24)
             // Here now but living elsewhere: drawn faintly where it is.
             opacity: modelData.ghost ? 0.55 : 1
 
@@ -461,7 +461,7 @@ Item {
               text: chip.modelData.label
               color: chip.modelData.used || chip.modelData.away ? root.foreground : Qt.darker(root.foreground, 1.4)
               font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
+              font.pixelSize: Style.font.bodySmall
               font.bold: true
             }
             // On screen now.

@@ -161,7 +161,8 @@ added them. No file outside those paths is ever written.
 |---|---|---|
 | j / k, ↓ / ↑ | next / previous row | next / previous inspector row |
 | h / l, ← / → | adjust slider, walk pills | adjust the current row; on the canvas nudge 10 px (⇧ 100) |
-| Tab | switch bar panel | canvas ⇄ inspector ⇄ actions |
+| Tab | switch bar panel | canvas ⇄ workspaces ⇄ inspector ⇄ actions |
+| w | — | the workspace plan, under the canvas |
 | 1–9 | — | select display |
 | [ / ] | — | previous / next display |
 | ⌥ + arrows | — | on the canvas: flush against the nearest display on that side, centred |
@@ -201,18 +202,22 @@ change like every other field and needs `a` to apply.
 
 ## Workspaces
 
-Omarchy opens a workspace on whichever display has focus. The studio's
-Workspaces section gives each workspace from 1 to 10 a home display instead:
+Omarchy opens a workspace on whichever display has focus. In the studio, the
+Workspaces strip under the canvas gives each workspace from 1 to 10 a home
+display instead (`w` goes straight to it):
 
 - **Plan**: `Off` (the default: nothing is written and nothing moves),
   `Split` (contiguous runs, left to right: 1–5 and 6–0 on two displays),
-  `Alternate` (odd and even), or `Custom` (any edit to the pills).
-- **Lives on**: one pill per workspace, numbered as on the keyboard. ↵ or a
-  click makes the selected display its home, or clears it. Each block on the
-  canvas carries chips for the workspaces that live there; dragging a chip to
-  another block gives it that home.
-- **Shows when it lights up**: the workspace a display shows when it connects
-  or is switched on; by default its lowest-numbered one.
+  `Alternate` (odd and even), or `Custom` (any other arrangement). The line
+  under it reads the plan back, display by display.
+- **Chips** on each block of the canvas: with a plan, the workspaces that live
+  on that display; with none, the ones that are open there now. Dragging a
+  chip to another block gives it that home.
+- **Lives on** and **Shows when it lights up**, in the inspector for the
+  selected display: one pill per workspace, numbered as on the keyboard (↵ or
+  a click makes this display its home, or clears it), and the workspace the
+  display shows when it connects or is switched on, by default its
+  lowest-numbered one.
 
 What it does, as Hyprland 0.56 behaves:
 

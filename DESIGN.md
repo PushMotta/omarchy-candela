@@ -291,7 +291,7 @@ Design review 02 (5 October 2026, source `design/workspace-planner-review.html`)
 4. **No persistent workspaces.** Each display's lowest-numbered home (or its chosen one) gets `default = true`. With a home set, SUPER+N already opens in the right place; persistent empty workspaces would add stops to SUPER+TAB and the bar cannot show them.
 5. **A workspace-only change has no countdown.** Nothing in a plan can blank a screen. It is kept at once, and `revert` undoes it once (plan and placement) until anything else is applied. A change that also touches a display keeps the countdown for everything.
 6. **Applying a plan moves open workspaces home**, the inspector naming every move first.
-7. **An inspector section after Colour, plus chips on the canvas.** The popup is unchanged.
+7. **Chips on the canvas, and the plan in a strip under it** (revised 5 Oct after Pedro's first hands-on: as the last section of the inspector, after Colour, it was below the fold and easy to miss, and with the plan off the canvas showed nothing). The strip holds `Off · Split · Alternate · Custom` and a line reading the plan back; `w` goes to it, and it sits in the Tab order between canvas and inspector. With no plan, the chips show where the open workspaces are now. The inspector keeps the selected display's rows (Lives on, Shows, Send home). The popup is unchanged.
 8. **1.2 = the planner + rules kept for unplugged displays (§6.3) + `FALLBACK` (§6.5) + text size (§3.1).**
 
 ### 11.2 How Hyprland 0.56.2 treats workspaces
@@ -317,7 +317,7 @@ Read in the v0.56.2 source (`src/`), and exercised against the test compositor; 
 
 ### 11.4 Studio
 
-The plan's draft is one object (`draftPlan`), not per-display fields; the changed-row mark covers all three rows, and ⌫ on any of them drops the plan draft. Live workspace positions come from Quickshell's Hyprland module, so chips follow a workspace moved by hand while the studio is open. Choosing Custom from Off starts from where the open workspaces are; from a preset it changes nothing. Setting a mirror moves that display's homes to the display it mirrors in the same draft.
+The plan's draft is one object (`draftPlan`), not per-display fields; the strip and the inspector's workspace rows share one changed mark, and ⌫ on any of them drops the plan draft. Dragging a chip with no plan starts a custom plan from where the open workspaces are, so only the dragged one changes. Live workspace positions come from Quickshell's Hyprland module, so chips follow a workspace moved by hand while the studio is open. Choosing Custom from Off starts from where the open workspaces are; from a preset it changes nothing. Setting a mirror moves that display's homes to the display it mirrors in the same draft.
 
 ### 11.5 What is verified
 
