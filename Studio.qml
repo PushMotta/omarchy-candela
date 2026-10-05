@@ -553,7 +553,7 @@ Item {
   property int chooserIndex: 1
   readonly property var virtualUses: [
     { use: "extra", title: "Extra screen", caption: "Use a tablet or another computer as one more screen. It sits beside your displays, so the mouse and windows move onto it. You see it on that device, which needs a VNC viewer app: RealVNC Viewer is free for iPad, Android, Mac and Windows." },
-    { use: "stage", title: "Stage", caption: "A screen of an exact size, 1920×1080 to start, to share in a call or record. Pick it in the call's screen picker and watch it in Candela's window. It sits apart, out of the mouse's way. Nothing to install." },
+    { use: "stage", title: "Stage", caption: "A screen of an exact size, 1920×1080 to start, to share in a call or record. Choose it in the screen-share picker and watch it in Candela's window; Omarchy's own screen recording only sees it with its portal setting on. It sits apart, out of the mouse's way." },
     { use: "bench", title: "Test bench", caption: "See an app at a size or on a device you don't have: pick the device, watch it in Candela's window, and move the mouse onto it to use it. Nothing to install." } ]
   property string removeArmedFor: ""
   Timer { id: removeArm; interval: 4000; onTriggered: root.removeArmedFor = "" }

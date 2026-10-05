@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.pushmotta.candela",
   "name": "Candela",
-  "version": "1.1.1",
+  "version": "1.3.0",
   "author": "Pedro Motta",
   "license": "MIT",
-  "description": "Displays at their real capabilities: arrangement, HDR and wide gamut gated by the panel's EDID, SDR white in cd/m², and a safe apply that reverts itself.",
+  "description": "Displays at their real capabilities: arrangement, HDR and wide gamut gated by the panel's EDID, SDR white in cd/m², a safe apply that reverts itself, a home display for each workspace, and virtual displays for a tablet, a call or a test.",
   "kinds": [
     "bar-widget",
     "overlay",

@@ -38,12 +38,14 @@ The design and the reasoning behind it live in [DESIGN.md](DESIGN.md).
 
 ## What it looks like
 
-The studio: arrangement canvas top left, the panel's identity and its gamut
-underneath, the inspector on the right, keyboard hints and the apply bar along
-the bottom. The blocks on the canvas carry your own wallpaper, so the
-arrangement is a picture of the desk rather than a diagram of it.
+The studio: arrangement canvas top left, the workspace plan under it, the
+panel's identity and its gamut below, the inspector on the right, keyboard
+hints and the apply bar along the bottom. The blocks on the canvas carry your
+own wallpaper, so the arrangement is a picture of the desk rather than a
+diagram of it; the chips on each block are the workspaces that live there,
+and the dashed block is a virtual display.
 
-![The Candela studio, showing two MateView panels arranged side by side with the inspector open on DP-1](docs/media/studio.png)
+![The Candela studio: two MateView panels side by side with workspaces 1, 3, 5, 7, 9 on DP-1 and 2, 4, 6, 8, 0 on DP-2, a dashed virtual display beside them, and the inspector open on DP-1](docs/media/studio.png)
 
 The bar popup, for what you change often. `SDR · Wide · HDR` is gated by what
 the panel actually reports, and the line under it says what the compositor is
@@ -257,6 +259,8 @@ from there; everything stays editable afterwards. All three are the same
 kind of display, a screen that exists only in Hyprland; they differ in where
 they sit and how you see them.
 
+![Adding a virtual display: the studio asks what it is for, Extra screen, Stage or Test bench, each with what it needs](docs/media/virtual-chooser.png)
+
 | For | What it is for | Starts as | Placed | You see it |
 |---|---|---|---|---|
 | Extra screen | a tablet or another computer as one more screen | an iPad Pro 12.9″, 2732×2048 at 2× | beside your rightmost display | on that device, which needs a VNC viewer app |
@@ -272,8 +276,21 @@ connect to.
 
 The size is chosen from *Device or size*, a searchable list of tablets,
 laptops and common sizes (each device's native resolution and the scale that
-keeps its interface the size it is on the device), or *Custom size*.
-*Orientation* swaps the sides for portrait.
+keeps its interface the size it is on the device), or *Custom size*. The
+device you pick is remembered, so one of several that share a size (an iPad
+Air 13″ and an iPad Pro 12.9″, say) is still shown as itself.
+*Orientation* swaps the sides for portrait. *Name* is yours to choose; it
+also names the workspace the display opens on, and renaming it renames that
+workspace.
+
+![The inspector for a virtual display named iPad: its name and workspace, the iPad Pro 12.9″ chosen from Device or size, orientation, refresh, scale and placement](docs/media/virtual.png)
+
+**When nobody is looking at it.** An extra screen beside your displays is
+still there when no tablet is connected, and the pointer and windows can
+wander onto it. When it is neither in Candela's window nor connected over
+the network, the studio says so with how many windows are on it, *Bring them
+here* moves them to the display you are using, and the popup tags it
+"no viewer". (A call sharing it is not something Candela can see.)
 
 **Removing one.** Switching a virtual display off keeps it, ready to switch
 back on. To remove it, press *Remove* next to its name, the × on its block in
@@ -317,8 +334,12 @@ You see a virtual display in two ways:
   watch-only over the network: input there could leave your pointer on a
   screen you cannot see, out of the mouse's reach. Placed beside, viewers can
   use it.
-- **In a call**: the screen-share picker lists virtual displays like any
-  other, so a stage is shared by choosing it there.
+- **In a call or a recording**: the screen-share picker lists virtual
+  displays like any other, so a stage is shared by choosing it there, and
+  recorders that use the picker offer it too. `wf-recorder -o VIRTUAL-2`
+  records one at its exact size. Omarchy's own screen recording reads the
+  graphics card's outputs, which a virtual display is not: set
+  `OMARCHY_SCREENRECORD_USE_PORTAL=true` for it to use the picker instead.
 
 A network viewer shares your keyboard focus: Super shortcuts typed on a tablet act on
 the whole desktop, and locking the session locks the virtual display too.
@@ -357,7 +378,9 @@ omarchy-candela virtual add stage|extra|bench [--size 1920x1080] [--scale 1] [--
 omarchy-candela virtual view VIRTUAL-1 window on|off
 omarchy-candela virtual view VIRTUAL-1 network on|off [--address 192.168.1.89] [--port 5901] [--at-login yes|no]
 omarchy-candela virtual secret VIRTUAL-1         # the username and password, as JSON
+omarchy-candela virtual gather VIRTUAL-1         # bring every window on it to the display you are using
 omarchy-candela virtual remove VIRTUAL-1
+omarchy-candela apply '{"virtual":{"VIRTUAL-1":{"label":"iPad","device":"ipad-pro-12-9"}}}'   # rename it, remember its device
 omarchy-candela virtual install                  # wayvnc, through Omarchy's installer, in a terminal
 ```
 
