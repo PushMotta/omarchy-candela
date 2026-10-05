@@ -337,7 +337,7 @@ Design review 03 (5 October 2026, source `design/virtual-displays-review.html`) 
 6. **The parking guard**: on `monitorremoved` the service runs `virtual guard`, which moves any workspace on a virtual display that neither is its own nor lives there by plan to the leftmost real display.
 7. **Network viewing is Candela's own wayvnc**: RSA-AES, username `candela`, a generated 16-character password and an RSA key (`ssh-keygen -m pem`), both kept 0600; one LAN address chosen from the machine's own (never loopback, a container or VM bridge, or every interface); port 5900+n; off after each login unless asked for at login.
 8. **macOS Screen Sharing is refused**, with the reason shown: it only connects unencrypted.
-9. **The local viewer** is the first of wlvncc, gvncviewer, vncviewer, opened on a wayvnc Unix socket in `$XDG_RUNTIME_DIR/omarchy-candela` (0700) with authentication off and no address.
+9. **The local viewer** is the first of wlvncc and TigerVNC (`vncviewer -RemoteResize=0`), opened on a wayvnc Unix socket in `$XDG_RUNTIME_DIR/omarchy-candela` (0700) with authentication off and no address. *Revised on the desk, 5 October:* gvncviewer, in the approved list, always asks the server to resize to its window; with wayvnc's resizing off, neatvnc half-accepts that request and the next frame falls outside the size the client was told, so gvncviewer disconnects at once. remote-viewer cannot open a Unix socket.
 10. **1.3**, after 1.2, with the desk probe first.
 
 ### 12.2 What wayvnc and Hyprland do
@@ -349,7 +349,7 @@ Design review 03 (5 October 2026, source `design/virtual-displays-review.html`) 
 - With authentication off wayvnc offers no security at all; with it, RSA-AES with a username and password needs only a key file (neatvnc `src/server.c:302-325`, wayvnc `src/main.c:1566-1588`). The neatvnc Arch ships lacks two fixes: Apple DH aborts and a WebSocket client crashes it before authentication (neatvnc #170), so `relax_encryption` and `ws:` are never used.
 - wayvnc's pointer is bound to the display it serves and Hyprland maps it there; the keyboard is shared (Hyprland `src/devices/VirtualPointer.cpp:43`).
 - `--gpu` is never passed: no VAAPI encoder on the desk's NVIDIA cards, and open crash reports.
-- Each wayvnc gets a config of its own (`-C`), so `~/.config/wayvnc/config` never applies, and `-R` turns off client-driven resizing (which hard-codes position 0,0 on headless outputs named `HEADLESS-*`).
+- Each wayvnc gets a config of its own (`-C`), so `~/.config/wayvnc/config` never applies, and `-R` turns off client-driven resizing. Without it, wayvnc 0.10.1 resizes *any* output to the client's window and moves it to 0,0 (`src/output-management.c:366-377`); the `HEADLESS-` name check there only feeds a log line (`src/main.c:776-811`).
 
 ### 12.3 What is verified
 

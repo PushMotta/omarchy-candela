@@ -1211,14 +1211,27 @@ need_wayvnc() {
   command -v wayvnc >/dev/null 2>&1 || die "wayvnc is not installed: install the wayvnc package to see virtual displays"
 }
 
-# The first VNC viewer that can open a Unix socket by its path: wlvncc
-# (native Wayland), gvncviewer (gtk-vnc), vncviewer (TigerVNC).
+# The first VNC viewer that opens a Unix socket by its path and never asks
+# the server to resize: wlvncc (native Wayland) only follows the server's
+# size, and TigerVNC is told not to ask. A virtual display keeps the size it
+# was given, and wayvnc runs with resizing off (-R), because with it on it
+# would resize the output to the viewer's window and move it to 0,0; but
+# then neatvnc half-accepts a client's resize request and the next frame
+# lands outside the size the client was told. gvncviewer always asks, so it
+# is not offered (seen on the desk, 5 October 2026).
 virtual_viewer() {
   local v
-  for v in wlvncc gvncviewer vncviewer; do
+  for v in wlvncc vncviewer; do
     command -v "$v" >/dev/null 2>&1 && { echo "$v"; return 0; }
   done
   return 1
+}
+
+virtual_viewer_command() {
+  case "$1" in
+    vncviewer) printf '%s\n' vncviewer -RemoteResize=0 "$2" ;;
+    *) printf '%s\n' "$1" "$2" ;;
+  esac
 }
 
 # Run a command as a transient user unit, replacing one of the same name;
@@ -1318,7 +1331,7 @@ virtual_view_window() {
     return 0
   fi
   need_wayvnc
-  viewer="$(virtual_viewer)" || die "no VNC viewer to show it in a window. Install the gtk-vnc (gvncviewer) or tigervnc package"
+  viewer="$(virtual_viewer)" || die "no VNC viewer to show it in a window: install the tigervnc package (or wlvncc from the AUR)"
   run="$(virtual_run_dir)"
   mkdir -p "$run" && chmod 700 "$run"
   sock="$run/$name.vnc"; ctl="$run/$name-window.ctl"
@@ -1328,7 +1341,9 @@ virtual_view_window() {
   rm -f -- "$sock"
   spawn_unit "$(virtual_unit "$name" window)" wayvnc -C "$conf" -o "$name" -S "$ctl" -R "unix:$sock"
   wait_for_socket "$sock" || die "wayvnc did not start for $name: journalctl --user -u $(virtual_unit "$name" window)"
-  spawn_unit "$(virtual_unit "$name" viewer)" "$viewer" "$sock"
+  local -a viewer_cmd
+  mapfile -t viewer_cmd < <(virtual_viewer_command "$viewer" "$sock")
+  spawn_unit "$(virtual_unit "$name" viewer)" "${viewer_cmd[@]}"
 }
 
 virtual_view_network() {

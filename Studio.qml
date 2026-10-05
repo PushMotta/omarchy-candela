@@ -564,7 +564,7 @@ Item {
   }
   function virtualViewCaption() {
     if (!virtualState.wayvnc) return "Needs wayvnc: install the wayvnc package"
-    if (!virtualState.viewer) return "Needs a VNC viewer: install the gtk-vnc or tigervnc package"
+    if (!virtualState.viewer) return "Needs a VNC viewer: install the tigervnc package (or wlvncc from the AUR)"
     return "In " + virtualState.viewer + " · a private socket, nothing on the network"
   }
 

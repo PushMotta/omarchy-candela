@@ -595,7 +595,7 @@ assert_eq "$(jq -c '.virtual["VIRTUAL-1"]' "$sandbox2/state/intent.json")" '{"la
 state="$(run_cli "$sandbox2" state)"
 assert_eq "$(jq -r '.displays[] | select(.name == "VIRTUAL-1") | .virtual' <<<"$state")" "true" "state marks it virtual"
 assert_eq "$(jq -r '.virtual.displays["VIRTUAL-1"].workspace' <<<"$state")" "stage" "state names its workspace"
-assert_eq "$(jq -r '.virtual.viewer' <<<"$state")" "gvncviewer" "state names the viewer it would use"
+assert_eq "$(jq -r '.virtual.viewer' <<<"$state")" "vncviewer" "state names the viewer it would use"
 assert_eq "$(jq -c '[.virtual.addresses[].address]' <<<"$state")" '["192.168.1.89"]' "only LAN addresses are offered, not loopback or the VM bridge"
 pass "a virtual display is added apart, on its own workspace, without a countdown"
 
@@ -614,7 +614,7 @@ pass "a virtual display survives reloads and is recreated at start"
 assert_eq "$(run_cli "$sandbox2" virtual view VIRTUAL-1 window on)" "VIRTUAL-1 window on" "window view starts"
 log="$(cat "$sandbox2/systemd-run.log")"
 assert_contains "$log" "--unit=omarchy-candela-window-VIRTUAL-1 -- wayvnc -C $sandbox2/state/virtual/VIRTUAL-1/window.conf -o VIRTUAL-1 -S $sandbox2/runtime/omarchy-candela/VIRTUAL-1-window.ctl -R unix:$sandbox2/runtime/omarchy-candela/VIRTUAL-1.vnc" "the window server listens on a socket only, with its own config"
-assert_contains "$log" "--unit=omarchy-candela-viewer-VIRTUAL-1 -- gvncviewer $sandbox2/runtime/omarchy-candela/VIRTUAL-1.vnc" "the viewer opens that socket"
+assert_contains "$log" "--unit=omarchy-candela-viewer-VIRTUAL-1 -- vncviewer -RemoteResize=0 $sandbox2/runtime/omarchy-candela/VIRTUAL-1.vnc" "the viewer opens that socket and never asks to resize"
 assert_eq "$(cat "$sandbox2/state/virtual/VIRTUAL-1/window.conf")" "enable_auth=false" "no address in the window config, so nothing on the network"
 assert_eq "$(stat -c %a "$sandbox2/runtime/omarchy-candela")" "700" "the socket's directory is the user's alone"
 if run_cli "$sandbox2" virtual view VIRTUAL-1 network on --address 0.0.0.0 2>/dev/null; then fail "every interface at once is refused"; fi

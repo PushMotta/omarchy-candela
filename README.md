@@ -276,9 +276,11 @@ You see a virtual display through [wayvnc](https://github.com/any1/wayvnc),
 which Candela never installs for you: install the `wayvnc` package yourself.
 
 - **In a window on this desk**: a wayvnc server on a socket in your runtime
-  directory, which only you can open, shown in the first viewer found
-  (wlvncc, gvncviewer from gtk-vnc, or TigerVNC). Nothing listens on the
-  network. Input works, so this is also how you use a test bench.
+  directory, which only you can open, shown in the first viewer found that
+  never asks to resize it: wlvncc (from the AUR) or TigerVNC (the
+  `tigervnc` package). Nothing listens on the network. Input works, so this
+  is also how you use a test bench. gvncviewer is not used: it always asks
+  the server to resize, which a virtual display of a fixed size cannot do.
 - **On the network**: a second server on one LAN address you choose, never
   every interface, behind the username `candela` and a generated password,
   with RSA-AES encryption and a key Candela keeps so its fingerprint does

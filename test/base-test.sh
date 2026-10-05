@@ -88,7 +88,7 @@ echo "\$*" >> "$dir/wayvncctl.log"
 case "\$*" in *client-list*) echo '[{"id":"7","address":"192.168.1.40"}]' ;; esac
 exit 0
 EOF
-  cat > "$dir/bin/gvncviewer" <<'EOF'
+  cat > "$dir/bin/vncviewer" <<'EOF'
 #!/bin/bash
 exit 0
 EOF
