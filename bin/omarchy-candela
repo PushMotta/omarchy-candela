@@ -253,7 +253,7 @@ edid_for() {
 # value is checked against what hl.monitor accepts.
 merge_intent() {
   local intent="$1" change="$2"
-  jq -n --argjson intent "$intent" --argjson change "$change" '
+  jq -n --argjson intent "$intent" --argjson change "$change" --arg vre "$VIRTUAL_RE" '
     def fail(msg): error("invalid change: " + msg);
     def is_name: type == "string" and test("^[A-Za-z0-9._-]+$");
     def check_display(d):
@@ -279,6 +279,14 @@ merge_intent() {
             elif ($k == "supports_hdr" or $k == "supports_wide_color") then (if $v == -1 or $v == 0 or $v == 1 then . else fail($k) end)
             else fail("unknown key " + $k) end
         ) | from_entries) as $fields
+      # A virtual display has no panel: it is SDR, since nothing that shows
+      # it (VNC, the preview window, a call) carries HDR or wide colour, and
+      # it cannot mirror or be mirrored into a capture. Only its geometry.
+      | (if ($name | test($vre)) then
+           (($fields | keys) - ["mode","position","scale","transform","enabled"] | first) as $k
+           | if $k != null then fail($name + " is a virtual display: it is SDR, since nothing that shows it carries HDR or wide colour, so " + $k + " cannot be set; only its size, refresh, scale, rotation, position and whether it is on")
+             else . end
+         else . end)
       | {name: $name, fields: $fields};
     def check_global(g):
       (g // {}) | to_entries | map(

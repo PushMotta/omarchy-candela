@@ -329,6 +329,7 @@ Design review 03 (5 October 2026, source `design/virtual-displays-review.html`) 
 
 ### 12.1 Decisions
 
+0. **SDR only, enforced.** A virtual display takes only `mode`, `position`, `scale`, `transform` and `enabled`; `merge_intent` refuses colour, VRR, mirror and ICC fields for it, with the reason: nothing that shows it carries HDR or wide colour (RFB sends RGB with no transfer function or primaries, wayvnc and RealVNC are 8 bits per channel, the preview is an SDR texture). The studio already hid those controls; the CLI now agrees. *(5 October.)*
 1. **Names** `VIRTUAL-n`, with a label ("Stage") beside them. Hyprland keeps a name given to `output create headless`, so rules and screen-share pickers see a stable, plain one.
 2. **Recreated when the shell starts** (`virtual restore` from the service), since Hyprland forgets them on restart.
 3. **Placement per display, Beside or Apart**, the use choosing the default: an extra screen and a test bench beside, a stage apart (`VIRTUAL_GAP` = 320 logical px past the desk). Beside tries right of the rightmost real display, then below it, then left of the leftmost, taking the first free place. *Test bench revised to beside on 5 October, with the pointer rule below.*

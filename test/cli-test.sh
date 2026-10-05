@@ -700,6 +700,11 @@ if run_cli "$sandbox2" virtual add stage 2>/dev/null; then fail "nothing is adde
 run_cli "$sandbox2" revert >/dev/null
 out="$(run_cli "$sandbox2" apply '{"displays":[{"name":"VIRTUAL-2","mode":"1920x1080@60"}]}')"
 assert_eq "$out" "kept" "resizing a virtual display needs no countdown"
+if out="$(run_cli "$sandbox2" apply '{"displays":[{"name":"VIRTUAL-2","cm":"hdr","bitdepth":10}]}' 2>&1)"; then fail "HDR on a virtual display is refused"; fi
+assert_contains "$out" "VIRTUAL-2 is a virtual display: it is SDR, since nothing that shows it carries HDR or wide colour" "and the refusal says why"
+for field in '"bitdepth":10' '"cm":"wide"' '"supports_hdr":1' '"icc":"/x.icc"' '"vrr":1' '"mirror":"DP-1"' '"sdr_max_luminance":203'; do
+  if run_cli "$sandbox2" apply '{"displays":[{"name":"VIRTUAL-2",'"$field"'}]}' 2>/dev/null; then fail "a virtual display refuses $field"; fi
+done
 pass "virtual displays are validated, and a real display is never removed"
 
 # ---- install: Omarchy's installer, in a terminal, only when missing
