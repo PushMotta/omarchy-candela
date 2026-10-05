@@ -1128,8 +1128,12 @@ cmd_apply() {
     cmd_keep
     if (( at_once )) && [[ ${CANDELA_NO_UNDO:-} != 1 ]]; then
       write_undo "$previous" "$ws_before" "$(jq -r '
-        [ (.displays // [] | map(.name) | unique | if length > 0 then "changing " + join(" and ") else empty end),
-          (if has("workspaces") then "the workspace plan" else empty end) ] | join(" and ")' <<<"$change")"
+        (.virtual // {}) as $v | (.displays // [] | map(.name)) as $d
+        | [ ($d + ($v | keys) | unique)[] as $n
+            | ([$d[] | select(. == $n)] | length > 0 or ($v[$n] // {} | has("device"))) as $changed
+            | ($v[$n] // {} | has("label")) as $renamed
+            | if $changed and $renamed then "changing and renaming " + $n elif $renamed then "renaming " + $n else "changing " + $n end ]
+        + (if has("workspaces") then ["the workspace plan"] else [] end) | join(" and ")' <<<"$change")"
     fi
     rename_virtual_workspaces "$previous" "$(intent_json)"
     # Moving a display that is on the network can move it beside or apart,

@@ -352,6 +352,7 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
           }
           Text {
+            id: nameText
             textFormat: Text.PlainText
             text: block.disp.name
             color: root.foreground
@@ -360,7 +361,10 @@ Item {
             font.bold: true
           }
           BorderSurface {
-            visible: block.disp.hdr || block.disp.disabled || block.disp.virtual === true || (block.disp.mirrorOf && block.disp.mirrorOf !== "")
+            // Only where it fits beside the name: on a narrow block it would
+            // run over the block's edge.
+            visible: (block.disp.hdr || block.disp.disabled || block.disp.virtual === true || (block.disp.mirrorOf && block.disp.mirrorOf !== ""))
+              && nameText.implicitWidth + Style.space(6) + implicitWidth + (block.disp.focused ? Style.space(12) : 0) <= block.width - Style.space(20)
             implicitWidth: badgeText.implicitWidth + Style.space(10)
             implicitHeight: badgeText.implicitHeight + Style.space(3)
             anchors.verticalCenter: parent.verticalCenter

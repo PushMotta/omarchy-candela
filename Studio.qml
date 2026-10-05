@@ -1431,10 +1431,8 @@ Item {
                 width: inspectorScroll.availableWidth
                 spacing: Style.spacing.xl
 
-                // ----- signal
-                PanelSectionHeader { id: signalHeader; text: root.isVirtual ? "SIZE" : "SIGNAL"; foreground: root.foreground; fontFamily: root.fontFamily }
-
-                // Its name also names the workspace it opens on.
+                // ----- a virtual display's name, before its size: it also names the
+                // workspace it opens on.
                 InspectorRow {
                   rowId: "vlabel"
                   visible: root.isVirtual
@@ -1463,6 +1461,9 @@ Item {
                     }
                   }
                 }
+
+                // ----- signal
+                PanelSectionHeader { id: signalHeader; text: root.isVirtual ? "SIZE" : "SIGNAL"; foreground: root.foreground; fontFamily: root.fontFamily }
 
                 // A virtual display has no EDID and no modes of its own: any
                 // size Hyprland is given is the size it has.

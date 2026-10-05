@@ -837,6 +837,7 @@ assert_eq "$(jq -c '.virtual["VIRTUAL-1"] | {label, device}' "$sandbox2/state/in
 [[ ! -s $sandbox2/state/pending.json ]] || fail "kept at once, with no countdown"
 assert_eq "$(jq -r '.[] | select(.monitor == "VIRTUAL-1") | .name' "$sandbox2/workspaces.json")" "pixel" "the open workspace is renamed"
 assert_contains "$(cat "$sandbox2/state/candela-layout.lua")" 'workspace = "name:pixel", monitor = "VIRTUAL-1"' "and the rule names it"
+assert_eq "$(run_cli "$sandbox2" state | jq -r '.undo.what')" "changing and renaming VIRTUAL-1" "undo says what it would undo"
 state="$(run_cli "$sandbox2" state)"
 assert_eq "$(jq -r '.virtual.displays["VIRTUAL-1"] | "\(.device) \(.workspace)"' <<<"$state")" "pixel-tablet pixel" "state carries both"
 run_cli "$sandbox2" revert >/dev/null
