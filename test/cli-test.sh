@@ -629,6 +629,9 @@ secret="$(run_cli "$sandbox2" virtual secret VIRTUAL-1)"
 assert_eq "$(jq -r .username <<<"$secret")" "candela" "secret gives the username"
 [[ $(jq -r .password <<<"$secret") =~ ^[a-hjkmnp-z2-9]{4}(-[a-hjkmnp-z2-9]{4}){3}$ ]] || fail "a password typed without shift: four groups of four, no look-alikes" "$secret"
 pw1="$(jq -r .password <<<"$secret")"
+assert_eq "$(jq -r 'has("qr")' <<<"$secret")" "false" "no QR code unless asked"
+assert_eq "$(run_cli "$sandbox2" virtual secret VIRTUAL-1 --qr | jq -r .qr)" "$(printf PNGDATA | base64 -w0)" "--qr adds the password as a QR code"
+assert_eq "$(run_cli "$sandbox2" state | jq -r '[.. | strings | select(. == "'"$pw1"'")] | length')" "0" "the password is never part of the state"
 run_cli "$sandbox2" virtual view VIRTUAL-1 network off >/dev/null
 run_cli "$sandbox2" virtual view VIRTUAL-1 network on >/dev/null
 assert_eq "$(run_cli "$sandbox2" virtual secret VIRTUAL-1 | jq -r .password)" "$pw1" "the password is kept between starts"

@@ -925,9 +925,10 @@ Item {
       onClosed: root.setPreview(modelData, false)
     }
   }
+  function hideVirtualSecret() { virtualSecretFor = ""; virtualSecret = null }
   function showVirtualSecret(name) {
     if (virtualSecretFor === name && virtualSecret) { virtualSecretFor = ""; virtualSecret = null; return }
-    secretProc.command = [root.cli, "virtual", "secret", name]
+    secretProc.command = [root.cli, "virtual", "secret", name, "--qr"]
     virtualSecretFor = name
     virtualSecret = null
     secretProc.running = true

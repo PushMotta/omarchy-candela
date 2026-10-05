@@ -80,7 +80,8 @@ Item {
     Qt.callLater(function() { keyScope.forceActiveFocus() })
   }
 
-  function close() { opened = false; releaseScreen() }
+  // The password and its QR code are forgotten with the studio.
+  function close() { opened = false; releaseScreen(); if (service) service.hideVirtualSecret() }
 
   function releaseScreen() {
     if (!service) return
@@ -1626,26 +1627,57 @@ Item {
                 InspectorRow {
                   rowId: "vsecret"
                   visible: root.isVirtual && root.virtualNetwork.on === true
-                  Item {
+                  Column {
                     width: parent.width
-                    implicitHeight: Math.max(secretText.implicitHeight, secretButton.implicitHeight)
-                    readonly property bool shown: root.service && root.display && root.service.virtualSecretFor === root.display.name && root.service.virtualSecret
-                    Text {
-                      id: secretText
-                      textFormat: Text.PlainText
-                      text: "Username candela · password " + (parent.shown ? root.service.virtualSecret.password : "••••••••••••••••")
-                      color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall
-                      anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.spacing.md
+                    readonly property bool shown: root.service && root.display && root.service.virtualSecretFor === root.display.name && !!root.service.virtualSecret
+                    Item {
+                      width: parent.width
+                      implicitHeight: Math.max(secretText.implicitHeight, secretButton.implicitHeight)
+                      readonly property bool shown: parent.shown
+                      Text {
+                        id: secretText
+                        textFormat: Text.PlainText
+                        text: "Username candela · password " + (parent.shown ? root.service.virtualSecret.password : "••••••••••••••••")
+                        color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.bodySmall
+                        anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
+                      }
+                      Button {
+                        id: secretButton
+                        text: parent.shown ? "Hide" : "Show"
+                        bordered: true
+                        foreground: root.foreground; fontFamily: root.fontFamily
+                        hasCursor: root.focusArea === "inspector" && root.currentRow === "vsecret"
+                        anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                        onClicked: if (root.display && root.service) root.service.showVirtualSecret(root.display.name)
+                        onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vsecret" } }
+                      }
                     }
-                    Button {
-                      id: secretButton
-                      text: parent.shown ? "Hide" : "Show"
-                      bordered: true
-                      foreground: root.foreground; fontFamily: root.fontFamily
-                      hasCursor: root.focusArea === "inspector" && root.currentRow === "vsecret"
-                      anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
-                      onClicked: if (root.display && root.service) root.service.showVirtualSecret(root.display.name)
-                      onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vsecret" } }
+                    // The password as a QR code, for the tablet's camera to copy:
+                    // the login has to be finished within 30 seconds of connecting,
+                    // which is too short to type it there. Dark on white whatever
+                    // the theme, because that is what cameras read.
+                    Row {
+                      visible: parent.shown && !!root.service.virtualSecret.qr
+                      spacing: Style.spacing.xl
+                      Rectangle {
+                        width: Style.space(176); height: width
+                        color: "white"
+                        Image {
+                          anchors.fill: parent
+                          anchors.margins: Style.space(4)
+                          smooth: false
+                          fillMode: Image.PreserveAspectFit
+                          source: parent.parent.visible ? "data:image/png;base64," + root.service.virtualSecret.qr : ""
+                        }
+                      }
+                      Text {
+                        width: Style.space(200)
+                        anchors.verticalCenter: parent.verticalCenter
+                        textFormat: Text.PlainText
+                        text: "Scan it with the tablet's camera and copy the password. Then connect, enter the username candela, paste it, and let the app remember it: the login must be finished within 30 seconds of connecting."
+                        color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap
+                      }
                     }
                   }
                 }

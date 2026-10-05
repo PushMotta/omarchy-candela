@@ -97,6 +97,11 @@ EOF
 #!/bin/bash
 while (( $# )); do [[ $1 == -f ]] && { printf 'not a key: the test stand-in for ssh-keygen\n' > "$2"; : > "$2.pub"; }; shift; done
 EOF
+  cat > "$dir/bin/qrencode" <<'EOF'
+#!/bin/bash
+cat >/dev/null
+printf 'PNGDATA'
+EOF
   # The desk's addresses: loopback, the LAN, and libvirt's bridge.
   cat > "$dir/bin/ip" <<'EOF'
 #!/bin/bash
