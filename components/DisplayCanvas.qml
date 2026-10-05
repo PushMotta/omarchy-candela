@@ -69,6 +69,9 @@ Item {
   signal selected(string name)
   signal moved(string name, int x, int y)
   signal chipDropped(int workspace, string name)
+  // The × on a virtual display's block: the studio asks for a second press.
+  signal removeRequested(string name)
+  property string removeArmedFor: ""
 
   // A chip in flight: which workspace, the pointer in canvas coordinates,
   // and the block under it.
@@ -277,6 +280,41 @@ Item {
         }
       }
 
+      // A virtual display can be removed from its block: bottom right, where
+      // nothing else sits (the name and its badge fill the top).
+      Rectangle {
+        id: removeBox
+        visible: block.disp.virtual === true && block.width > Style.space(80)
+        z: 3
+        anchors.bottom: parent.bottom
+        anchors.right: parent.right
+        anchors.margins: Style.space(8)
+        readonly property bool armed: root.removeArmedFor === block.disp.name
+        width: armed ? removeLabel.implicitWidth + Style.space(12) : Style.space(20)
+        height: Style.space(20)
+        radius: Style.cornerRadius > 0 ? Style.space(4) : 0
+        color: removeArea.containsMouse || armed ? Util.alpha(root.urgent, 0.25) : "transparent"
+        border.width: 1
+        border.color: armed ? root.urgent : Util.alpha(root.foreground, 0.4)
+        Text {
+          id: removeLabel
+          anchors.centerIn: parent
+          textFormat: Text.PlainText
+          text: parent.armed ? "remove?" : "×"
+          color: parent.armed ? root.urgent : root.foreground
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          font.bold: true
+        }
+        MouseArea {
+          id: removeArea
+          anchors.fill: parent
+          hoverEnabled: true
+          cursorShape: Qt.PointingHandCursor
+          onClicked: root.removeRequested(block.disp.name)
+        }
+      }
+
       // The picture on that screen, inset so a themed corner radius never
       // clips it and the block still reads as a panel with a bezel rather
       // than as a thumbnail. A display that is off shows no picture.
@@ -351,7 +389,7 @@ Item {
         anchors.left: parent.left
         anchors.bottom: parent.bottom
         anchors.margins: Style.space(10)
-        width: parent.width - Style.space(20)
+        width: parent.width - Style.space(20) - (removeBox.visible ? removeBox.width + Style.space(6) : 0)
         visible: parent.height > Style.space(56)
         Repeater {
           model: [(block.disp.model ? block.disp.model + " · " : "") + block.disp.mode + " · " + block.disp.scale + "×",

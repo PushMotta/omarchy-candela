@@ -78,6 +78,7 @@ EOF
 echo "\$*" >> "$dir/systemctl.log"
 case "\$1 \$2" in
   "--user is-active") [[ -e "$dir/units/\${@: -1}" ]]; exit \$? ;;
+  "is-active --quiet") [[ -e "$dir/system-units/\${@: -1}" ]]; exit \$? ;;
   "--user stop") shift 2; for u in "\$@"; do rm -f "$dir/units/\$u"; done ;;
 esac
 exit 0
@@ -126,6 +127,12 @@ EOF
   fi
   echo '[]' > "$dir/wsrules.json"
   echo '[]' > "$dir/virtual.json"
+  # Omarchy's firewall: ufw on, incoming dropped, 5901 allowed from the LAN.
+  mkdir -p "$dir/system-units" "$dir/etc/default" "$dir/etc/ufw"
+  touch "$dir/system-units/ufw.service"
+  echo 'DEFAULT_INPUT_POLICY="DROP"' > "$dir/etc/default/ufw"
+  printf '%s\n' '### tuple ### allow tcp 5901 0.0.0.0/0 any 192.168.1.0/24 in comment=43616e64656c61' \
+    '### tuple ### allow any any 0.0.0.0/0 any 0.0.0.0/0 in_virbr0' > "$dir/etc/ufw/user.rules"
   echo "$dir"
 }
 
@@ -139,6 +146,7 @@ run_cli() {
   OMARCHY_CANDELA_LUA_FILE="$sandbox/state/candela-layout.lua" \
   OMARCHY_CANDELA_VERIFY_SECONDS="${OMARCHY_CANDELA_VERIFY_SECONDS:-0.5}" \
   OMARCHY_CANDELA_VNC_WAIT_SECONDS=0 \
+  OMARCHY_CANDELA_UFW_DIR="$sandbox/etc" \
   HOME="$sandbox" \
     "$ROOT/bin/omarchy-candela" "$@"
 }

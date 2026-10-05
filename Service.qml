@@ -64,7 +64,17 @@ Item {
   readonly property int revertSeconds: state && state.revertSeconds ? Number(state.revertSeconds) : 15
   // A change kept at once (the workspace plan, a virtual display); while this
   // is set, `revert` undoes it.
-  readonly property bool undoAvailable: !!(state && state.undo)
+  readonly property bool undoAvailable: !!(state && state.undo) && undoRemaining > 0
+  readonly property string undoWhat: state && state.undo ? String(state.undo.what || "the last change") : ""
+  // The backend forgets an undo after two minutes; count down here so the
+  // button stops offering it on time, and refresh when it runs out.
+  readonly property int undoRemaining: state && state.undo ? Math.max(0, Number(state.undo.remaining) - (now - Number(state.now || now))) : 0
+  Timer {
+    interval: 1000
+    repeat: true
+    running: !!(root.state && root.state.undo) && !root.hasPending
+    onTriggered: { root.now = Math.floor(Date.now() / 1000); if (root.undoRemaining <= 0) root.scheduleRefresh() }
+  }
   readonly property var virtualState: state && state.virtual ? state.virtual : ({ wayvnc: false, viewer: null, addresses: [], displays: {} })
   readonly property bool hasVirtual: Object.keys(virtualState.displays || {}).length > 0
   property int now: Math.floor(Date.now() / 1000)

@@ -69,11 +69,16 @@ INTERNAL_SCALE_FILE="$TOGGLES_DIR/internal-monitor-scale"    # read by Omarchy's
 # display) is kept at once, with no countdown, so this records what it
 # replaced, for one `revert` to undo.
 UNDO_FILE="$STATE_DIR/undo.json"
+# How long that undo lasts: long enough to catch a mistake, not so long that
+# a Revert pressed an hour later undoes something long forgotten (it did, on
+# 5 October 2026: Revert removed a virtual display added an hour before).
+UNDO_SECONDS="${OMARCHY_CANDELA_UNDO_SECONDS:-120}"
 VIRTUAL_RE='^VIRTUAL-[0-9]+$'
 VIRTUAL_DIR="$STATE_DIR/virtual"          # per display: wayvnc configs, key, password (0700)
 VIRTUAL_GAP=320                            # logical px between the desk and a display placed apart
 VNC_WAIT_SECONDS="${OMARCHY_CANDELA_VNC_WAIT_SECONDS:-3}"
 WAYVNC="${OMARCHY_CANDELA_WAYVNC:-wayvnc}"   # the tests name one that is missing
+UFW_DIR="${OMARCHY_CANDELA_UFW_DIR:-/etc}"   # the tests give one of their own
 REVERT_UNIT="omarchy-candela-revert"
 REVERT_SECONDS="${OMARCHY_CANDELA_REVERT_SECONDS:-15}"
 VERIFY_SECONDS="${OMARCHY_CANDELA_VERIFY_SECONDS:-3}"
@@ -469,7 +474,12 @@ generate_lua() {
             ""
           end
         else
+          # hl.monitor starts from the earlier rule for the output and keeps
+          # every field this one leaves out, so a display switched off stays
+          # off unless its rule says otherwise (Hyprland 0.56.2,
+          # LuaBindingsConfigRules.cpp; seen on the desk 5 October 2026).
           ([ "output = \($d.name | lua_str)",
+             "disabled = false",
              "mode = \(($i.mode // mode_of($d)) | lua_str)",
              "position = \(($i.position // "\($d.x)x\($d.y)") | lua_str)",
              "scale = \(($i.scale // $d.scale) | lua_val("scale"))",
@@ -494,7 +504,7 @@ generate_lua() {
     def virtual_not_created:
       [ ($intent.virtual // {}) | keys[] | select(. as $n | [$live[].name] | index($n) == null)
         | . as $n | ($intent.displays[$n] // {}) as $i
-        | "hl.monitor({ output = \($n | lua_str), mode = \(($i.mode // "1920x1080@60") | lua_str), position = \(($i.position // "auto") | lua_str), scale = \(($i.scale // 1) | lua_val("scale")), transform = \(($i.transform // 0) | tostring) })" ];
+        | "hl.monitor({ output = \($n | lua_str), disabled = \($i.enabled == false), mode = \(($i.mode // "1920x1080@60") | lua_str), position = \(($i.position // "auto") | lua_str), scale = \(($i.scale // 1) | lua_val("scale")), transform = \(($i.transform // 0) | tostring) })" ];
     # Each virtual display opens on a named workspace of its own (ids below
     # -1337), so it never takes one of workspaces 1 to 10.
     def virtual_workspace_rules:
@@ -909,7 +919,9 @@ cmd_state() {
   internal_flag=false; [[ -f $INTERNAL_FLAG ]] && internal_flag=true
   local open_ws undo=null
   open_ws="$(workspaces_json)"
-  [[ -s $UNDO_FILE ]] && undo="$(jq -c '{since}' "$UNDO_FILE" 2>/dev/null || echo null)"
+  if fresh_undo; then
+    undo="$(jq -c --argjson now "$(now_epoch)" --argjson ttl "$UNDO_SECONDS" '{since, what: (.what // "the last change"), remaining: ([.since + $ttl - $now, 0] | max)}' "$UNDO_FILE" 2>/dev/null || echo null)"
+  fi
   local virtual
   virtual="$(virtual_state_json "$live" "$intent")"
   jq -n --argjson live "$live" --argjson intent "$intent" --argjson pending "$pending" \
@@ -1033,6 +1045,13 @@ cmd_apply() {
   fi
   apply_internal_verdict "$verdict" "$internal"
 
+  # A virtual display being switched off loses its viewers first: when its
+  # output goes, wayvnc moves on to a real display and keeps serving it.
+  local vname
+  while IFS= read -r vname; do
+    [[ -n $vname ]] && virtual_stop_all "$vname"
+  done < <(jq -r --arg vre "$VIRTUAL_RE" '[.displays // [] | .[] | select(.enabled == false) | .name | select(test($vre))] | unique | .[]' <<<"$change")
+
   local err
   if ! err="$(apply_live "$chunk_live")"; then
     unwind_pending
@@ -1051,10 +1070,13 @@ cmd_apply() {
 
   if (( now )); then
     cmd_keep
-    if (( at_once )) && [[ ${CANDELA_NO_UNDO:-} != 1 ]]; then write_undo "$previous" "$ws_before"; fi
+    if (( at_once )) && [[ ${CANDELA_NO_UNDO:-} != 1 ]]; then
+      write_undo "$previous" "$ws_before" "$(jq -r '
+        [ (.displays // [] | map(.name) | unique | if length > 0 then "changing " + join(" and ") else empty end),
+          (if has("workspaces") then "the workspace plan" else empty end) ] | join(" and ")' <<<"$change")"
+    fi
     # Moving a display that is on the network can move it beside or apart,
     # which decides whether its viewers may take input: start it again.
-    local vname
     while IFS= read -r vname; do
       [[ -n $vname ]] || continue
       if unit_active "$(virtual_unit "$vname" network)"; then
@@ -1116,7 +1138,7 @@ cmd_revert() {
   done
 
   # Nothing pending, but a workspace change was kept at once: undo that.
-  if (( ! expired )) && [[ ! -s $PENDING_FILE && -s $UNDO_FILE ]]; then
+  if (( ! expired )) && [[ ! -s $PENDING_FILE ]] && fresh_undo; then
     undo_last
     return
   fi
@@ -1169,11 +1191,20 @@ cmd_revert() {
 }
 
 write_undo() {
-  local previous="$1" placement="$2" tmp
+  local previous="$1" placement="$2" what="${3:-the last change}" tmp
   mkdir -p "$STATE_DIR"
   tmp="$(tmp_for "$UNDO_FILE")"
-  jq -n --argjson previous "$previous" --argjson placement "$placement" --argjson since "$(now_epoch)" \
-    '{since:$since, previousIntent:$previous, placement:$placement}' > "$tmp" && mv "$tmp" "$UNDO_FILE"
+  jq -n --argjson previous "$previous" --argjson placement "$placement" --argjson since "$(now_epoch)" --arg what "$what" \
+    '{since:$since, what:$what, previousIntent:$previous, placement:$placement}' > "$tmp" && mv "$tmp" "$UNDO_FILE"
+}
+
+# The undo record, or nothing once it is older than UNDO_SECONDS (then it is
+# deleted, so nothing can reach it later).
+fresh_undo() {
+  [[ -s $UNDO_FILE ]] || return 1
+  local since
+  since="$(jq -r '.since // 0' "$UNDO_FILE" 2>/dev/null || echo 0)"
+  if (( $(now_epoch) - since > UNDO_SECONDS )); then rm -f "$UNDO_FILE"; return 1; fi
 }
 
 # Undo the last change that was kept at once: put the intent back exactly as
@@ -1315,8 +1346,39 @@ virtual_destroy() {
 # up, not loopback and not a local bridge for containers or VMs. TSV:
 # address, interface.
 virtual_lan_addresses() {
-  ip -4 -o addr show up 2>/dev/null | awk '{ split($4, a, "/"); print a[1] "\t" $2 }' \
-    | grep -vE $'\t(lo|virbr[0-9]*|docker[0-9]*|br-[0-9a-f]+|veth[0-9a-z]*)$' || true
+  ip -4 -o addr show up 2>/dev/null | awk '
+    function net(ip, bits,   o, n, i, m, out) {
+      split(ip, o, "."); n = o[1] * 16777216 + o[2] * 65536 + o[3] * 256 + o[4]
+      m = 2 ^ 32 - 2 ^ (32 - bits); n = n - n % (2 ^ (32 - bits))
+      out = int(n / 16777216) "." int(n / 65536) % 256 "." int(n / 256) % 256 "." n % 256
+      return out "/" bits
+    }
+    { split($4, a, "/"); print a[1] "\t" $2 "\t" net(a[1], a[2]) }' \
+    | grep -vE $'\t(lo|virbr[0-9]*|docker[0-9]*|br-[0-9a-f]+|veth[0-9a-z]*)\t' || true
+}
+
+# Does the firewall let a client reach this port? Omarchy turns ufw on with
+# incoming connections dropped, so a tablet's connection goes nowhere until
+# the port is allowed. "open", "blocked", or "unknown" (rules not readable).
+virtual_firewall() {
+  local port="$1" rules="$UFW_DIR/ufw/user.rules"
+  # ufw is a system service, not one of the user's.
+  run_bounded systemctl is-active --quiet ufw.service >/dev/null 2>&1 || { echo open; return; }
+  grep -q '^DEFAULT_INPUT_POLICY="ACCEPT"' "$UFW_DIR/default/ufw" 2>/dev/null && { echo open; return; }
+  [[ -r $rules ]] || { echo unknown; return; }
+  awk -v port="$port" '
+    /^### tuple ### allow / {
+      proto = $5; dport = $6; dir = $NF
+      if (dir ~ /^comment=/) dir = $(NF - 1)
+      if (dir != "in" || (proto != "tcp" && proto != "any")) next
+      if (dport == "any" || dport == port) { found = 1; exit }
+      n = split(dport, list, ",")
+      for (i = 1; i <= n; i++) {
+        if (list[i] == port) { found = 1; exit }
+        if (split(list[i], r, ":") == 2 && port + 0 >= r[1] + 0 && port + 0 <= r[2] + 0) { found = 1; exit }
+      }
+    }
+    END { print (found ? "open" : "blocked") }' "$rules"
 }
 
 # The username, password and RSA key a network viewer is offered, made once
@@ -1377,6 +1439,9 @@ virtual_view_network() {
     return 0
   fi
   need_wayvnc
+  # Never a display that is off: wayvnc would serve a real one instead.
+  live_json | jq -e --arg n "$name" 'any(.[]; .name == $n and .disabled != true)' >/dev/null \
+    || die "$name is off: switch it on before offering it on the network"
   [[ -n $address ]] || address="$(jq -r '.address // ""' <<<"$saved")"
   [[ -n $address ]] || address="$(virtual_lan_addresses | head -1 | cut -f1)"
   [[ -n $address ]] || die "no LAN address to offer $name on"
@@ -1578,7 +1643,7 @@ cmd_virtual_add() {
     commit_intent "$intent" && reload_and_check "$(intent_json)" "$LAST_PROBE" >/dev/null || true
     die "could not add $name${err:+: $err}"
   fi
-  write_undo "$intent" "$placement"
+  write_undo "$intent" "$placement" "adding $name"
   notify_shell
   echo "$name"
 }
@@ -1607,7 +1672,7 @@ cmd_virtual_remove() {
   commit_intent "$merged" || die "could not write the layout"
   err="$(reload_and_check "$(intent_json)" "$LAST_PROBE")" || die "$name is gone, but the layout did not load: $err"
   rm -rf -- "${VIRTUAL_DIR:?}/$name"
-  write_undo "$intent" "$placement"
+  write_undo "$intent" "$placement" "removing $name"
   notify_shell
   echo "removed $name"
 }
@@ -1664,11 +1729,17 @@ virtual_state_json() {
     network=false; clients='[]'
     if unit_active "$(virtual_unit "$name" network)"; then network=true; clients="$(cmd_virtual clients "$name")"; fi
     net="$(virtual_network_settings "$name")"
+    local port fw lan
+    port="$(jq -r --arg d "$(( 5900 + ${name#VIRTUAL-} ))" '.port // ($d | tonumber)' <<<"$net")"
+    fw="$(virtual_firewall "$port")"
+    lan="$(virtual_lan_addresses | awk -F'\t' -v a="$(jq -r '.address // ""' <<<"$net")" 'a == "" || $1 == a { print $3; exit }')"
     out="$(jq -c --arg n "$name" --argjson on "$network" --argjson c "$clients" --argjson net "$net" \
-      '.[$n] = {network:($net + {on:$on, clients:$c})}' <<<"$out")"
+      --arg fw "$fw" --argjson port "$port" --arg lan "$lan" \
+      '.[$n] = {network:($net + {on:$on, clients:$c, port:$port, firewall:$fw,
+        firewallAllow:(if $lan == "" then null else "ufw allow from \($lan) to any port \($port) proto tcp" end)})}' <<<"$out")"
   done < <(jq -r '(.virtual // {}) | keys[]' <<<"$intent")
   jq -c -n --argjson intent "$intent" --argjson views "$out" --argjson wayvnc "$wayvnc" \
-        --argjson addresses "$(virtual_lan_addresses | jq -R -s -c 'split("\n") | map(select(. != "") | split("\t") | {address:.[0], interface:.[1]})')" "$JQ_VIRTUAL_DEFS"'
+        --argjson addresses "$(virtual_lan_addresses | jq -R -s -c 'split("\n") | map(select(. != "") | split("\t") | {address:.[0], interface:.[1], network:.[2]})')" "$JQ_VIRTUAL_DEFS"'
     virtual_workspace_names($intent.virtual) as $ws
     | { wayvnc: $wayvnc, addresses: $addresses,
         displays: (($intent.virtual // {}) | with_entries(.value += {workspace: $ws[.key]} + ($views[.key] // {}))) }'
@@ -1890,6 +1961,12 @@ cmd_doctor() {
     fi
     conf="$VIRTUAL_DIR/$vname/network.conf"
     if unit_active "$(virtual_unit "$vname" network)"; then
+      local vport vfw
+      vport="$(sed -n 's/^port=//p' "$conf" 2>/dev/null)"
+      vfw="$(virtual_firewall "${vport:-0}")"
+      if [[ $vfw == blocked ]]; then
+        warn "the firewall (ufw) drops connections to port $vport, so no tablet can reach $vname. Allow your network, as root: ufw allow from $(virtual_lan_addresses | awk -F'\t' -v a="$(sed -n 's/^address=//p' "$conf")" '$1 == a { print $3; exit }') to any port $vport proto tcp"
+      fi
       if [[ -f $conf ]] && grep -qx 'enable_auth=true' "$conf" && ! grep -qE '^(relax_encryption|allow_broken_crypto)=true' "$conf"; then
         ok "$vname is offered on $(sed -n 's/^address=//p' "$conf"):$(sed -n 's/^port=//p' "$conf") with a password and RSA-AES$(jq -e '.input == false' "$VIRTUAL_DIR/$vname/network.json" >/dev/null 2>&1 && echo ", watch-only")"
       else

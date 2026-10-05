@@ -253,13 +253,32 @@ workspace and the bar's workspace widget are left alone.
 ## Virtual displays
 
 `+ Virtual` on the canvas (or `+`) asks what the display is for and starts
-from there; everything stays editable afterwards.
+from there; everything stays editable afterwards. All three are the same
+kind of display, a screen that exists only in Hyprland; they differ in where
+they sit and how you see them.
 
-| For | Starts as | Placed |
-|---|---|---|
-| Extra screen | 2732×2048 at 2× (an iPad Pro 12.9″) | beside your rightmost display |
-| Stage | 1920×1080 at 1× | apart |
-| Test bench | 1366×768 at 1× | beside your displays |
+| For | What it is for | Starts as | Placed | You see it |
+|---|---|---|---|---|
+| Extra screen | a tablet or another computer as one more screen | an iPad Pro 12.9″, 2732×2048 at 2× | beside your rightmost display | on that device, which needs a VNC viewer app |
+| Stage | a screen of an exact size to share in a call or record | 1920×1080 at 1× | apart | in the call, and in Candela's window |
+| Test bench | an app at a size or device you don't have | 1366×768 at 1× | beside your displays | in Candela's window, working in it with your mouse |
+
+**The extra screen needs an app on the other device.** Candela runs the
+server on this computer; the tablet, phone or laptop that shows the screen
+needs a VNC viewer: RealVNC Viewer (free, for iPad, iPhone, Android, Mac and
+Windows), bVNC on Android, or TigerVNC on Mac, Windows and Linux. While
+network viewing is on, the inspector lists the steps and the address to
+connect to.
+
+The size is chosen from *Device or size*, a searchable list of tablets,
+laptops and common sizes (each device's native resolution and the scale that
+keeps its interface the size it is on the device), or *Custom size*.
+*Orientation* swaps the sides for portrait.
+
+**Removing one.** Switching a virtual display off keeps it, ready to switch
+back on. To remove it, press *Remove* next to its name, the × on its block in
+the canvas, or `−`; each asks for a second press, since it closes anything
+viewing it.
 
 **Beside** means flush against a real display, so the pointer and windows
 cross to it like any neighbour. **Apart** leaves a gap the pointer cannot
@@ -268,7 +287,8 @@ there through the workspace plan or SUPER+SHIFT+number. Each virtual display
 opens on a named workspace of its own (its label, like `stage`), so
 workspaces 1 to 0 stay yours. Size, refresh, scale and position change like
 any display's, at once and without the countdown, since none of it can blank
-a real screen; `r` undoes the last change. It has no EDID, so it is SDR only.
+a real screen; for two minutes afterwards *Undo* (`r`) takes the last change
+back, and says what it would undo. It has no EDID, so it is SDR only.
 Hyprland forgets virtual displays when it restarts; Candela recreates them
 when the shell starts.
 
@@ -290,7 +310,9 @@ You see a virtual display in two ways:
   to be finished within 30 seconds of connecting, too short to type a
   password on a tablet, so *Show* also draws it as a QR code: scan it with
   the tablet's camera, copy it, then connect and paste it, and let the app
-  remember it. Hyprland has one
+  remember it. Omarchy's firewall drops incoming connections, so the port
+  must be allowed from your network; the inspector and `doctor` say when it
+  is not, with the rule to add. Hyprland has one
   cursor, and a viewer's input moves it, so a display placed apart is
   watch-only over the network: input there could leave your pointer on a
   screen you cannot see, out of the mouse's reach. Placed beside, viewers can

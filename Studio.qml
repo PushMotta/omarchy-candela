@@ -538,9 +538,9 @@ Item {
   property bool addingVirtual: false
   property int chooserIndex: 1
   readonly property var virtualUses: [
-    { use: "extra", title: "Extra screen", caption: "An iPad Pro's 2732×2048 at 2×, beside your rightmost display, for a tablet or laptop over the network." },
-    { use: "stage", title: "Stage", caption: "1920×1080 at 1×, apart from the desk, to share in a call or record at an exact size." },
-    { use: "bench", title: "Test bench", caption: "1366×768 at 1×, beside your displays so you can work in it, to see an app at a size you don't have." } ]
+    { use: "extra", title: "Extra screen", caption: "Use a tablet or another computer as one more screen. It sits beside your displays, so the mouse and windows move onto it. You see it on that device, which needs a VNC viewer app: RealVNC Viewer is free for iPad, Android, Mac and Windows." },
+    { use: "stage", title: "Stage", caption: "A screen of an exact size, 1920×1080 to start, to share in a call or record. Pick it in the call's screen picker and watch it in Candela's window. It sits apart, out of the mouse's way. Nothing to install." },
+    { use: "bench", title: "Test bench", caption: "See an app at a size or on a device you don't have: pick the device, watch it in Candela's window, and move the mouse onto it to use it. Nothing to install." } ]
   property string removeArmedFor: ""
   Timer { id: removeArm; interval: 4000; onTriggered: root.removeArmedFor = "" }
 
@@ -626,6 +626,7 @@ Item {
       ["⇥  ⇧⇥", "canvas ⇄ workspaces ⇄ inspector ⇄ actions"],
       ["w", "the workspace plan, under the canvas"],
       ["+", "add a virtual display"],
+      ["\u2212", "remove the selected virtual display (press twice)"],
       ["1–9  [ ]", "select a display"],
       ["a", "apply the draft"],
       ["r", "discard the draft, or revert a pending change"],
@@ -801,7 +802,7 @@ Item {
       case "vcustomw": customWidthField.field.forceActiveFocus(); break
       case "vcustomh": customHeightField.field.forceActiveFocus(); break
       case "vinstall": if (service) service.installWayvnc(); break
-      case "vnetwork": if (service && virtualState.wayvnc) service.virtualView(d.name, "network", !virtualNetwork.on); break
+      case "vnetwork": if (service && virtualState.wayvnc && (enabledOf(d) || virtualNetwork.on)) service.virtualView(d.name, "network", !virtualNetwork.on); break
       case "vsecret": if (service) service.showVirtualSecret(d.name); break
       case "vlogin": if (service) service.virtualView(d.name, "network", true, ["--at-login", virtualNetwork.atLogin ? "no" : "yes"]); break
       case "vremove": removeVirtual(d); break
@@ -859,6 +860,7 @@ Item {
     }
     if (k === Qt.Key_W) { focusArea = "workspaces"; return true }
     if (k === Qt.Key_Plus || k === Qt.Key_Equal) { addingVirtual = true; return true }
+    if (k === Qt.Key_Minus && isVirtual) { removeVirtual(display); return true }
     if (k === Qt.Key_Tab || k === Qt.Key_Backtab) {
       var order = ["canvas", "workspaces", "inspector", "actions"]
       var i = order.indexOf(focusArea)
@@ -1065,6 +1067,8 @@ Item {
               onSelected: function(name) { root.selectedName = name; root.focusArea = "canvas" }
               onMoved: function(name, x, y) { root.moveDisplay(name, x, y) }
               onChipDropped: function(workspace, name) { root.moveHome(workspace, name) }
+              removeArmedFor: root.removeArmedFor
+              onRemoveRequested: function(name) { var d = root.displayByName(name); if (d) { root.selectedName = name; root.removeVirtual(d) } }
             }
 
             // Add a virtual display: top right of the canvas, or +.
@@ -1135,7 +1139,7 @@ Item {
                 }
                 Text {
                   textFormat: Text.PlainText
-                  text: "It is added at once, with no countdown: it cannot blank a real display. r undoes it. Candela's window shows it here; only a tablet or another computer needs wayvnc."
+                  text: "It is added at once, with no countdown: it cannot blank a real display. For two minutes, r undoes it. Candela's window shows it here; only the extra screen needs wayvnc on this computer and a VNC viewer app on the other device."
                   color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap; width: parent.width
                 }
               }
@@ -1236,14 +1240,34 @@ Item {
                 id: identityColumn
                 width: parent.width
                 spacing: Style.spacing.xs
-                Text {
-                  textFormat: Text.PlainText
-                  text: !root.display ? "No display"
-                    : root.isVirtual ? root.display.name + " · " + (root.virtualInfo.label || "Virtual")
-                    : root.display.name + " · " + String(root.display.description || root.display.model || "").trim()
-                  color: root.foreground
-                  font.family: root.fontFamily; font.pixelSize: Style.font.title; font.bold: true
-                  elide: Text.ElideRight; width: parent.width
+                Item {
+                  width: parent.width
+                  implicitHeight: Math.max(identityTitle.implicitHeight, identityRemove.visible ? identityRemove.implicitHeight : 0)
+                  Text {
+                    id: identityTitle
+                    textFormat: Text.PlainText
+                    text: !root.display ? "No display"
+                      : root.isVirtual ? root.display.name + " · " + (root.virtualInfo.label || "Virtual")
+                      : root.display.name + " · " + String(root.display.description || root.display.model || "").trim()
+                    color: root.foreground
+                    font.family: root.fontFamily; font.pixelSize: Style.font.title; font.bold: true
+                    elide: Text.ElideRight
+                    width: parent.width - (identityRemove.visible ? identityRemove.width + Style.spacing.md : 0)
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+                  // A virtual display can be removed, not only switched off;
+                  // where its name is, so it is never hard to find.
+                  Button {
+                    id: identityRemove
+                    visible: root.isVirtual
+                    readonly property bool armed: root.display !== null && root.removeArmedFor === root.display.name
+                    text: armed ? "Press again to remove" : "Remove"
+                    fontSize: Style.font.caption
+                    bordered: true
+                    foreground: armed ? root.urgent : root.foreground; fontFamily: root.fontFamily
+                    anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                    onClicked: root.removeVirtual(root.display)
+                  }
                 }
                 Text {
                   textFormat: Text.PlainText
@@ -1654,17 +1678,50 @@ Item {
                     width: parent.width
                     label: "On the network"
                     description: !root.virtualState.wayvnc ? "For a tablet or another computer. It needs wayvnc, which is not installed yet."
+                      : !root.virtualNetwork.on && root.display && !root.enabledOf(root.display) ? "The display is off. Switch it on to offer it on the network."
                       : root.virtualNetwork.on
-                        ? "RSA-AES with a username and password. TigerVNC, bVNC on Android and RealVNC connect; macOS Screen Sharing cannot, securely, so it is turned away. The login must be finished within 30 seconds of connecting, so have the password ready. "
+                        ? "Encrypted (RSA-AES), behind a username and password. "
                           + (root.virtualNetwork.input ? "Viewers can use it." : "Watch-only while it sits apart, so a viewer can never leave your pointer out of reach: place it beside your displays to let them use it.")
-                      : "Off. For a tablet or another computer on " + (((root.virtualState.addresses || [])[0] || {}).address || "your network") + "."
+                      : "Off. For a tablet or another computer on your network, which needs a VNC viewer app to show it."
                     checked: root.virtualNetwork.on === true
-                    enabled: root.virtualState.wayvnc === true
+                    // A display that is off is never served (it would be a real one).
+                    enabled: root.virtualState.wayvnc === true && root.display !== null && (root.enabledOf(root.display) || root.virtualNetwork.on === true)
                     opacity: enabled ? 1 : 0.6
                     foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily
                     hasCursor: root.focusArea === "inspector" && root.currentRow === "vnetwork"
                     onClicked: if (root.display && root.service && enabled) root.service.virtualView(root.display.name, "network", !root.virtualNetwork.on)
                     onHovered: function(h) { if (h) { root.focusArea = "inspector"; root.currentRow = "vnetwork" } }
+                  }
+                }
+
+                // How to connect, step by step, while network viewing is on.
+                // Not a keyboard row: there is nothing to press in it.
+                Column {
+                  visible: root.isVirtual && root.virtualNetwork.on === true
+                  width: parent.width
+                  spacing: Style.spacing.xs
+                  leftPadding: Style.spacing.md
+                  RowLabel { text: "How to connect" }
+                  Repeater {
+                    model: [
+                      "1. On the other device, install a VNC viewer: RealVNC Viewer (iPad, iPhone, Android, Mac, Windows), bVNC (Android) or TigerVNC (Mac, Windows, Linux). macOS's own Screen Sharing cannot connect securely.",
+                      "2. Copy the password onto that device first: Show it below and scan the QR code. The login must be finished within 30 seconds of connecting.",
+                      "3. Connect to " + (root.virtualNetwork.address || "") + ":" + (root.virtualNetwork.port || "") + " with the username candela, paste the password, and let the app remember it."
+                    ]
+                    Text {
+                      required property var modelData
+                      width: parent.width - Style.spacing.md
+                      textFormat: Text.PlainText
+                      text: modelData
+                      color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; wrapMode: Text.WordWrap
+                    }
+                  }
+                  Text {
+                    visible: root.virtualNetwork.firewall === "blocked"
+                    width: parent.width - Style.spacing.md
+                    textFormat: Text.PlainText
+                    text: "Your firewall drops connections to this port, so no device can reach it yet. To let your network in, run this in a terminal as root: " + (root.virtualNetwork.firewallAllow || "")
+                    color: root.urgent; font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true; wrapMode: Text.WrapAnywhere
                   }
                 }
 
@@ -2244,7 +2301,7 @@ Item {
                      "⇥ canvas ⇄ workspaces ⇄ inspector ⇄ actions", "w\u00A0workspaces",
                      "arrows nudge 10 px, ⇧ 100, ⌥ flush beside",
                      "0\u00A0origin", "1–9\u00A0[\u00A0]\u00A0select",
-                     "a\u00A0apply", "r\u00A0" + (root.draftDirty ? "discard" : "revert"),
+                     "a\u00A0apply", "r\u00A0" + (root.draftDirty ? "discard" : (root.service && root.service.undoAvailable && !root.hasPending ? "undo\u00A0" + root.service.undoWhat : "revert")),
                      "i\u00A0identify", "esc\u00A0close"]).join(" · ")
               color: root.dim
               font.family: root.fontFamily; font.pixelSize: Style.font.caption
@@ -2272,7 +2329,11 @@ Item {
                 onHovered: function(h) { if (h) { root.focusArea = "actions"; root.actionIndex = 0 } }
               }
               Button {
-                text: root.draftDirty ? "Discard" : "Revert"; bordered: true
+                // Says what it would do: discard the draft, revert the countdown,
+                // or undo the last change kept at once, while that lasts.
+                readonly property bool undoes: !root.draftDirty && !root.hasPending && root.service !== null && root.service.undoAvailable
+                text: root.draftDirty ? "Discard" : (undoes ? "Undo" : "Revert"); bordered: true
+                tooltipText: undoes ? "Undo " + root.service.undoWhat + " (" + root.service.undoRemaining + " s left)" : ""
                 enabled: root.draftDirty || root.hasPending || (root.service !== null && root.service.undoAvailable)
                 opacity: enabled ? 1 : 0.45
                 foreground: root.foreground; fontFamily: root.fontFamily
