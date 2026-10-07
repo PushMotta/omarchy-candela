@@ -57,6 +57,19 @@ EOF
 #!/bin/bash
 echo 62
 EOF
+  cat > "$dir/bin/ddcutil" <<EOF
+#!/bin/bash
+if [[ " \$* " == *" detect "* ]]; then
+  printf '%s\\n' 'Display 1' '  I2C bus: /dev/i2c-7' '  DRM connector: card1-DP-1' \\
+    'Display 2' '  I2C bus: /dev/i2c-8' '  DRM connector: card1-DP-2'
+elif [[ " \$* " == *" getvcp 12 "* ]]; then
+  echo 'VCP 12 C 128 255'
+elif [[ " \$* " == *" setvcp 12 "* ]]; then
+  echo "\$*" >> "$dir/ddcutil.log"
+else
+  exit 1
+fi
+EOF
   cat > "$dir/bin/omarchy-shell" <<'EOF'
 #!/bin/bash
 exit 0

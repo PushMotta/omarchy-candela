@@ -25,9 +25,21 @@ assert_eq "$(jq -r '.displays[0].live.bitdepth' <<<"$state")" "8" "bitdepth deri
 assert_eq "$(jq -r '.displays[0].capabilities.supportsHdr' <<<"$state")" "true" "capabilities attached"
 assert_eq "$(jq -r '.displays[0].brightness' <<<"$state")" "62" "brightness attached to focused display"
 assert_eq "$(jq -r '.displays[1].brightness' <<<"$state")" "null" "brightness only read for focused display"
+assert_eq "$(jq -r '.displays[0].contrast' <<<"$state")" "50" "contrast attached to focused display"
+assert_eq "$(jq -r '.displays[1].contrast' <<<"$state")" "null" "contrast only read for focused display"
 assert_eq "$(jq -r .pending <<<"$state")" "null" "nothing pending initially"
 assert_eq "$(jq -r .global.cm_auto_hdr <<<"$state")" "1" "global auto-hdr read"
 pass "state"
+
+# ---- contrast read and write
+assert_eq "$(run_cli "$sandbox" contrast DP-2)" "50" "contrast read uses the selected display"
+run_cli "$sandbox" contrast DP-2 74 >/dev/null
+assert_contains "$(cat "$sandbox/ddcutil.log")" "--bus 8" "contrast write targets DP-2's DDC bus"
+assert_contains "$(cat "$sandbox/ddcutil.log")" "setvcp 12 189" "contrast percentage maps to the VCP range"
+if run_cli "$sandbox" contrast DP-2 101 >/dev/null 2>&1; then
+  fail "contrast rejects values over 100"
+fi
+pass "contrast uses DDC/CI VCP 12"
 
 # ---- apply with timer
 out="$(run_cli "$sandbox" apply '{"displays":[{"name":"DP-2","bitdepth":10,"cm":"hdr","sdr_max_luminance":203}]}')"

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # omarchy:summary=Configure displays: geometry, signal and colour, with safe apply and revert
-# omarchy:args=<state|apply|keep|revert|persist|hdr|brightness|identify|open|edid|icc|recover|doctor> [...]
+# omarchy:args=<state|apply|keep|revert|persist|hdr|brightness|contrast|identify|open|edid|icc|recover|doctor> [...]
 # omarchy:examples=omarchy-candela state | omarchy-candela hdr on --display DP-2 | omarchy-candela apply @layout.json | omarchy-candela keep | omarchy-candela doctor
 
 # The backend behind the Candela plugin. Everything the UI does is a
@@ -92,6 +92,7 @@ Usage: omarchy-candela <command> [args]
   persist                        Regenerate the layout file from the kept configuration
   hdr <on|off|wide> [--display NAME] [--sdr-white NITS] [--now]
   brightness <NAME> [+N%|N%-|N%] Show or set brightness for one display
+  contrast <NAME> [0-100]        Show or set DDC/CI contrast (VCP 12)
   identify                       Flash each connector name on its own display
   open                           Open the Candela studio
   edid <NAME>                    Parsed EDID capabilities as JSON
@@ -191,6 +192,48 @@ restore_observed() {
 
 focused_name() {
   live_json | jq -r '[.[] | select(.focused == true)][0].name // ""'
+}
+
+ddc_bus_for() {
+  local monitor="$1"
+  ddcutil --skip-ddc-checks detect --brief 2>/dev/null | awk -v monitor="$monitor" '
+    /I2C bus:/ {
+      bus = $NF
+      sub(/^.*\/i2c-/, "", bus)
+    }
+    /DRM connector:/ {
+      connector = $NF
+      sub(/^card[0-9]+-/, "", connector)
+      if (connector == monitor && bus ~ /^[0-9]+$/) {
+        print bus
+        exit
+      }
+      bus = ""
+    }
+  '
+}
+
+read_contrast_vcp() {
+  local bus="$1"
+  ddcutil --bus "$bus" --skip-ddc-checks getvcp 12 --brief 2>/dev/null | awk '
+    $1 == "VCP" && toupper($2) == "12" && $3 == "C" &&
+        $4 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ && $5 > 0 {
+      print $4, $5
+      found = 1
+      exit
+    }
+    END { exit !found }
+  '
+}
+
+contrast_percent() {
+  local name="$1" bus current maximum
+  [[ -n $name ]] || return 1
+  bus="$(ddc_bus_for "$name")"
+  [[ $bus =~ ^[0-9]+$ ]] || return 1
+  read -r current maximum < <(read_contrast_vcp "$bus") || return 1
+  [[ $current =~ ^[0-9]+$ && $maximum =~ ^[0-9]+$ && $maximum -gt 0 ]] || return 1
+  echo $(( (current * 100 + maximum / 2) / maximum ))
 }
 
 edid_for() {
@@ -600,7 +643,7 @@ commit_intent() {
 # ---------------------------------------------------------------- commands
 
 cmd_state() {
-  local live intent pending focused edids brightness auto_hdr sdr_eotf internal_flag
+  local live intent pending focused edids brightness contrast auto_hdr sdr_eotf internal_flag
   live="$(live_json)"
   intent="$(intent_json)"
   pending="$(pending_json)"
@@ -614,11 +657,13 @@ cmd_state() {
 
   brightness=""
   [[ -n $focused ]] && brightness="$(omarchy-brightness-display --monitor "$focused" 2>/dev/null || true)"
+  contrast=""
+  [[ -n $focused ]] && contrast="$(contrast_percent "$focused" 2>/dev/null || true)"
   auto_hdr="$(run_bounded hyprctl getoption render:cm_auto_hdr -j 2>/dev/null | jq '.int // null' 2>/dev/null || echo null)"
   sdr_eotf="$(run_bounded hyprctl getoption render:cm_sdr_eotf -j 2>/dev/null | jq -r '.str // "default"' 2>/dev/null || echo default)"
   internal_flag=false; [[ -f $INTERNAL_FLAG ]] && internal_flag=true
   jq -n --argjson live "$live" --argjson intent "$intent" --argjson pending "$pending" \
-        --argjson edids "$edids" --arg focused "$focused" --arg brightness "$brightness" \
+        --argjson edids "$edids" --arg focused "$focused" --arg brightness "$brightness" --arg contrast "$contrast" \
         --argjson autoHdr "$auto_hdr" --arg sdrEotf "$sdr_eotf" --arg pluginId "$PLUGIN_ID" \
         --argjson revertSeconds "$REVERT_SECONDS" --argjson now "$(now_epoch)" \
         --argjson internalFlag "$internal_flag" --arg internalRe "$INTERNAL_RE" --arg stateDir "$STATE_DIR" '
@@ -646,6 +691,7 @@ cmd_state() {
         },
         capabilities: ($edids[.name] // {connector: .name, available: false}),
         brightness: (if .name == $focused and ($brightness | test("^[0-9]+$")) then ($brightness | tonumber) else null end),
+        contrast: (if .name == $focused and ($contrast | test("^[0-9]+$")) then ($contrast | tonumber) else null end),
         kept: ($intent.displays[.name] // {}),
         pendingConfig: (($pending.intent.displays // {})[.name] // null)
       } ]
@@ -866,6 +912,24 @@ cmd_brightness() {
   omarchy-brightness-display --no-osd --monitor "$name" "$@"
 }
 
+cmd_contrast() {
+  local name="${1:-}" value="${2:-}" bus current maximum raw_target
+  [[ -n $name ]] || die "contrast needs a display name"
+  [[ $# -le 2 ]] || die "contrast accepts a display name and optional value"
+  bus="$(ddc_bus_for "$name")"
+  [[ $bus =~ ^[0-9]+$ ]] || die "could not find a DDC/CI bus for $name"
+  read -r current maximum < <(read_contrast_vcp "$bus") || die "could not read VCP 12 contrast for $name"
+  [[ $current =~ ^[0-9]+$ && $maximum =~ ^[0-9]+$ && $maximum -gt 0 ]] || die "invalid VCP 12 contrast range for $name"
+  if [[ -z $value ]]; then
+    echo $(( (current * 100 + maximum / 2) / maximum ))
+    return
+  fi
+  [[ $value =~ ^([0-9]|[1-9][0-9]|100)$ ]] || die "contrast must be an integer from 0 to 100"
+  raw_target=$(( (value * maximum + 50) / 100 ))
+  ddcutil --bus "$bus" --skip-ddc-checks --noverify setvcp 12 "$raw_target" >/dev/null ||
+    die "could not set VCP 12 contrast for $name"
+}
+
 cmd_identify() {
   omarchy-shell "$PLUGIN_ID" identify >/dev/null 2>&1 || die "the Candela plugin is not running"
 }
@@ -1037,6 +1101,7 @@ case "$cmd" in
   hdr) acquire_lock; cmd_hdr "$@" ;;
   recover) acquire_lock; cmd_recover ;;
   brightness) cmd_brightness "$@" ;;
+  contrast) cmd_contrast "$@" ;;
   identify) cmd_identify ;;
   open) cmd_open ;;
   edid) [[ -n ${1:-} ]] || die "edid needs a display name"; edid_for "$1" ;;

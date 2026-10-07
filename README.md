@@ -202,6 +202,7 @@ omarchy-candela apply [--now] '{"displays":[{"name":"DP-2","scale":2}]}'
 omarchy-candela keep | revert | persist
 omarchy-candela revert --expired --token <t>   # the timer's form; does nothing unless <t> still matches pending
 omarchy-candela brightness DP-2 [+5%|5%-|40%]
+omarchy-candela contrast DP-2 [0-100]           # DDC/CI VCP 12
 omarchy-candela identify | open
 omarchy-candela edid DP-2
 omarchy-candela icc list

@@ -8,8 +8,8 @@ import "Model.js" as Model
 import "components"
 
 // Bar widget + popup: the daily controls for one display at a time.
-// Brightness, SDR white (in HDR), scale, colour mode, the display list, and
-// two actions. Everything heavier lives in the studio (Arrange…).
+// Brightness, contrast, SDR white (in HDR), scale, colour mode, the display
+// list, and two actions. Everything heavier lives in the studio (Arrange…).
 //
 // Cursor model follows the first-party panels: root owns cursorActive +
 // focusSection + selectedIndex; every target binds hasCursor and reports
@@ -67,16 +67,21 @@ Panel {
     return n
   }
 
-  // Brightness for the selected display. The state only carries the focused
-  // display's value (DDC reads are slow), so the rest is read on demand.
+  // Brightness and contrast for the selected display. The state only carries
+  // the focused display's values (DDC reads are slow), so the rest are read
+  // on demand.
   property int brightnessPercent: 0
   property bool brightnessAvailable: false
+  property int contrastPercent: 0
+  property bool contrastAvailable: false
   property real wheelAccumulator: 0
   // Which display the running DDC read is for, and which display asked for
   // one while it was busy — so a read finishing never paints its result
   // under a display the popup has since moved on from.
   property string brightnessReadFor: ""
   property string brightnessReadNext: ""
+  property string contrastReadFor: ""
+  property string contrastReadNext: ""
 
   // SDR white: a live preview value while dragging, else the compositor's.
   readonly property var sdrRange: Model.sdrWhiteRange(caps)
@@ -96,6 +101,7 @@ Panel {
     if (hasPending) list.push("pending")
     if (displays.length > 1) list.push("chips")
     if (brightnessAvailable) list.push("brightness")
+    if (contrastAvailable) list.push("contrast")
     if (colourMode === "hdr") list.push("sdrwhite")
     if (display && display.enabled) list.push("scale")
     if (caps.available && display && display.enabled) list.push("colour")
@@ -115,11 +121,11 @@ Panel {
   }
 
   function sectionIsHorizontal(section) {
-    return section === "chips" || section === "scale" || section === "colour" || section === "pending" || section === "brightness" || section === "sdrwhite"
+    return section === "chips" || section === "scale" || section === "colour" || section === "pending" || section === "brightness" || section === "contrast" || section === "sdrwhite"
   }
 
   function sectionFirstIndex(section) {
-    if (section === "brightness" || section === "sdrwhite") return -1
+    if (section === "brightness" || section === "contrast" || section === "sdrwhite") return -1
     if (section === "chips") return Math.max(0, indexOfDisplay(selectedName))
     if (section === "scale") return Math.max(0, activeScaleIndex())
     if (section === "colour") return Math.max(0, offeredModes.indexOf(colourMode))
@@ -158,6 +164,7 @@ Panel {
 
   function moveCursorH(delta) {
     if (focusSection === "brightness") { adjustBrightness(delta * 5); return }
+    if (focusSection === "contrast") { adjustContrast(delta * 5); return }
     if (focusSection === "sdrwhite") { adjustSdrWhite(delta * 10); return }
     if (!sectionIsHorizontal(focusSection)) return
     var count = sectionCount(focusSection)
@@ -199,7 +206,7 @@ Panel {
     if (!sections.length) return
     if (sections.indexOf(focusSection) < 0) { focusSection = sections[0]; selectedIndex = sectionFirstIndex(focusSection); return }
     var count = sectionCount(focusSection)
-    if (focusSection === "brightness" || focusSection === "sdrwhite") { selectedIndex = -1; return }
+    if (focusSection === "brightness" || focusSection === "contrast" || focusSection === "sdrwhite") { selectedIndex = -1; return }
     if (count === 0) { focusSection = sections[0]; selectedIndex = sectionFirstIndex(focusSection); return }
     if (selectedIndex > count - 1) selectedIndex = count - 1
     if (selectedIndex < 0) selectedIndex = 0
@@ -231,7 +238,7 @@ Panel {
   // Covers both switching the selected display and the state arriving for
   // the first time (display goes from null to the initial selection), so
   // the bar icon's wheel works before the popup has ever been opened.
-  onDisplayChanged: readBrightness()
+  onDisplayChanged: { readBrightness(); readContrast() }
 
   // ---------------------------------------------------------- actions
   function selectDisplay(name) {
@@ -324,6 +331,37 @@ Panel {
     if (service && display) service.setBrightness(display.name, pct)
   }
 
+  function readContrast() {
+    if (!service || !display) { contrastAvailable = false; contrastReadNext = ""; return }
+    if (display.contrast !== null && display.contrast !== undefined) {
+      contrastReadNext = ""
+      contrastAvailable = true
+      contrastPercent = Model.getContrast(display.contrast)
+      return
+    }
+    contrastAvailable = false
+    if (contrastProc.running) {
+      contrastReadNext = display.name
+      return
+    }
+    contrastReadNext = ""
+    contrastReadFor = display.name
+    contrastProc.command = [service.cli, "contrast", display.name]
+    contrastProc.running = true
+  }
+
+  function setContrast(value) {
+    var pct = Model.setContrast(value)
+    if (pct === null) return
+    contrastPercent = pct
+    if (service && display) service.setContrast(display.name, pct)
+  }
+
+  function adjustContrast(delta) {
+    if (!contrastAvailable) return
+    setContrast(contrastPercent + delta)
+  }
+
   function adjustBrightness(delta) {
     if (!brightnessAvailable) return
     setBrightness(brightnessPercent + delta)
@@ -387,11 +425,39 @@ Panel {
     }
   }
 
+  Process {
+    id: contrastProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var value = Model.getContrast(String(text || "").trim())
+        if (root.display && root.display.name === root.contrastReadFor) {
+          root.contrastAvailable = value !== null
+          if (root.contrastAvailable) root.contrastPercent = value
+        }
+        root.contrastReadFor = ""
+      }
+    }
+    onRunningChanged: {
+      if (running || root.contrastReadNext === "") return
+      var next = root.contrastReadNext
+      root.contrastReadNext = ""
+      if (root.display && root.display.name === next) root.readContrast()
+    }
+  }
+
   Timer {
     id: brightnessDebounce
     interval: 180
     repeat: false
     onTriggered: root.setBrightness(root.brightnessPercent)
+  }
+
+  Timer {
+    id: contrastDebounce
+    interval: 180
+    repeat: false
+    onTriggered: root.setContrast(root.contrastPercent)
   }
 
   implicitWidth: button.implicitWidth
@@ -420,6 +486,7 @@ Panel {
       if (indexOfDisplay(live) >= 0) selectedName = live
       else if (!selectedName || indexOfDisplay(selectedName) < 0) selectedName = focusedName || (displays.length ? displays[0].name : "")
       readBrightness()
+      readContrast()
       focusSection = visibleSections.length ? visibleSections[0] : "actions"
       selectedIndex = sectionFirstIndex(focusSection)
       cursorActive = false
@@ -429,9 +496,9 @@ Panel {
 
   Connections {
     target: root.service
-    // Not gated on `opened`: a fresh shell must have brightness ready for
-    // the bar icon's wheel before the popup is opened for the first time.
-    function onStateChangedExternally() { root.readBrightness() }
+    // Not gated on `opened`: a fresh shell must have DDC controls ready for
+    // the bar icon's wheel and popup before the first open.
+    function onStateChangedExternally() { root.readBrightness(); root.readContrast() }
   }
 
   // ---------------------------------------------------------- bar button
@@ -507,6 +574,7 @@ Panel {
         fontFamily: root.fam
         markers: [
           { item: brightnessHeader, name: "brightness" },
+          { item: contrastHeader, name: "contrast" },
           { item: sdrHeader, name: "sdr white" },
           { item: scaleHeader, name: "scale" },
           { item: colourHeader, name: "colour" },
@@ -631,6 +699,49 @@ Panel {
                 onReleased: function(v) { brightnessDebounce.stop(); root.setBrightness(v) }
               }
               HoverHandler { onHoveredChanged: if (hovered) root.hoverInto("brightness", -1) }
+            }
+          }
+
+          // ---------- Contrast ----------
+          PanelSeparator { visible: root.contrastAvailable; foreground: root.fg }
+
+          Column {
+            visible: root.contrastAvailable
+            width: parent.width
+            spacing: Style.spacing.md
+
+            Item {
+              width: parent.width
+              implicitHeight: Math.max(contrastHeader.implicitHeight, contrastValue.implicitHeight)
+              PanelSectionHeader { id: contrastHeader; text: "CONTRAST"; foreground: root.fg; fontFamily: root.fam; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter }
+              Text {
+                id: contrastValue
+                textFormat: Text.PlainText
+                text: Math.round(contrastSlider.dragging ? contrastSlider.liveValue : root.contrastPercent) + "%"
+                color: Qt.darker(root.fg, 1.4)
+                font.family: root.fam; font.pixelSize: Style.font.caption; font.bold: true
+                anchors.right: parent.right; anchors.rightMargin: Style.space(6); anchors.verticalCenter: parent.verticalCenter
+              }
+            }
+
+            CursorSurface {
+              id: contrastRow
+              width: parent.width
+              height: contrastSlider.implicitHeight + Style.spacing.controlGap
+              hasCursor: root.cursorActive && root.focusSection === "contrast"
+              onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(contrastRow)
+              foreground: root.fg
+              outline: true
+              PanelSlider {
+                id: contrastSlider
+                bar: root.bar
+                anchors.fill: parent; anchors.leftMargin: Style.space(6); anchors.rightMargin: Style.space(6)
+                minimum: 0; maximum: 100; step: 1; integer: true
+                value: root.contrastPercent
+                onMoved: function(v) { root.contrastPercent = Math.round(v); contrastDebounce.restart() }
+                onReleased: function(v) { contrastDebounce.stop(); root.setContrast(v) }
+              }
+              HoverHandler { onHoveredChanged: if (hovered) root.hoverInto("contrast", -1) }
             }
           }
 

@@ -6,6 +6,18 @@ const M = require("../Model.js")
 
 const monitors = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "hyprctl-monitors.json"), "utf8"))
 
+test("contrast values normalize DDC readings and slider writes", () => {
+  assert.equal(M.getContrast("50"), 50)
+  assert.equal(M.getContrast("-3"), 0)
+  assert.equal(M.getContrast("105"), 100)
+  assert.equal(M.getContrast(""), null)
+  assert.equal(M.getContrast("not a number"), null)
+  assert.equal(M.setContrast(0), 0)
+  assert.equal(M.setContrast(48.6), 49)
+  assert.equal(M.setContrast(150), 100)
+  assert.equal(M.setContrast("invalid"), null)
+})
+
 const caps = {
   available: true, manufacturer: "HWV", productCode: "28194", bitsPerPrimary: 10,
   physicalWidthMm: 596, physicalHeightMm: 397, diagonalInch: 28.2, ppi: 164,

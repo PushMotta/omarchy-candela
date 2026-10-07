@@ -282,6 +282,16 @@ Item {
   }
   property var brightnessQueued: null
 
+  function setContrast(name, percent) {
+    if (!name) return
+    var value = Model.setContrast(percent)
+    if (value === null) return
+    contrastProc.command = [root.cli, "contrast", name, String(value)]
+    if (contrastProc.running) { contrastQueued = contrastProc.command; return }
+    contrastProc.running = true
+  }
+  property var contrastQueued: null
+
   // All three below: success is the exit code, not "did it write to
   // stderr" — the backend can warn on stderr and still exit 0 (e.g. an
   // EDID that doesn't advertise HDR), and die() can exit non-zero with
@@ -367,6 +377,24 @@ Item {
       else root.succeedOperation("brightness")
       root.actionFinished("brightness", ok, out)
       if (root.brightnessQueued) { var next = root.brightnessQueued; root.brightnessQueued = null; brightnessProc.command = next; brightnessProc.running = true }
+      else root.refresh()
+    }
+  }
+
+  Process {
+    id: contrastProc
+    property int lastExitCode: -1
+    stdout: StdioCollector { id: contrastOut; waitForEnd: true }
+    stderr: StdioCollector { id: contrastErr; waitForEnd: true }
+    onExited: function(exitCode) { contrastProc.lastExitCode = exitCode }
+    onRunningChanged: {
+      if (running) return
+      var ok = contrastProc.lastExitCode === 0
+      var out = ok ? String(contrastOut.text || "").trim() : String(contrastErr.text || "").trim()
+      if (!ok) root.failOperation("contrast", out || "The display did not accept the contrast change")
+      else root.succeedOperation("contrast")
+      root.actionFinished("contrast", ok, out)
+      if (root.contrastQueued) { var next = root.contrastQueued; root.contrastQueued = null; contrastProc.command = next; contrastProc.running = true }
       else root.refresh()
     }
   }

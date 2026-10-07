@@ -559,6 +559,17 @@ function brightnessName(percent) {
   return "Night owl"
 }
 
+function getContrast(value) {
+  if (value === null || value === undefined || String(value).trim() === "") return null
+  var n = Number(value)
+  return isFinite(n) ? clamp(Math.round(n), 0, 100) : null
+}
+
+function setContrast(value) {
+  var n = num(value, NaN)
+  return isFinite(n) ? clamp(Math.round(n), 0, 100) : null
+}
+
 function parseState(raw) {
   try {
     var s = JSON.parse(String(raw || ""))
@@ -580,6 +591,7 @@ if (typeof module !== "undefined") {
     logicalSize: logicalSize, rectOf: rectOf, overlaps: overlaps, boundsOf: boundsOf, snapRect: snapRect, anyOverlap: anyOverlap, layoutCaption: layoutCaption,
     arrangeable: arrangeable, snapTargets: snapTargets, withRect: withRect, dragPosition: dragPosition,
     reflowAfterResize: reflowAfterResize, placeOutsideOverlaps: placeOutsideOverlaps, snapBeside: snapBeside,
-    brightnessName: brightnessName, parseState: parseState, clamp: clamp, round2: round2
+    brightnessName: brightnessName, getContrast: getContrast, setContrast: setContrast,
+    parseState: parseState, clamp: clamp, round2: round2
   }
 }
