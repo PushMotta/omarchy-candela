@@ -7,6 +7,7 @@
 
 var REFERENCE_WHITE = 203      // BT.2408 reference white, cd/m²
 var SDR_WHITE_FLOOR = 80       // Hyprland's default sdr_max_luminance
+var GAMMA_MAX = 200            // Hyprsunset's supported maximum percentage
 // What Hyprland 0.56 tells clients using Wayland colour management
 // (Chromium, Electron) SDR white is, whatever sdr_max_luminance says: the HDR
 // image description it offers them keeps the default 203 cd/m² reference
@@ -570,6 +571,17 @@ function setContrast(value) {
   return isFinite(n) ? clamp(Math.round(n), 0, 100) : null
 }
 
+function getGamma(value) {
+  if (value === null || value === undefined || String(value).trim() === "") return null
+  var n = Number(value)
+  return isFinite(n) ? clamp(Math.round(n), 0, GAMMA_MAX) : null
+}
+
+function setGamma(value) {
+  var n = num(value, NaN)
+  return isFinite(n) ? clamp(Math.round(n), 0, GAMMA_MAX) : null
+}
+
 function parseState(raw) {
   try {
     var s = JSON.parse(String(raw || ""))
@@ -580,7 +592,7 @@ function parseState(raw) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    REFERENCE_WHITE: REFERENCE_WHITE, SDR_WHITE_FLOOR: SDR_WHITE_FLOOR, SCALE_PRESETS: SCALE_PRESETS,
+    REFERENCE_WHITE: REFERENCE_WHITE, SDR_WHITE_FLOOR: SDR_WHITE_FLOOR, GAMMA_MAX: GAMMA_MAX, SCALE_PRESETS: SCALE_PRESETS,
     cleanScale: cleanScale, availableScales: availableScales, scaleIndex: scaleIndex, formatScale: formatScale, sameScale: sameScale, round5: round5,
     bitdepthFromFormat: bitdepthFromFormat, formatMode: formatMode, parseMode: parseMode, modeOptions: modeOptions, currentModeValue: currentModeValue,
     effectiveIntent: effectiveIntent, effectiveGlobal: effectiveGlobal, colourMode: colourMode, offeredModes: offeredModes, hdrUnavailableReason: hdrUnavailableReason, sdrWhiteRange: sdrWhiteRange, defaultSdrWhite: defaultSdrWhite, sdrWhiteClientNote: sdrWhiteClientNote, CM_CLIENT_REFERENCE_WHITE: CM_CLIENT_REFERENCE_WHITE,
@@ -591,7 +603,7 @@ if (typeof module !== "undefined") {
     logicalSize: logicalSize, rectOf: rectOf, overlaps: overlaps, boundsOf: boundsOf, snapRect: snapRect, anyOverlap: anyOverlap, layoutCaption: layoutCaption,
     arrangeable: arrangeable, snapTargets: snapTargets, withRect: withRect, dragPosition: dragPosition,
     reflowAfterResize: reflowAfterResize, placeOutsideOverlaps: placeOutsideOverlaps, snapBeside: snapBeside,
-    brightnessName: brightnessName, getContrast: getContrast, setContrast: setContrast,
+    brightnessName: brightnessName, getContrast: getContrast, setContrast: setContrast, getGamma: getGamma, setGamma: setGamma,
     parseState: parseState, clamp: clamp, round2: round2
   }
 }

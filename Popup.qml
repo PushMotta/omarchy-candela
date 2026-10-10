@@ -82,6 +82,9 @@ Panel {
   property string brightnessReadNext: ""
   property string contrastReadFor: ""
   property string contrastReadNext: ""
+  property int gammaPreview: -1
+  readonly property int gammaValue: gammaPreview >= 0 ? gammaPreview : (service ? service.gammaPercent : 100)
+  readonly property bool gammaAvailable: service ? service.gammaAvailable : false
 
   // SDR white: a live preview value while dragging, else the compositor's.
   readonly property var sdrRange: Model.sdrWhiteRange(caps)
@@ -102,6 +105,7 @@ Panel {
     if (displays.length > 1) list.push("chips")
     if (brightnessAvailable) list.push("brightness")
     if (contrastAvailable) list.push("contrast")
+    if (gammaAvailable) list.push("gamma")
     if (colourMode === "hdr") list.push("sdrwhite")
     if (display && display.enabled) list.push("scale")
     if (caps.available && display && display.enabled) list.push("colour")
@@ -121,11 +125,11 @@ Panel {
   }
 
   function sectionIsHorizontal(section) {
-    return section === "chips" || section === "scale" || section === "colour" || section === "pending" || section === "brightness" || section === "contrast" || section === "sdrwhite"
+    return section === "chips" || section === "scale" || section === "colour" || section === "pending" || section === "brightness" || section === "contrast" || section === "gamma" || section === "sdrwhite"
   }
 
   function sectionFirstIndex(section) {
-    if (section === "brightness" || section === "contrast" || section === "sdrwhite") return -1
+    if (section === "brightness" || section === "contrast" || section === "gamma" || section === "sdrwhite") return -1
     if (section === "chips") return Math.max(0, indexOfDisplay(selectedName))
     if (section === "scale") return Math.max(0, activeScaleIndex())
     if (section === "colour") return Math.max(0, offeredModes.indexOf(colourMode))
@@ -165,6 +169,7 @@ Panel {
   function moveCursorH(delta) {
     if (focusSection === "brightness") { adjustBrightness(delta * 5); return }
     if (focusSection === "contrast") { adjustContrast(delta * 5); return }
+    if (focusSection === "gamma") { adjustGamma(delta * 5); return }
     if (focusSection === "sdrwhite") { adjustSdrWhite(delta * 10); return }
     if (!sectionIsHorizontal(focusSection)) return
     var count = sectionCount(focusSection)
@@ -206,7 +211,7 @@ Panel {
     if (!sections.length) return
     if (sections.indexOf(focusSection) < 0) { focusSection = sections[0]; selectedIndex = sectionFirstIndex(focusSection); return }
     var count = sectionCount(focusSection)
-    if (focusSection === "brightness" || focusSection === "contrast" || focusSection === "sdrwhite") { selectedIndex = -1; return }
+    if (focusSection === "brightness" || focusSection === "contrast" || focusSection === "gamma" || focusSection === "sdrwhite") { selectedIndex = -1; return }
     if (count === 0) { focusSection = sections[0]; selectedIndex = sectionFirstIndex(focusSection); return }
     if (selectedIndex > count - 1) selectedIndex = count - 1
     if (selectedIndex < 0) selectedIndex = 0
@@ -362,6 +367,20 @@ Panel {
     setContrast(contrastPercent + delta)
   }
 
+  function setGamma(value) {
+    if (!service) return
+    var gamma = Model.setGamma(value)
+    if (gamma === null) return
+    gammaPreview = gamma
+    service.setGamma(gamma)
+    gammaSettle.restart()
+  }
+
+  function adjustGamma(delta) {
+    if (!gammaAvailable) return
+    setGamma(gammaValue + delta)
+  }
+
   function adjustBrightness(delta) {
     if (!brightnessAvailable) return
     setBrightness(brightnessPercent + delta)
@@ -460,6 +479,20 @@ Panel {
     onTriggered: root.setContrast(root.contrastPercent)
   }
 
+  Timer {
+    id: gammaDebounce
+    interval: 180
+    repeat: false
+    onTriggered: root.setGamma(root.gammaPreview)
+  }
+
+  Timer {
+    id: gammaSettle
+    interval: 500
+    repeat: false
+    onTriggered: root.gammaPreview = -1
+  }
+
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -470,8 +503,8 @@ Panel {
     return w && w.screen ? String(w.screen.name) : ""
   }
 
-  onServiceChanged: if (service) service.registerPopup(root)
-  Component.onCompleted: if (service) service.registerPopup(root)
+  onServiceChanged: if (service) { service.registerPopup(root); service.refreshGamma() }
+  Component.onCompleted: if (service) { service.registerPopup(root); service.refreshGamma() }
   Component.onDestruction: if (service) service.unregisterPopup(root)
 
   onOpenedChanged: {
@@ -487,6 +520,7 @@ Panel {
       else if (!selectedName || indexOfDisplay(selectedName) < 0) selectedName = focusedName || (displays.length ? displays[0].name : "")
       readBrightness()
       readContrast()
+      if (service) service.refreshGamma()
       focusSection = visibleSections.length ? visibleSections[0] : "actions"
       selectedIndex = sectionFirstIndex(focusSection)
       cursorActive = false
@@ -575,6 +609,7 @@ Panel {
         markers: [
           { item: brightnessHeader, name: "brightness" },
           { item: contrastHeader, name: "contrast" },
+          { item: gammaHeader, name: "gamma" },
           { item: sdrHeader, name: "sdr white" },
           { item: scaleHeader, name: "scale" },
           { item: colourHeader, name: "colour" },
@@ -742,6 +777,49 @@ Panel {
                 onReleased: function(v) { contrastDebounce.stop(); root.setContrast(v) }
               }
               HoverHandler { onHoveredChanged: if (hovered) root.hoverInto("contrast", -1) }
+            }
+          }
+
+          // ---------- Gamma (Hyprsunset, global) ----------
+          PanelSeparator { visible: root.gammaAvailable; foreground: root.fg }
+
+          Column {
+            visible: root.gammaAvailable
+            width: parent.width
+            spacing: Style.spacing.md
+
+            Item {
+              width: parent.width
+              implicitHeight: Math.max(gammaHeader.implicitHeight, gammaValueLabel.implicitHeight)
+              PanelSectionHeader { id: gammaHeader; text: "GAMMA · ALL DISPLAYS"; foreground: root.fg; fontFamily: root.fam; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter }
+              Text {
+                id: gammaValueLabel
+                textFormat: Text.PlainText
+                text: Math.round(gammaSlider.dragging ? gammaSlider.liveValue : root.gammaValue) + "%"
+                color: Qt.darker(root.fg, 1.4)
+                font.family: root.fam; font.pixelSize: Style.font.caption; font.bold: true
+                anchors.right: parent.right; anchors.rightMargin: Style.space(6); anchors.verticalCenter: parent.verticalCenter
+              }
+            }
+
+            CursorSurface {
+              id: gammaRow
+              width: parent.width
+              height: gammaSlider.implicitHeight + Style.spacing.controlGap
+              hasCursor: root.cursorActive && root.focusSection === "gamma"
+              onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(gammaRow)
+              foreground: root.fg
+              outline: true
+              PanelSlider {
+                id: gammaSlider
+                bar: root.bar
+                anchors.fill: parent; anchors.leftMargin: Style.space(6); anchors.rightMargin: Style.space(6)
+                minimum: 0; maximum: Model.GAMMA_MAX; step: 1; integer: true
+                value: root.gammaValue
+                onMoved: function(v) { root.gammaPreview = Math.round(v); gammaDebounce.restart() }
+                onReleased: function(v) { gammaDebounce.stop(); root.setGamma(v) }
+              }
+              HoverHandler { onHoveredChanged: if (hovered) root.hoverInto("gamma", -1) }
             }
           }
 

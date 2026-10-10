@@ -18,6 +18,19 @@ test("contrast values normalize DDC readings and slider writes", () => {
   assert.equal(M.setContrast("invalid"), null)
 })
 
+test("gamma values normalize Hyprsunset readings and slider writes", () => {
+  assert.equal(M.GAMMA_MAX, 200)
+  assert.equal(M.getGamma("150"), 150)
+  assert.equal(M.getGamma("0"), 0)
+  assert.equal(M.getGamma("250"), 200)
+  assert.equal(M.getGamma(""), null)
+  assert.equal(M.getGamma("not a number"), null)
+  assert.equal(M.setGamma(0), 0)
+  assert.equal(M.setGamma(155.6), 156)
+  assert.equal(M.setGamma(250), 200)
+  assert.equal(M.setGamma("invalid"), null)
+})
+
 const caps = {
   available: true, manufacturer: "HWV", productCode: "28194", bitsPerPrimary: 10,
   physicalWidthMm: 596, physicalHeightMm: 397, diagonalInch: 28.2, ppi: 164,

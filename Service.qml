@@ -28,6 +28,30 @@ Item {
   }
   readonly property string cli: pluginDir + "/bin/omarchy-candela"
 
+  property int gammaPercent: 100
+  property bool gammaAvailable: true
+  property bool gammaRefreshQueued: false
+  property var gammaQueued: null
+
+  function refreshGamma() {
+    if (gammaProbe.running) { gammaRefreshQueued = true; return }
+    gammaProbe.running = true
+  }
+
+  function setGamma(percent) {
+    var value = Model.setGamma(percent)
+    if (value === null) return
+    if (gammaProc.running) { gammaQueued = value; return }
+    runGamma(value)
+  }
+
+  function runGamma(value) {
+    gammaProc.command = ["bash", "-lc",
+      "pgrep -x hyprsunset >/dev/null || { setsid uwsm-app -- hyprsunset >/dev/null 2>&1 & sleep 1; }; " +
+      "hyprctl hyprsunset gamma " + value]
+    gammaProc.running = true
+  }
+
   // ------------------------------------------------------------ state
   property var state: null
   property bool loading: false
@@ -120,6 +144,47 @@ Item {
     interval: 300
     repeat: false
     onTriggered: root.refresh()
+  }
+
+  Process {
+    id: gammaProbe
+    command: ["bash", "-lc",
+      "pgrep -x hyprsunset >/dev/null || { setsid uwsm-app -- hyprsunset >/dev/null 2>&1 & sleep 1; }; " +
+      "hyprctl hyprsunset gamma"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var value = Model.getGamma(String(text || "").trim())
+        if (value !== null) root.gammaPercent = value
+      }
+    }
+    onRunningChanged: {
+      if (running || !root.gammaRefreshQueued) return
+      root.gammaRefreshQueued = false
+      root.refreshGamma()
+    }
+  }
+
+  Process {
+    id: gammaProc
+    property int lastExitCode: -1
+    stdout: StdioCollector { id: gammaOut; waitForEnd: true }
+    stderr: StdioCollector { id: gammaErr; waitForEnd: true }
+    onExited: function(exitCode) { gammaProc.lastExitCode = exitCode }
+    onRunningChanged: {
+      if (running) return
+      var ok = gammaProc.lastExitCode === 0
+      var out = ok ? String(gammaOut.text || "").trim() : String(gammaErr.text || "").trim()
+      if (!ok) {
+        root.failOperation("gamma", out || "Hyprsunset did not accept the gamma change")
+        console.warn("gamma:", out || "Hyprsunset did not accept the gamma change")
+      } else root.succeedOperation("gamma")
+      if (root.gammaQueued !== null) {
+        var next = root.gammaQueued
+        root.gammaQueued = null
+        root.runGamma(next)
+      } else root.refreshGamma()
+    }
   }
 
   // Tick the countdown while something is pending, then refresh once it
@@ -807,5 +872,5 @@ Item {
     }
   }
 
-  Component.onCompleted: refresh()
+  Component.onCompleted: { refresh(); refreshGamma() }
 }

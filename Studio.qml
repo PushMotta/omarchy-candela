@@ -23,9 +23,11 @@ Item {
   readonly property string pluginId: manifest && manifest.id ? String(manifest.id) : "io.github.pushmotta.candela"
   property bool opened: false
   property var targetScreen: null
+  property int gammaPreview: -1
 
   readonly property var displays: service ? service.displays : []
   readonly property bool hasPending: service ? service.hasPending : false
+  readonly property int gammaValue: gammaPreview >= 0 ? gammaPreview : (service ? service.gammaPercent : 100)
 
   // ---------------------------------------------------------- theme
   readonly property color background: Color.popups.background
@@ -66,7 +68,7 @@ Item {
     advancedOpen = false
     focusArea = "inspector"
     currentRow = "mode"
-    if (service) service.refresh()
+    if (service) { service.refresh(); service.refreshGamma() }
     if (!selectedName || !displayByName(selectedName)) selectedName = wanted || (displays.length ? displays[0].name : "")
     opened = true
     iccProc.running = true
@@ -102,6 +104,29 @@ Item {
   function requestClose() {
     if (shell && typeof shell.hide === "function") shell.hide(pluginId)
     else close()
+  }
+
+  function setGamma(value) {
+    if (!service) return
+    var gamma = Model.setGamma(value)
+    if (gamma === null) return
+    gammaPreview = gamma
+    service.setGamma(gamma)
+    gammaSettle.restart()
+  }
+
+  Timer {
+    id: gammaDebounce
+    interval: 120
+    repeat: false
+    onTriggered: root.setGamma(root.gammaPreview)
+  }
+
+  Timer {
+    id: gammaSettle
+    interval: 450
+    repeat: false
+    onTriggered: root.gammaPreview = -1
   }
 
   // ---------------------------------------------------------- selection + draft
@@ -1081,6 +1106,41 @@ Item {
                       Text { text: root.advancedOpen ? "⌄" : "›"; color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.subtitle; width: Style.space(16); horizontalAlignment: Text.AlignRight; anchors.verticalCenter: parent.verticalCenter }
                     }
                     MouseArea { anchors.fill: parent; onClicked: root.advancedOpen = !root.advancedOpen; cursorShape: Qt.PointingHandCursor }
+                  }
+                }
+
+                InspectorRow {
+                  rowId: "gamma"
+                  visible: root.advancedOpen
+                  Column {
+                    width: parent.width; spacing: Style.spacing.md
+                    Item {
+                      width: parent.width
+                      implicitHeight: Math.max(gammaLabel.implicitHeight, gammaValueLabel.implicitHeight)
+                      RowLabel { id: gammaLabel; text: "Hyprsunset gamma · all displays"; anchors.left: parent.left }
+                      Text {
+                        id: gammaValueLabel
+                        textFormat: Text.PlainText
+                        text: root.gammaValue + "%"
+                        color: root.dim
+                        font.family: root.fontFamily; font.pixelSize: Style.font.caption; font.bold: true
+                        anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                      }
+                    }
+                    PanelSlider {
+                      bar: root.fakeBar
+                      width: parent.width
+                      minimum: 0; maximum: Model.GAMMA_MAX; step: 1; integer: true
+                      value: root.gammaValue
+                      onMoved: function(v) { root.gammaPreview = Math.round(v); gammaDebounce.restart() }
+                      onReleased: function(v) { gammaDebounce.stop(); root.setGamma(v) }
+                    }
+                    Text {
+                      textFormat: Text.PlainText
+                      text: "Global Hyprsunset gamma filter (0–200%)."
+                      color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption
+                      wrapMode: Text.WordWrap; width: parent.width
+                    }
                   }
                 }
 
