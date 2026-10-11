@@ -45,10 +45,18 @@ Item {
     runGamma(value)
   }
 
+  function gammaCommand(request) {
+    var args = request === "" ? "" : " " + request
+    var command = "hyprctl hyprsunset gamma" + args
+    return "systemctl --user start hyprsunset.service || exit $?; " +
+      "if " + command + "; then exit 0; fi; " +
+      "systemctl --user restart hyprsunset.service || exit $?; " +
+      "for attempt in 1 2 3 4 5; do " +
+      command + " && exit 0; sleep 0.2; done; exit 1"
+  }
+
   function runGamma(value) {
-    gammaProc.command = ["bash", "-lc",
-      "pgrep -x hyprsunset >/dev/null || { setsid uwsm-app -- hyprsunset >/dev/null 2>&1 & sleep 1; }; " +
-      "hyprctl hyprsunset gamma " + value]
+    gammaProc.command = ["bash", "-c", gammaCommand(String(value))]
     gammaProc.running = true
   }
 
@@ -148,18 +156,28 @@ Item {
 
   Process {
     id: gammaProbe
-    command: ["bash", "-lc",
-      "pgrep -x hyprsunset >/dev/null || { setsid uwsm-app -- hyprsunset >/dev/null 2>&1 & sleep 1; }; " +
-      "hyprctl hyprsunset gamma"]
+    property int lastExitCode: -1
+    command: ["bash", "-c", root.gammaCommand("")]
     stdout: StdioCollector {
+      id: gammaProbeOut
       waitForEnd: true
       onStreamFinished: {
         var value = Model.getGamma(String(text || "").trim())
         if (value !== null) root.gammaPercent = value
       }
     }
+    stderr: StdioCollector { id: gammaProbeErr; waitForEnd: true }
+    onExited: function(exitCode) { gammaProbe.lastExitCode = exitCode }
     onRunningChanged: {
-      if (running || !root.gammaRefreshQueued) return
+      if (running) return
+      if (gammaProbe.lastExitCode !== 0) {
+        var out = String(gammaProbeErr.text || "").trim()
+        if (!out) out = String(gammaProbeOut.text || "").trim()
+        if (!out) out = "Could not read gamma from Hyprsunset"
+        root.failOperation("gamma", out)
+        console.warn("gamma:", out)
+      } else root.succeedOperation("gamma")
+      if (!root.gammaRefreshQueued) return
       root.gammaRefreshQueued = false
       root.refreshGamma()
     }
@@ -174,7 +192,9 @@ Item {
     onRunningChanged: {
       if (running) return
       var ok = gammaProc.lastExitCode === 0
-      var out = ok ? String(gammaOut.text || "").trim() : String(gammaErr.text || "").trim()
+      var out = ok ? String(gammaOut.text || "").trim()
+                   : String(gammaErr.text || "").trim()
+      if (!ok && !out) out = String(gammaOut.text || "").trim()
       if (!ok) {
         root.failOperation("gamma", out || "Hyprsunset did not accept the gamma change")
         console.warn("gamma:", out || "Hyprsunset did not accept the gamma change")
