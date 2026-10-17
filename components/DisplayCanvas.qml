@@ -255,6 +255,12 @@ Item {
       readonly property bool infoShown: height > Style.space(56) && (blockChips.length === 0 || chipFit(roomWithInfo) > 0)
       readonly property real chipSize: blockChips.length === 0 ? 0 : chipFit(infoShown ? roomWithInfo : roomWithoutInfo)
 
+      // Too short for the name at its size and margins: a row of 32:9
+      // displays in a narrow studio draws each one a couple of dozen pixels
+      // tall, and the name ran out of the block. It shrinks to the block and
+      // sits in its middle instead, and the badge, which would not fit, goes.
+      readonly property bool shortBlock: height < Style.font.title * 1.4 + Style.space(20)
+
       visible: disp.name !== ""
       x: isDragging ? root.toPixelX(root.dragLogX) : Math.round(root.toPixelX(disp.x))
       y: isDragging ? root.toPixelY(root.dragLogY) : Math.round(root.toPixelY(disp.y))
@@ -360,8 +366,9 @@ Item {
       Column {
         id: titleColumn
         anchors.left: parent.left
-        anchors.top: parent.top
-        anchors.margins: Style.space(10)
+        anchors.top: block.shortBlock ? undefined : parent.top
+        anchors.verticalCenter: block.shortBlock ? parent.verticalCenter : undefined
+        anchors.margins: block.shortBlock ? Style.space(4) : Style.space(10)
         spacing: Style.space(2)
 
         Row {
@@ -378,13 +385,13 @@ Item {
             text: block.disp.name
             color: root.foreground
             font.family: root.fontFamily
-            font.pixelSize: Style.font.title
+            font.pixelSize: block.shortBlock ? Math.max(8, Math.min(Style.font.title, Math.floor((block.height - Style.space(4)) / 1.3))) : Style.font.title
             font.bold: true
           }
           BorderSurface {
             // Only where it fits beside the name: on a narrow block it would
             // run over the block's edge.
-            visible: (block.disp.hdr || block.disp.disabled || block.disp.virtual === true || (block.disp.mirrorOf && block.disp.mirrorOf !== ""))
+            visible: !block.shortBlock && (block.disp.hdr || block.disp.disabled || block.disp.virtual === true || (block.disp.mirrorOf && block.disp.mirrorOf !== ""))
               && nameText.implicitWidth + Style.space(6) + implicitWidth + (block.disp.focused ? Style.space(12) : 0) <= block.width - Style.space(20)
             implicitWidth: badgeText.implicitWidth + Style.space(10)
             implicitHeight: badgeText.implicitHeight + Style.space(3)

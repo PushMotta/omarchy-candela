@@ -172,3 +172,20 @@ out="$(run_cli "$sandbox" report)"
 assert_not_contains "$out" "R1LMQS047678" "the serial is not in the report"
 assert_contains "$out" '"serial": "(removed)"' "it is said to be removed"
 pass "the report keeps serials out"
+
+# ---- a 32:9 display: its own mode, a fractional scale, and a display placed
+# beside its far edge, kept and loaded like any other
+sandbox="$(new_sandbox)"
+g9="$(jq -nc '{make:"Samsung Electric Company", model:"Odyssey G95SC", serial:"H1AK500000",
+  description:"Samsung Electric Company Odyssey G95SC H1AK500000", width:5120, height:1440, refreshRate:239.76, scale:1,
+  availableModes:["5120x1440@239.76Hz","5120x1440@119.97Hz","5120x1440@59.98Hz","3840x1080@119.97Hz","2560x1440@59.95Hz"]}')"
+for f in monitors.json monitors.pristine.json; do
+  jq --argjson d "$g9" 'map(if .name == "DP-1" then . + $d + {disabled: false} else . end)' "$sandbox/$f" > "$sandbox/m.tmp" && mv "$sandbox/m.tmp" "$sandbox/$f"
+done
+run_cli "$sandbox" apply --now '{"displays":[{"name":"DP-1","mode":"5120x1440@119.97","scale":1.25,"position":"0x0"},{"name":"DP-2","position":"4096x0"}]}' >/dev/null
+reload "$sandbox"
+lua="$(cat "$sandbox/state/candela-layout.lua")"
+assert_contains "$lua" 'output = "desc:Samsung Electric Company Odyssey G95SC H1AK500000 (DP-1)", disabled = false, mode = "5120x1440@119.97", position = "0x0", scale = 1.25' "the 32:9 display's rule"
+assert_eq "$(mon "$sandbox" DP-1 width)x$(mon "$sandbox" DP-1 height)@$(mon "$sandbox" DP-1 refreshRate) $(mon "$sandbox" DP-1 scale)" "5120x1440@119.97 1.25" "loads at its mode and scale"
+assert_eq "$(mon "$sandbox" DP-2 x)" "4096" "and the display beside it starts where 5120 / 1.25 ends"
+pass "a 32:9 display is kept and loaded at its own mode and scale"

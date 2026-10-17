@@ -508,3 +508,21 @@ test("the plan presets home workspaces on real displays only, never on a virtual
   assert.equal(M.planLine(M.presetPlan("alternate", r), r), "1, 3, 5, 7, 9 on DP-1 · 2, 4, 6, 8, 0 on DP-2")
   assert.equal(M.planKind(M.presetPlan("split", r), r), "split", "and the plan still reads as Split with virtual displays present")
 })
+
+test("ultrawide and super-ultrawide modes: every preset and a typed scale land where Hyprland accepts them", () => {
+  // 21:9 (2560x1080, 3440x1440, 3840x1600, 5120x2160), 32:9 (3840x1080,
+  // 5120x1440, 7680x2160): the 1/120 grid divides the long side and the
+  // short side alike, so the logical size is whole pixels both ways.
+  const modes = [[2560, 1080], [3440, 1440], [3840, 1600], [5120, 2160], [3840, 1080], [5120, 1440], [7680, 2160]]
+  for (const [w, h] of modes) {
+    const scales = M.availableScales(w, h)
+    assert.equal(scales.length >= 5, true, `${w}x${h} offers the presets`)
+    for (const s of [...scales.map(x => x.effective), M.cleanScale(1.5, w, h), M.cleanScale(1.1, w, h)]) {
+      const units = Math.round(s * 120)
+      assert.equal((w * 120) % units, 0, `${w}x${h} at ${s}: width divides`)
+      assert.equal((h * 120) % units, 0, `${w}x${h} at ${s}: height divides`)
+    }
+    const size = M.logicalSize({ width: w, height: h }, M.cleanScale(1.25, w, h))
+    assert.deepEqual(size, { width: w / 1.25, height: h / 1.25 }, `${w}x${h} at 1.25 is ${w / 1.25}x${h / 1.25} logical`)
+  }
+})
