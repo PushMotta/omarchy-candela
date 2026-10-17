@@ -434,6 +434,8 @@ Item {
         var l = String(line || "")
         if (l.indexOf("monitoradded") === 0 || l.indexOf("monitorremoved") === 0 || l.indexOf("configreloaded") === 0 || l.indexOf("focusedmon") === 0)
           root.scheduleRefresh()
+        // A display plugged in may be one whose kept rule the layout lacks.
+        if (l.indexOf("monitoradded>>") === 0) reconcileTimer.restart()
         // Hyprland parks an unplugged display's workspaces on the first other
         // display, which can be a virtual one nobody can see.
         if (l.indexOf("monitorremoved>>") === 0 && root.hasVirtual) guardTimer.restart()
@@ -996,7 +998,21 @@ Item {
   Process {
     id: restoreProc
     command: [root.cli, "virtual", "restore"]
+    onRunningChanged: if (!running) { root.refresh(); reconcileTimer.restart() }
+  }
+  // Brings the kept layout up to date with the displays plugged in: rules
+  // written by Candela 1.3.0 named ports, not displays, and a display back on
+  // its port may need its rule written again. It touches nothing otherwise.
+  // Once at start, after the virtual displays are back, and after a plug-in.
+  Process {
+    id: reconcileProc
+    command: [root.cli, "reconcile"]
     onRunningChanged: if (!running) root.refresh()
+  }
+  Timer {
+    id: reconcileTimer
+    interval: 800
+    onTriggered: if (!reconcileProc.running) reconcileProc.running = true; else restart()
   }
   Process {
     id: guardProc

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # omarchy:summary=Configure displays: geometry, signal and colour, with safe apply and revert
-# omarchy:args=<state|apply|keep|revert|persist|hdr|brightness|identify|open|edid|icc|workspaces|virtual|recover|doctor> [...]
+# omarchy:args=<state|apply|keep|revert|persist|reconcile|hdr|brightness|identify|open|edid|icc|workspaces|virtual|recover|doctor> [...]
 # omarchy:examples=omarchy-candela state | omarchy-candela hdr on --display DP-2 | omarchy-candela apply @layout.json | omarchy-candela keep | omarchy-candela doctor
 
 # The backend behind the Candela plugin. Everything the UI does is a
@@ -25,6 +25,12 @@
 # regenerates the Lua, reloads, and proves the file ran. `revert` (or the
 # timer) drops pending and reloads, which restores the last kept
 # configuration.
+#
+# Kept settings belong to the display they were chosen for, on the port it
+# was on. intent.json records each one's make, model and serial, and the
+# layout file names it the way Hyprland describes it, "make model serial
+# (port)", so a different display plugged into that port never takes its
+# rule. See JQ_IDENTITY_DEFS.
 #
 # Virtual displays (VIRTUAL-1, VIRTUAL-2…) are Hyprland headless outputs this
 # tool creates and owns. Their rules live in the layout file like any other,
@@ -116,6 +122,7 @@ Usage: omarchy-candela <command> [args]
   keep                           Keep the pending change and persist it
   revert [--expired] [--token T] Drop the pending change and restore the kept configuration
   persist                        Regenerate the layout file from the kept configuration
+  reconcile                      Bring the layout file up to date with the displays plugged in now (the service runs it)
   hdr <on|off|wide> [--display NAME] [--sdr-white NITS] [--now]
   brightness <NAME> [+N%|N%-|N%] Show or set brightness for one display
   identify                       Flash each connector name on its own display
@@ -209,6 +216,65 @@ live_json() {
   jq -c "$JQ_MIRROR_NAMES"' | map(select(.name != "FALLBACK"))' <<<"$raw"
 }
 
+# Which display a kept entry is for. An entry is kept under its port and
+# records, as `identity`, the make, model and serial of the display that was
+# on that port when it was chosen; it applies to the display on that port
+# only while it is that display. Every rule in the layout file names its
+# display by a desc: selector made of the description Hyprland matches it
+# against, "make model serial (port)" with the commas dropped (Monitor.cpp,
+# 0.56.2: a prefix of CMonitor::m_description). A different display plugged
+# into the port matches none of our rules and gets the user's monitors.lua;
+# two identical displays without a serial still get a rule each, because the
+# port is part of the name. Virtual displays, built-in panels (Omarchy's
+# clamshell script names the panel by its port, and a panel cannot be
+# swapped) and an output that reports no make are named by port.
+#
+# An entry kept before identities existed (1.3.0 and earlier) has none. It is
+# taken to be the display's on its port when that display offers the mode
+# the entry names, and to be another display's when it does not. Seen on the
+# desk, 17 October 2026: two MateViews replaced by two ASUS PA278QV, and the
+# rule kept for the MateView on DP-1 (off) switched the new ASUS off each time
+# it connected, so it lost its signal, dropped off the port and came back, in
+# a loop that looked like the display was never detected. An entry that is
+# off and names no mode is never taken to be anyone's.
+#
+# Callers pass --arg vre "$VIRTUAL_RE" --arg ire "$INTERNAL_RE".
+JQ_IDENTITY_DEFS='
+  def by_port: (.name | test($vre)) or (.name | test($ire)) or ((.make // "") | test("^\\S") | not);
+  def identity_of: {make: (.make // ""), model: (.model // ""), serial: (.serial // "")};
+  def described($port): "\(.make) \(.model) \(.serial) (\($port))" | gsub(","; "");
+  def selector: . as $d | if by_port then .name else "desc:" + ($d | identity_of | described($d.name)) end;
+  def offers($mode):
+    if ($mode // "" | test("^[0-9]+x[0-9]+") | not) or ((.availableModes // []) | length) == 0 then true
+    else ($mode | capture("^(?<w>[0-9]+)x(?<h>[0-9]+)(@(?<r>[0-9.]+))?")) as $m
+      | any(.availableModes[]; (capture("^(?<w>[0-9]+)x(?<h>[0-9]+)@(?<r>[0-9.]+)") // null) as $a
+          | $a != null and $a.w == $m.w and $a.h == $m.h
+            and ($m.r == null or ((($a.r | tonumber) - ($m.r | tonumber)) | fabs) <= 0.2))
+    end;
+  def owns($e):
+    if $e == null then false
+    elif by_port then true
+    elif $e.identity != null then $e.identity == identity_of
+    else offers($e.mode) and ($e.enabled != false or ($e.mode // "" | test("^[0-9]+x[0-9]+")))
+    end;
+  def kept_in($intent): ($intent.displays[.name] // null) as $e | if owns($e) then $e else null end;
+'
+
+# Give the entry for each port with a display on it now that display's
+# identity, when the entry is its own or predates identities and fits it. An
+# entry from before identities that does not fit is dropped: nothing can ever
+# tell which display it was for. An entry for another display stays, and does
+# nothing, until that display is back on the port or the user sets up the
+# one there now.
+bind_identities() {
+  jq -c -n --argjson intent "$1" --argjson live "$2" --arg vre "$VIRTUAL_RE" --arg ire "$INTERNAL_RE" "$JQ_IDENTITY_DEFS"'
+    reduce ($live[] | select(by_port | not)) as $d ($intent;
+      (.displays[$d.name] // null) as $e
+      | if $e == null or $e.identity != null then .
+        elif ($d | owns($e)) then .displays[$d.name].identity = ($d | identity_of)
+        else del(.displays[$d.name]) end)'
+}
+
 # Open numbered workspaces and where they are. Special workspaces have
 # negative ids and are never planned.
 workspaces_json() {
@@ -230,17 +296,17 @@ pending_json() {
 observed_intent() {
   local live="$1" auto
   auto="$(run_bounded hyprctl getoption render:cm_auto_hdr -j 2>/dev/null | jq '.int // null' 2>/dev/null || echo null)"
-  jq -n --argjson live "$live" --argjson auto "$auto" '
+  jq -n --argjson live "$live" --argjson auto "$auto" --arg vre "$VIRTUAL_RE" --arg ire "$INTERNAL_RE" "$JQ_IDENTITY_DEFS"'
     def r2: (. * 100 | round) / 100;
     def depth: if test("2101010") then 10 elif test("16161616") then 16 else 8 end;
-    {version:1, displays: ($live | map({key:.name, value:{
+    {version:1, displays: ($live | map({key:.name, value:({
       enabled:(.disabled != true), mode:(if .width > 0 then "\(.width)x\(.height)@\(.refreshRate|r2)" else "preferred" end),
       position:"\(.x)x\(.y)", scale:.scale, transform:(.transform // 0),
       mirror:(if (.mirrorOf // "none") == "none" then "" else .mirrorOf end),
       bitdepth:(.currentFormat // "" | depth), cm:(.colorManagementPreset // "srgb"),
       sdrbrightness:(.sdrBrightness // 1), sdrsaturation:(.sdrSaturation // 1),
       sdr_min_luminance:(.sdrMinLuminance // 0.005), sdr_max_luminance:(.sdrMaxLuminance // 80)
-    }}) | from_entries), global:(if $auto == null then {} else {cm_auto_hdr:$auto} end)}'
+    } + (if by_port then {} else {identity: identity_of} end))}) | from_entries), global:(if $auto == null then {} else {cm_auto_hdr:$auto} end)}'
 }
 
 restore_observed() {
@@ -267,8 +333,8 @@ edid_for() {
 # same rules apply to every entry point. Unknown keys are rejected; every
 # value is checked against what hl.monitor accepts.
 merge_intent() {
-  local intent="$1" change="$2"
-  jq -n --argjson intent "$intent" --argjson change "$change" --arg vre "$VIRTUAL_RE" '
+  local intent="$1" change="$2" live="${3:-[]}"
+  jq -n --argjson intent "$intent" --argjson change "$change" --argjson live "$live" --arg vre "$VIRTUAL_RE" --arg ire "$INTERNAL_RE" "$JQ_IDENTITY_DEFS"'
     def fail(msg): error("invalid change: " + msg);
     def is_name: type == "string" and test("^[A-Za-z0-9._-]+$");
     def check_display(d):
@@ -390,9 +456,16 @@ merge_intent() {
     | ($change.displays // []) | map(check_display(.)) as $checked
     | check_global($change.global) as $g
     | (if $change | has("workspaces") then check_workspaces($change.workspaces) else null end) as $w
+    # A change is for the display on the port now: it builds on what was kept
+    # for that display, and starts afresh over an entry kept for another one.
     | reduce $checked[] as $c ($intent;
         . as $acc
-        | ((($acc.displays[$c.name] // {}) + $c.fields | with_entries(select(.value != null))) | check_colour(.)) as $merged
+        | ([$live[] | select(.name == $c.name)][0]) as $d
+        | ($acc.displays[$c.name] // null) as $prev
+        | (if $d == null or ($d | by_port) then ($prev // {})
+           elif ($d | owns($prev)) then $prev + {identity: ($d | identity_of)}
+           else {identity: ($d | identity_of)} end) as $base
+        | ((($base + $c.fields) | with_entries(select(.value != null))) | check_colour(.)) as $merged
         | $acc | .displays[$c.name] = $merged)
     | .global = ((.global // {}) + $g | with_entries(select(.value != null)))
     | if $change | has("workspaces") then
@@ -433,9 +506,9 @@ check_some_display_stays_on() {
   local intent="$1" live="$2"
   # A virtual display is nowhere anyone can read without a viewer, so it
   # does not count as one that stays on.
-  jq -e -n --argjson intent "$intent" --argjson live "$live" --arg vre "$VIRTUAL_RE" '
+  jq -e -n --argjson intent "$intent" --argjson live "$live" --arg vre "$VIRTUAL_RE" --arg ire "$INTERNAL_RE" "$JQ_IDENTITY_DEFS"'
     [ $live[] | select((.name // "") != "" and (.name | test($vre) | not))
-      | ($intent.displays[.name] // {}) as $i
+      | (kept_in($intent) // {}) as $i
       | if $i.enabled == false then false elif $i.enabled == true then true else (.disabled != true) end ]
     | any' >/dev/null 2>&1 || die "refusing to switch off the last enabled display"
 }
@@ -456,10 +529,10 @@ JQ_VIRTUAL_DEFS='
 # mention, what the compositor is doing now.
 check_workspace_homes() {
   local intent="$1" live="$2" err
-  err="$(jq -r -n --argjson intent "$intent" --argjson live "$live" '
+  err="$(jq -r -n --argjson intent "$intent" --argjson live "$live" --arg vre "$VIRTUAL_RE" --arg ire "$INTERNAL_RE" "$JQ_IDENTITY_DEFS"'
     [ ($intent.workspaces.homes // {}) | to_entries[] | .key as $w | .value as $n
       | ([$live[] | select(.name == $n)][0]) as $d
-      | (($intent.displays[$n] // {}).mirror // (if $d == null or ($d.mirrorOf // "none") == "none" then "" else $d.mirrorOf end)) as $m
+      | ((if $d == null then $intent.displays[$n] else ($d | kept_in($intent)) end // {}).mirror // (if $d == null or ($d.mirrorOf // "none") == "none" then "" else $d.mirrorOf end)) as $m
       | select($m != "")
       | "\($n) mirrors \($m), so it cannot be the home of workspace \($w)" ] | first // ""')"
   [[ -z $err ]] || die "$err"
@@ -473,37 +546,46 @@ check_workspace_homes() {
 # everything, including a laptop panel going off; "file" (default) is what is
 # written to disk, where a built-in panel's off state is Omarchy's flag file,
 # not a rule of ours (see the header). $4 is a probe token: the file sets a
-# global to it so a later `hyprctl eval` can prove the file actually ran.
+# global to it so a later `hyprctl eval` can prove the file actually ran. $6
+# names ports whose display gets no rule at all, and so the user's monitors.lua
+# (reconcile, for a display a 1.3.0 rule was never written for).
 #
 # A display that is not connected keeps the rule the kept file last gave it,
 # word for word: a change cannot name a display that is not there, so that
 # rule is still what was chosen, and dropping it would bring the display back
-# at Hyprland's defaults (and an HDR panel back in SDR).
+# at Hyprland's defaults (and an HDR panel back in SDR). Each port keeps one
+# such rule: the one for the display its kept entry is for, or, with no entry,
+# for the display last on it. A rule written by 1.3.0 or earlier names a port
+# rather than a display and is not carried (see JQ_IDENTITY_DEFS); a built-in
+# panel's still is.
 #
 # The workspace plan follows the monitor rules. Each rule names its workspace
 # the way Omarchy's layout toggle does ("3"), because Hyprland merges rules
 # with the same workspace text field by field: Omarchy's layout and our
 # display then live in one rule, and neither undoes the other.
 generate_lua() {
-  local intent="$1" live="$2" stamp="${3:-$(date --iso-8601=seconds)}" probe="${4:-}" audience="${5:-file}" previous=""
+  local intent="$1" live="$2" stamp="${3:-$(date --iso-8601=seconds)}" probe="${4:-}" audience="${5:-file}" skip="${6:-[]}" previous=""
   [[ $audience == file && -f $LUA_FILE ]] && previous="$(cat "$LUA_FILE")"
   jq -r -n --argjson intent "$intent" --argjson live "$live" --arg stamp "$stamp" --arg plugin "$PLUGIN_ID" \
-        --arg probe "$probe" --arg audience "$audience" --arg internal_re "$INTERNAL_RE" --arg previous "$previous" --arg vre "$VIRTUAL_RE" "$JQ_VIRTUAL_DEFS"'
+        --arg probe "$probe" --arg audience "$audience" --arg internal_re "$INTERNAL_RE" --arg previous "$previous" --argjson skip "$skip" \
+        --arg vre "$VIRTUAL_RE" --arg ire "$INTERNAL_RE" "$JQ_VIRTUAL_DEFS$JQ_IDENTITY_DEFS"'
     def lua_str: "\"" + (tostring | gsub("\\\\"; "\\\\\\\\") | gsub("\""; "\\\"")) + "\"";
     def lua_val($k): if $k == "icc" then "[==[" + tostring + "]==]" elif type == "string" then lua_str else tostring end;
     def r2: (. * 100 | round) / 100;
     def mode_of($d): if ($d.width // 0) > 0 then "\($d.width)x\($d.height)@\($d.refreshRate | r2)" else "preferred" end;
     # An off display with no say from intent is left to whatever switched it
     # off, except that the file names the built-in panel'"'"'s owner so the
-    # rule'"'"'s absence is not a mystery to a reader.
+    # rule'"'"'s absence is not a mystery to a reader. An entry kept for
+    # another display has no say over this one.
     def rule($d):
-      ($intent.displays[$d.name] // {}) as $i
+      ($d | kept_in($intent) // {}) as $i
+      | ($d | selector) as $output
       | ($d.name | test($internal_re)) as $internal
       | if $i.enabled == false or ($d.disabled == true and $i.enabled != true) then
           if $audience == "file" and $internal then
             "-- \($d.name) is off. The built-in panel'"'"'s off state is Omarchy'"'"'s internal-monitor-disable toggle, which its clamshell script honours; this file never carries a rule for it."
           elif $i.enabled == false then
-            "hl.monitor({ output = \($d.name | lua_str), disabled = true })"
+            "hl.monitor({ output = \($output | lua_str), disabled = true })"
           else
             ""
           end
@@ -514,7 +596,7 @@ generate_lua() {
           # display switched off would stay off, and a mirror stay a mirror,
           # unless the rule says otherwise: so it always says it is on, and
           # says "no mirror" whenever intent does.
-          ([ "output = \($d.name | lua_str)",
+          ([ "output = \($output | lua_str)",
              "disabled = false",
              "mode = \(($i.mode // mode_of($d)) | lua_str)",
              "position = \(($i.position // "\($d.x)x\($d.y)") | lua_str)",
@@ -529,11 +611,24 @@ generate_lua() {
     def carried:
       [ $previous | split("\n")[]
         | select(test("^hl\\.monitor\\(\\{ output = \""))
-        | (capture("^hl\\.monitor\\(\\{ output = \"(?<n>[^\"]+)\"").n) as $n
-        | select([$live[].name] | index($n) == null)
+        | . as $line
+        | (capture("^hl\\.monitor\\(\\{ output = \"(?<o>([^\"\\\\]|\\\\.)*)\"").o | gsub("\\\\(?<c>.)"; .c)) as $o
+        | ($o | startswith("desc:")) as $by_desc
+        | (if $by_desc then ($o | capture("\\((?<p>[^()]+)\\)$").p // null) else $o end) as $port
         # A virtual display is never unplugged: if intent no longer has it,
         # it was removed, and its rule goes with it.
-        | select($n | test($vre) | not) ];
+        | select($port != null and ($port | test($vre) | not))
+        | ([$live[] | select(.name == $port)][0]) as $on_port
+        | ($intent.displays[$port] // null) as $e
+        | select(
+            if $by_desc then
+              ([$live[] | select(selector == $o)] | length) == 0
+              and (if $e.identity != null then $o == "desc:" + ($e.identity | described($port))
+                   else $on_port == null end)
+            else
+              ($port | test($ire)) and $on_port == null
+            end)
+        | $line ];
     # A virtual display that is not created yet (at login, before the service
     # creates it; during `virtual add`) gets its rule from intent, so the
     # output lands where it should the moment it exists.
@@ -565,8 +660,9 @@ generate_lua() {
         end;
     [ "-- Generated by \($plugin) (omarchy-candela). Do not edit: it is rewritten on every keep.",
       "-- Kept \($stamp). Change displays with the Candela panel or `omarchy-candela`.",
+      "-- Each rule names one display by make, model, serial and port: another display plugged into that port gets your monitors.lua instead.",
       "" ]
-    + [ $live[] | select((.name // "") != "") | rule(.) | select(. != "") ]
+    + [ $live[] | select((.name // "") != "" and ((.name as $n | $skip | index($n)) == null)) | rule(.) | select(. != "") ]
     + (if $audience == "file" then carried as $c | if ($c | length) > 0 then ["", "-- Not connected now. Kept as last written, so it comes back the same way."] + $c else [] end else [] end)
     + (if $audience == "file" then virtual_not_created as $c | if ($c | length) > 0 then ["", "-- Virtual, created by the Candela service when the shell starts."] + $c else [] end else [] end)
     + workspace_rules
@@ -608,13 +704,17 @@ verify_live() {
       (( $(now_ms) >= deadline )) && { printf 'hyprctl is not answering'; return 1; }
       sleep 0.2; continue
     fi
-    mismatch="$(jq -r -n --argjson intent "$intent" --argjson live "$live" --argjson required "$required" '
+    mismatch="$(jq -r -n --argjson intent "$intent" --argjson live "$live" --argjson required "$required" \
+                  --arg vre "$VIRTUAL_RE" --arg ire "$INTERNAL_RE" "$JQ_IDENTITY_DEFS"'
       def depth_of: if test("2101010") then 10 elif test("16161616") then 16 else 8 end;
       def r2: (. * 100 | round) / 100;
       [ ($intent.displays // {}) | to_entries[] | .key as $n | .value as $i
         | ([$live[] | select(.name == $n)][0]) as $d
         | if $d == null and ($required | index($n)) != null then "\($n) is no longer connected"
           elif $d == null then empty
+          # Kept for another display: nothing of it is meant to be on this one.
+          elif ($d | owns($i) | not) then
+            (if ($required | index($n)) != null then "\($n) is now a different display" else empty end)
           elif $i.enabled == false then
             (if $d.disabled != true then "\($n) is still on" else empty end)
           elif $d.disabled == true then
@@ -937,15 +1037,16 @@ reload_and_check() {
 
 LAST_PROBE=""
 commit_intent() {
-  local intent="$1" live tmp probe
+  local intent="$1" skip="${2:-[]}" live tmp probe
   live="$(live_json)" || return 1
+  intent="$(bind_identities "$intent" "$live")" || return 1
   intent="$(strip_internal_enabled "$intent")" || return 1
   probe="$(now_epoch)-$$-$RANDOM"
   mkdir -p "$STATE_DIR" "$TOGGLES_DIR" || return 1
   tmp="$(tmp_for "$INTENT_FILE")" || return 1
   if ! printf '%s\n' "$intent" | jq . > "$tmp" || ! mv "$tmp" "$INTENT_FILE"; then rm -f -- "$tmp"; return 1; fi
   tmp="$(tmp_for "$LUA_FILE")" || return 1
-  if ! generate_lua "$intent" "$live" "" "$probe" file > "$tmp" || ! mv "$tmp" "$LUA_FILE"; then rm -f -- "$tmp"; return 1; fi
+  if ! generate_lua "$intent" "$live" "" "$probe" file "$skip" > "$tmp" || ! mv "$tmp" "$LUA_FILE"; then rm -f -- "$tmp"; return 1; fi
   write_internal_scale "$intent" "$live" || return 1
   LAST_PROBE="$probe"
 }
@@ -986,7 +1087,8 @@ cmd_state() {
         --argjson edids "$edids" --arg focused "$focused" --arg brightness "$brightness" \
         --argjson autoHdr "$auto_hdr" --arg sdrEotf "$sdr_eotf" --arg pluginId "$PLUGIN_ID" \
         --argjson revertSeconds "$REVERT_SECONDS" --argjson now "$(now_epoch)" \
-        --argjson internalFlag "$internal_flag" --arg internalRe "$INTERNAL_RE" --arg stateDir "$STATE_DIR" --argjson animations "$animations" '
+        --argjson internalFlag "$internal_flag" --arg internalRe "$INTERNAL_RE" --arg stateDir "$STATE_DIR" --argjson animations "$animations" \
+        --arg ire "$INTERNAL_RE" "$JQ_IDENTITY_DEFS"'
     def bitdepth_of: if test("2101010") then 10 elif test("16161616") then 16 else 8 end;
     {
       version: 1,
@@ -1020,8 +1122,14 @@ cmd_state() {
         },
         capabilities: ($edids[.name] // {connector: .name, available: false}),
         brightness: (if .name == $focused and ($brightness | test("^[0-9]+$")) then ($brightness | tonumber) else null end),
-        kept: ($intent.displays[.name] // {}),
-        pendingConfig: (($pending.intent.displays // {})[.name] // null)
+        # What was kept for this display; an entry kept on this port for
+        # another display is not, and keptForOther says whose it is.
+        kept: (kept_in($intent) // {} | del(.identity)),
+        keptForOther: (($intent.displays[.name] // null) as $e
+          | if $e == null or owns($e) then null
+            elif $e.identity == null then "another display"
+            else "\($e.identity.make) \($e.identity.model)" | gsub(","; "") | gsub("^\\s+|\\s+$"; "") end),
+        pendingConfig: (if $pending == null then null else (kept_in($pending.intent) | if . == null then null else del(.identity) end) end)
       } ]
     }'
 }
@@ -1044,6 +1152,7 @@ cmd_apply() {
   # Any newer change makes that undo meaningless.
   rm -f "$UNDO_FILE"
 
+  live="$(live_json)"
   # Chain onto a pending change, so successive slider moves accumulate.
   if [[ -s $PENDING_FILE ]]; then
     base="$(jq -c '.intent' "$PENDING_FILE")"
@@ -1055,14 +1164,13 @@ cmd_apply() {
     # unrelated fields that are still waiting for confirmation.
     now=0
   else
-    base="$(intent_json)"
+    base="$(bind_identities "$(intent_json)" "$live")"
     previous="$base"
     files="$(snapshot_files intent "$INTENT_FILE" layout "$LUA_FILE" pendingLua "$PENDING_LUA" internalFlag "$INTERNAL_FLAG" internalScale "$INTERNAL_SCALE_FILE")"
     # Where the open workspaces are before this transaction moves any.
     ws_before="$(workspaces_json)"
   fi
-  merged="$(merge_intent "$base" "$change")" || die "${merged#jq: error (at <unknown>): }"
-  live="$(live_json)"
+  merged="$(merge_intent "$base" "$change" "$live")" || die "${merged#jq: error (at <unknown>): }"
   [[ -n ${baseline:-} && $baseline != null ]] || baseline="$(observed_intent "$live")"
   # Every display named by this interactive transaction must still exist.
   local missing
@@ -1866,6 +1974,63 @@ cmd_persist() {
   echo "$LUA_FILE"
 }
 
+# Bring what is kept up to date with the displays plugged in now: an entry
+# from before identities gets one or goes (bind_identities), a rule that names
+# a port rather than a display is rewritten, and a display whose kept rule the
+# file does not carry gets it back. Writes and reloads only when one of those
+# applies; otherwise touches nothing, so it is safe to run on every plug-in.
+# The Candela service runs it when the shell starts and when a display is
+# plugged in.
+#
+# A display that a 1.3.0 port rule was not written for is wherever that rule
+# put it (the desk on 17 October: the new ASUS on DP-2 at the MateView's
+# position and scale), so its live state is no place to take a rule from. It
+# is first given none, and Hyprland reloaded so that monitors.lua places it;
+# then the layout is written again from what it shows.
+cmd_reconcile() {
+  [[ -s $PENDING_FILE ]] && { echo "a change is pending; it decides"; return 0; }
+  [[ -s $INTENT_FILE || -f $LUA_FILE ]] || { echo "nothing kept"; return 0; }
+  local live intent bound old new stale misplaced err
+  live="$(live_json)"
+  intent="$(intent_json)"
+  bound="$(bind_identities "$intent" "$live")"
+  old="$(cat "$LUA_FILE" 2>/dev/null || true)"
+  new="$(generate_lua "$bound" "$live" "" "" file)"
+  stale="$(jq -r -n --arg old "$old" --arg new "$new" --argjson live "$live" --argjson intent "$intent" --argjson bound "$bound" \
+             --arg vre "$VIRTUAL_RE" --arg ire "$INTERNAL_RE" "$JQ_IDENTITY_DEFS"'
+    def lua_str: "\"" + (tostring | gsub("\\\\"; "\\\\\\\\") | gsub("\""; "\\\"")) + "\"";
+    def rules($f): [$f | split("\n")[] | select(startswith("hl.monitor({ output = "))];
+    rules($old) as $had
+    | [ ($had[] | capture("^hl\\.monitor\\(\\{ output = \"(?<o>[^\"]+)\"")? | .o
+          | select((startswith("desc:") | not) and (test($vre) | not) and (test($ire) | not))
+          | "\(.) was named by port"),
+        ($live[] | select(kept_in($bound) != null) | . as $d
+          | ("hl.monitor({ output = " + (selector | lua_str) + ",") as $head
+          | rules($new)[] | select(startswith($head))
+          | select(. as $r | $had | index($r) == null)
+          | "\($d.name) had no rule of its own"),
+        (if $bound != $intent then "kept settings were matched to their displays" else empty end) ]
+    | unique | join("; ")')"
+  [[ -n $stale ]] || { echo "up to date"; return 0; }
+  # Displays a port rule of the old file stood over without being theirs: no
+  # kept entry of their own, and the rule names a mode they do not offer or
+  # switches them off.
+  misplaced="$(jq -c -n --arg old "$old" --argjson live "$live" --argjson bound "$bound" \
+                 --arg vre "$VIRTUAL_RE" --arg ire "$INTERNAL_RE" "$JQ_IDENTITY_DEFS"'
+    [ $old | split("\n")[] | capture("^hl\\.monitor\\(\\{ output = \"(?<o>[^\"]+)\"(?<rest>.*)$")? | . as $r
+      | ($r.rest | capture("mode = \"(?<m>[^\"]+)\"").m // null) as $mode
+      | $live[] | select(.name == $r.o and (by_port | not) and kept_in($bound) == null)
+      | select(($r.rest | test("disabled = true")) or (offers($mode) | not))
+      | .name ] | unique')"
+  if [[ $misplaced != "[]" ]]; then
+    commit_intent "$bound" "$misplaced" || die "could not write the kept layout: $stale"
+    err="$(reload_and_check "$(intent_json)" "$LAST_PROBE")" || die "rewrote the kept layout ($stale), but: $err"
+  fi
+  commit_intent "$bound" || die "could not write the kept layout: $stale"
+  err="$(reload_and_check "$(intent_json)" "$LAST_PROBE")" || die "rewrote the kept layout ($stale), but: $err"
+  echo "reconciled: $stale"
+}
+
 cmd_hdr() {
   local mode="${1:-}"; shift || true
   [[ $mode =~ ^(on|off|wide)$ ]] || die "hdr needs on, off or wide"
@@ -1974,7 +2139,7 @@ cmd_report() {
     ' <<<"$state"
     printf '\n### Pending change\n\n'
     jq -r 'if .pending == null then "None." else "Phase \(.pending.phase), \(.pending.remaining) s left" + (if .recovery then ", recovery: \(.recovery.error // "available")" else "" end) + "." end' <<<"$state"
-    printf '\n### Kept configuration\n\n```json\n%s\n```\n' "$(intent_json | jq .)"
+    printf '\n### Kept configuration\n\n```json\n%s\n```\n' "$(intent_json | jq '.displays |= map_values(if .identity.serial != null and (.identity.serial | test("\\S")) then .identity.serial = "(removed)" else . end)')"
     printf '\n### doctor\n\n```\n%s\n```\n' "$doctor_out"
     printf '\n### Hyprland config errors\n\n%s\n' "${errors:-None.}"
     printf '\n### Toggles directory\n\n%s\n' "${toggles:-empty}"
@@ -2046,13 +2211,35 @@ cmd_doctor() {
     ok "nothing kept yet: your monitors.lua is in charge"
   fi
 
+  # Rules are read back by the display they name, and said by port and model,
+  # never by serial: a report carries what doctor says.
   if [[ -f $LUA_FILE ]]; then
-    local away
-    away="$(jq -r -n --arg file "$(cat "$LUA_FILE")" --argjson live "$live" '
-      [ $file | split("\n")[] | capture("^hl\\.monitor\\(\\{ output = \"(?<n>[^\"]+)\"")? | .n
-        | select(. as $n | [$live[].name] | index($n) == null) ] | unique | join(", ")')"
+    local away by_port
+    away="$(jq -r -n --arg file "$(cat "$LUA_FILE")" --argjson live "$live" --argjson intent "$(intent_json)" \
+              --arg vre "$VIRTUAL_RE" --arg ire "$INTERNAL_RE" "$JQ_IDENTITY_DEFS"'
+      [ $file | split("\n")[] | capture("^hl\\.monitor\\(\\{ output = \"(?<o>([^\"\\\\]|\\\\.)*)\"")? | .o | gsub("\\\\(?<c>.)"; .c)
+        | . as $o | select([$live[] | select(selector == $o)] | length == 0)
+        | if startswith("desc:") then
+            (capture("\\((?<p>[^()]+)\\)$").p // "?") as $p
+            | ($intent.displays[$p].identity // null) as $id
+            | if $id != null and $o == "desc:" + ($id | described($p)) then "\($p) (\("\($id.make) \($id.model)" | gsub(","; "") | gsub("^\\s+|\\s+$"; "")))" else $p end
+          else . end ] | unique | join(", ")')"
     [[ -z $away ]] || ok "kept rules wait for displays not connected now: $away"
+    by_port="$(jq -r -n --arg file "$(cat "$LUA_FILE")" --arg vre "$VIRTUAL_RE" --arg ire "$INTERNAL_RE" '
+      [ $file | split("\n")[] | capture("^hl\\.monitor\\(\\{ output = \"(?<o>[^\"]+)\"")? | .o
+        | select((startswith("desc:") | not) and (test($vre) | not) and (test($ire) | not)) ] | unique | join(", ")')"
+    [[ -z $by_port ]] || warn "the kept layout names $by_port by port, as Candela 1.3.0 and earlier did, so any display plugged in there takes that rule: run \`omarchy-candela reconcile\` (the Candela service does when the shell starts)"
   fi
+
+  local other
+  other="$(jq -r -n --argjson live "$live" --argjson intent "$(intent_json)" --arg vre "$VIRTUAL_RE" --arg ire "$INTERNAL_RE" "$JQ_IDENTITY_DEFS"'
+    def model: "\(.make // "") \(.model // "")" | gsub(","; "") | gsub("^\\s+|\\s+$"; "");
+    $live[] | select(by_port | not) | . as $d | ($intent.displays[.name] // null) as $e
+    | select($e != null and ($d | owns($e) | not))
+    | "\(.name): the settings kept there are for \(if $e.identity then "a " + ($e.identity | model) else "another display" end); the \($d | model) on it now has your monitors.lua settings until you change it in Candela"')"
+  while IFS= read -r line; do
+    [[ -n $line ]] && warn "$line"
+  done <<<"$other"
 
   local plan
   plan="$(intent_json | jq -c '.workspaces.homes // {}')"
@@ -2147,7 +2334,7 @@ cmd_doctor() {
     while IFS= read -r line; do
       [[ -n $line ]] || continue
       if grep -qE "^[^-]*hl\.monitor\(\{[^}]*output[[:space:]]*=[[:space:]]*\"$line\"" "$monitors_lua"; then
-        warn "monitors.lua has its own rule for $line; the kept layout loads later and wins"
+        warn "monitors.lua has its own rule for $line; the kept layout loads later and wins for the display it was kept for, and yours applies to any other display on that port"
       fi
     done < <(intent_json | jq -r '.displays | keys[]')
   fi
@@ -2156,7 +2343,7 @@ cmd_doctor() {
   dupes="$(jq -r 'group_by(.make + "|" + .model + "|" + (.serial | gsub("^\\s+|\\s+$"; ""))) | map(select(length > 1) | map(.name) | join(" and ")) | .[]' <<<"$live")"
   while IFS= read -r line; do
     [[ -n $line ]] || continue
-    ok "$line report the same make, model and serial; rules key them by connector, and their EDID hashes tell them apart"
+    ok "$line report the same make, model and serial; rules name each by its port as well, so each keeps its own"
   done <<<"$dupes"
 
   # exit, not return: a non-zero return would trip the ERR trap's "aborted"
@@ -2171,6 +2358,7 @@ case "$cmd" in
   keep) acquire_lock; cmd_keep ;;
   revert) if [[ " $* " == *" --expired "* ]]; then acquire_watchdog_lock; else acquire_lock; fi; cmd_revert "$@" ;;
   persist) acquire_lock; cmd_persist ;;
+  reconcile) acquire_lock; cmd_reconcile ;;
   hdr) acquire_lock; cmd_hdr "$@" ;;
   recover) acquire_lock; cmd_recover ;;
   brightness) cmd_brightness "$@" ;;

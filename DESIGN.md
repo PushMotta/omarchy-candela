@@ -202,7 +202,7 @@ The pending change is written beside it as `candela-pending.lua`, in the same fo
 
 A display switched off keeps its live mode, position, scale and rotation in intent at the moment it goes off, so its rule brings it back where it was rather than at "preferred" and 0x0, which is what its live geometry reads once it is off.
 
-A display that is not connected keeps the rule the kept file last gave it, word for word, under a comment that says why. A change cannot name a display that is not there, so that rule is still what was chosen; generating rules from connected displays only would drop it on the next keep and bring the display back at Hyprland's defaults, an HDR panel in SDR. *(1.2)*
+A display that is not connected keeps the rule the kept file last gave it, word for word, under a comment that says why. A change cannot name a display that is not there, so that rule is still what was chosen; generating rules from connected displays only would drop it on the next keep and bring the display back at Hyprland's defaults, an HDR panel in SDR. *(1.2)* Each port keeps one such rule: the one for the display its kept entry is for, or, with no entry, for the display last on it. A rule that names a port rather than a display (1.3.0 and earlier) is not carried, except a built-in panel's (§13). *(1.3.1)*
 
 The workspace plan (§11) follows the monitor rules in the same file.
 
@@ -210,7 +210,7 @@ Alternative considered: a managed block inside `monitors.lua` with a Lua-aware w
 
 ### 6.4 Identity
 
-Primary key: connector name. Stored alongside: make, model, serial, EDID hash. When two displays share make/model and serial is blank (this desk), connector is the only key and the UI says so in the Panel section. Profiles (v2) match on the EDID hash set with connector fallback.
+Kept settings belong to a display on a port. `intent.json` keeps each entry under its connector name and records, as `identity`, the make, model and serial of the display it was chosen for; the entry applies to the display on that port only while it is that display. Every rule in the layout file names its display by a `desc:` selector, "make model serial (port)", so a different display plugged into the port matches none of our rules and gets the user's `monitors.lua`. Two identical displays with a blank serial (the MateViews on this desk until 17 October) still get one rule each, because the port is part of the description. Virtual displays and the built-in panel are named by port. One entry per port: a display set up on a port replaces what was kept there for the display before it. Profiles (v2) would keep several. §13 has the why and the details.
 
 ### 6.5 Safety
 
@@ -228,7 +228,7 @@ The shell shows the countdown but does not own it, so a shell crash (#9804 class
 
 ### 6.6 Hotplug
 
-Service listens on Hyprland's socket2 for `monitoradded` / `monitorremoved` and refreshes state. Automatic profile switching is v2.
+Service listens on Hyprland's socket2 for `monitoradded` / `monitorremoved` and refreshes state. After a `monitoradded`, and once when the shell starts, it runs `reconcile`, which rewrites the layout only when a display plugged in now is missing its kept rule or a rule still names a port (§13), and otherwise touches nothing. Automatic profile switching is v2.
 
 ### 6.7 The built-in panel
 
@@ -293,7 +293,7 @@ Design review 02 (5 October 2026, source `design/workspace-planner-review.html`)
 
 1. **Off until the user turns it on.** No rules and no moves until a plan is chosen; a display Candela has not seen never gets one.
 2. **The plan is stored, not a preset name.** `intent.workspaces = {homes: {"1".."10": display}, shows: {display: workspace}}`. Presets only fill `homes`, so nothing has to guess what a preset means for a display that appears later.
-3. **Displays are named by connector**, like the monitor rules. Both MateViews report the same description, and Hyprland matches `desc:` by prefix and takes the first display that connected, so a description cannot tell them apart. `desc:` can come with saved profiles.
+3. **Displays are named by connector**, like the monitor rules. Both MateViews report the same description, and Hyprland matches `desc:` by prefix and takes the first display that connected, so a description cannot tell them apart. `desc:` can come with saved profiles. *(1.3.1: the monitor rules now name displays by `desc:` with the port in it, §13; homes stay on ports, since a workspace sent to whatever display is on a port blanks nothing.)*
 4. **No persistent workspaces.** Each display's lowest-numbered home (or its chosen one) gets `default = true`. With a home set, SUPER+N already opens in the right place; persistent empty workspaces would add stops to SUPER+TAB and the bar cannot show them.
 5. **A workspace-only change has no countdown.** Nothing in a plan can blank a screen. It is kept at once, and `revert` undoes it once (plan and placement) until anything else is applied. A change that also touches a display keeps the countdown for everything.
 6. **Applying a plan moves open workspaces home**, the inspector naming every move first.
@@ -379,3 +379,28 @@ Added on 5 October 2026 after Pedro's review of what to improve before 1.3:
 - **A new password from the studio, and addresses by kind.** *New password* (asked twice) runs `virtual secret NAME --new`, which restarts a running server with it, and shows the new one. Each offered address carries the kind of link it is on, from sysfs (`wireless/` is Wi-Fi, a `device/` is Ethernet) or the interface name (`tailscale*`, `wg*`/`tun*`/`tap*`/`zt*` as VPN). Both came from comparing with another virtual-display plugin on 5 October; its SSH-tunnel mode (loopback with an `ssh -L` command) was left out: Omarchy ships sshd disabled, enabling it needs root, and RealVNC on iPad has no SSH tunnels. Seen on the desk: enp5s0 reads Ethernet; the button armed, then replaced the password (the file's hash changed) and wayvnc restarted.
 - **QML that compiles.** `test/qml-load-test.sh` compiles every QML file in a real Quickshell, against a config of its own whose `qs.*` modules are links to Omarchy's shell, and skips where there is no Quickshell or Wayland session (CI). It fails on the studio from before `a7a6ded` ("Duplicate method name"), which qmllint passed.
 
+## 13. Settings belong to a display (1.3.1)
+
+On 17 October 2026 Pedro replaced the two MateViews with two ASUS PA278QV and the second one "was not detected". It was: the kernel saw it on DP-1, Hyprland disabled it within the same second, and a few seconds later it dropped off the port and came back, over and over all session (Hyprland's log: `Connector DP-1 enabledState changed true -> false`, connection state 1, 2, 1…). The kept layout still had `hl.monitor({ output = "DP-1", disabled = true })`, written for the MateView on DP-1 that Pedro kept off. Without a signal the ASUS slept and dropped its hotplug line, came back, and was switched off again. DP-2's rule also gave the other ASUS the MateView's 3840×2560 mode (Hyprland fell back to 1440p), its position and its 1.6 scale. Candela's panel could not help: it lists connected displays, and DP-1 was disconnected most of the time. Any user who changes a display on a port Candela has a rule for meets the same thing, worst when the old display was kept off.
+
+### 13.1 Decisions
+
+1. **Rules name displays, not ports.** Each rule's output is `desc:` plus the description Hyprland matches against. Read in Hyprland 0.56.2's source: `CMonitor::matchesStaticSelector` (`Monitor.cpp`) takes the text after `desc:`, trimmed, as a prefix of `m_description` or `m_shortDescription`; `m_description` is aquamarine's `"{make} {model} {serial} ({connector})"` with the commas removed, and `m_shortDescription` is the same without the connector, trimmed, which is what `hyprctl monitors` calls `description`. Candela writes the long form, built from hyprctl's raw `make`, `model` and `serial`, so the selector ends in `(DP-1)` and matches one display on one port. The rule manager takes the last matching rule (`MonitorRuleManager::get` walks the rules in reverse), so a display Candela has no rule for gets the user's `monitors.lua`, port rules included, exactly as if Candela were not installed.
+2. **The port stays in the name.** Without it two identical displays with blank serials would share one rule, and positions differ. With it a display moved to another port comes up at the user's defaults there; settings that follow a display across ports would need intent keyed by display, which is a profiles question (v2).
+3. **Intent stays keyed by port, with `identity` beside the settings.** The change JSON, the panel, the workspace plan, mirrors and virtual displays all name ports; only the decision "does this entry apply to this display" changed (`owns`, `kept_in` in `JQ_IDENTITY_DEFS`). An entry for another display is ignored, not deleted: its rule stays in the file, so plugging the old display back brings its settings back. A change for the display on that port starts from a clean entry and replaces it. State says whose settings a port holds (`keptForOther`); doctor says it in words.
+4. **Built-in panels and virtual displays keep port names.** A panel cannot be swapped, and Omarchy's clamshell script re-enables it with a port-named `hyprctl eval` that starts from the earlier rule of the same name (§9); a desc rule would cut it off from our fields. A virtual display is its name. An output with no make (nothing to describe it by) is named by port too.
+5. **1.3.0's port rules are converted, not trusted.** An entry without `identity` is taken to be the display's on its port when the display offers the mode the entry names, and to be someone else's when it does not; an entry that is off and names no mode is nobody's. The ones that fit get the display's identity, the others are dropped, since nothing can ever tell whose they were. A port rule is never carried for a port with nothing on it. `reconcile` does all this, and the service runs it at shell start, so the dangerous file is gone at the first login after the update.
+6. **A display the old rule stood over is placed by monitors.lua first.** Its live state is the old rule's doing (the second ASUS sat at the MateView's position and scale), so a rule taken from it would keep the mistake. `reconcile` writes the layout without a rule for such a display, reloads, and only then writes it again from what Hyprland shows. Two reloads, once, on the first run after the update.
+7. **A plug-in reloads only when it must.** `reconcile` compares: a rule that names a port, a display plugged in now whose kept rule is missing from the file, or an entry that has just been matched to its display. Otherwise it writes nothing and does not reload, so it is safe on every `monitoradded`.
+
+Known edge: Omarchy's SUPER + / scale keys eval a port-named rule. That rule starts from the earlier rule of that name, the user's, not Candela's, so until Hyprland next reloads a rescaled display loses Candela's colour fields; 1.3.0 kept them. With Omarchy's stock `monitors.lua` that is a moment: the script writes its new scale there, and Hyprland reloads on save (`misc:disable_autoreload` is off by default, `ConfigWatcher.cpp`), which puts Candela's rule back, as 1.3.0's reload did.
+
+### 13.2 What is verified
+
+On the desk, 17 October 2026, Hyprland 0.56.2, two ASUS PA278QV (serials, DP-1 and DP-2):
+
+- `reconcile` on the 1.3.0 layout Pedro had kept that morning: both entries matched to their ASUS, rules rewritten as `desc:… (DP-1)` and `desc:… (DP-2)`, one reload, nothing moved; both stayed at 74.92 Hz with VRR, which only Candela's rules give them (Hyprland's preferred mode for this panel is 59.95 Hz), so the desc rules matched after the reload. Doctor clean, the load probe answered.
+- Negative: `hyprctl eval` of a rule for `desc:Huawei Technologies Co. Inc. MateView               (DP-1)` at scale 2 left the ASUS on DP-1 at scale 1; so did a rule with that ASUS's own make, model and serial but `(DP-2)`. A reload cleared both.
+- Positive: `apply` of scale 1.25 on DP-2 went out as a desc rule, the readback found it on the display, and `revert` brought it back.
+
+Not done on hardware: unplugging a display and plugging another into the same port. Hotplug runs the same rule lookup as a reload (`MonitorRuleManager::get`), and the test compositor now matches `desc:` the way `matchesStaticSelector` does; `test/identity-test.sh` covers the swap, the old display coming back, the new one set up, identical displays without serials, and both 1.3.0 conversions, including the desk's exact files. That is argued, not measured.

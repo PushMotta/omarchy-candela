@@ -365,6 +365,7 @@ omarchy-candela state                          # JSON: displays, EDID capabiliti
 omarchy-candela hdr on|off|wide [--display DP-2] [--sdr-white 203] [--now]
 omarchy-candela apply [--now] '{"displays":[{"name":"DP-2","scale":2}]}'
 omarchy-candela keep | revert | persist
+omarchy-candela reconcile                      # bring the layout up to date with the displays plugged in (the service runs it)
 omarchy-candela revert --expired --token <t>   # the timer's form; does nothing unless <t> still matches pending
 omarchy-candela brightness DP-2 [+5%|5%-|40%]
 omarchy-candela identify | open
@@ -405,8 +406,9 @@ mode. Set the mode you want instead.
 
 ## How it persists
 
-- `~/.local/state/omarchy/candela/intent.json` — what you chose, per connector,
-  and the workspace plan.
+- `~/.local/state/omarchy/candela/intent.json` — what you chose for each
+  display, under the port it is on, with the display's make, model and
+  serial; and the workspace plan.
 - `~/.local/state/omarchy/candela/undo.json` — what the last change kept at
   once (the workspace plan, a virtual display) replaced, until anything else
   is applied.
@@ -425,6 +427,26 @@ mode. Set the mode you want instead.
   that is not connected keeps the rule it last had, word for word, so it comes
   back the way you left it rather than at Hyprland's defaults; `doctor` lists
   those. The workspace plan follows the monitor rules.
+
+Settings belong to the display you chose them for. Every rule in the layout
+file names its display the way Hyprland describes it, by make, model, serial
+and port (`desc:ASUSTek COMPUTER INC PA278QV R1LMQS047678 (DP-1)`), so a
+different display plugged into that port matches none of them and comes up
+with your `monitors.lua` settings, as if Candela had never seen it. Change it
+in Candela and the port's settings become its own; until then the old
+display's rule stays in the file, so plugging the old display back in brings
+its settings back. Two identical displays without a serial still get a rule
+each, because the port is part of the name. The built-in panel and virtual
+displays are named by port: neither can be swapped.
+
+Candela 1.3.0 and earlier named ports, so a new display on a port took the
+old one's rule. If that rule switched the old display off, it switched the
+new one off as soon as it connected, and the display kept dropping off and
+coming back as if it were never detected. The service runs `reconcile` when
+the shell starts and whenever a display is plugged in: rules from 1.3.0 are
+rewritten for the display on their port when it offers the mode they name,
+and dropped when it does not. When there is nothing to change it does
+nothing, and Hyprland is not reloaded.
 
 `hyprctl reload` restores the kept configuration; that is the revert primitive.
 Because the pending change is on disk too, loaded after the layout, a reload

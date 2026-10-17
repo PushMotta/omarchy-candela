@@ -54,7 +54,10 @@ apply_workspace_rules() {
 # 0.56.2's hl.monitor (LuaBindingsConfigRules.cpp, as read in its source), a
 # rule starts from the earlier rule for the same output, so a field it leaves
 # out keeps its old value (disabled = true included) until a reload clears
-# every rule.
+# every rule. An output is a port name, or desc: and a prefix of the
+# display's description, matched the way CMonitor::matchesStaticSelector does
+# (Monitor.cpp): against "make model serial (port)" with the commas dropped,
+# or against the same without the port, trimmed (what hyprctl reports).
 apply_rules() {
   local rule
   [[ -s $dir/monrules.json ]] || echo '{}' > "$dir/monrules.json"
@@ -64,11 +67,18 @@ apply_rules() {
     jq -c --argjson r "$rule" '.[$r.output] = $r' "$dir/monrules.json" > "$dir/monrules.json.tmp" && mv "$dir/monrules.json.tmp" "$dir/monrules.json"
     jq --argjson r "$rule" --arg ignore_scale "${FAKE_HYPRCTL_IGNORE_SCALE:-}" --slurpfile pristine "$dir/monitors.pristine.json" '
       def r2: (. * 100 | round) / 100;
+      def matches($o):
+        if ($o | startswith("desc:")) then
+          ($o[5:] | gsub("^\\s+|\\s+$"; "")) as $sel
+          | ("\(.make // "") \(.model // "") \(.serial // "") (\(.name))" | gsub(","; "") | startswith($sel))
+            or ((.description // "") | startswith($sel))
+        else .name == $o end;
       . as $all
-      | map(if .name != $r.output then . else
+      | map(if matches($r.output) | not then . else
         if $r.disabled == true then .disabled = true | .width = 0 | .height = 0 | .x = 0 | .y = 0
         else
-          ([$pristine[0][] | select(.name == $r.output)][0]) as $p
+          .name as $name
+          | ([$pristine[0][] | select(.name == $name)][0]) as $p
           | .disabled = false
           | (if ($r.mode // "" | test("^[0-9]+x[0-9]+")) then
                ($r.mode | capture("^(?<w>[0-9]+)x(?<h>[0-9]+)(@(?<r>[0-9.]+))?")) as $m
